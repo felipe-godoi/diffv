@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
+use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::core::models::{CommitEntry, DrawerTab, FileDiff, FileStatus, Language, StageStatus, StashEntry};
@@ -512,7 +512,7 @@ fn render_commit_files_drawer(
     language: Language,
     theme: &Theme,
 ) {
-    let header_height = if area.height < 14 { 3 } else { 4 };
+    let header_height = if area.height < 16 { 3 } else { 4 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -524,41 +524,30 @@ fn render_commit_files_drawer(
     let short_hash = &commit.hash[..7.min(commit.hash.len())];
     let mut header_lines = Vec::new();
 
-    let msg_max_w = (chunks[0].width as usize).saturating_sub(12).max(8);
-    let msg_trunc = if commit.message.len() > msg_max_w {
-        format!("{}…", &commit.message[..msg_max_w.saturating_sub(1)])
-    } else {
-        commit.message.clone()
+    let (details_label, back_label) = match language {
+        Language::En => ("[i] Details", "[Esc/2] Back"),
+        Language::Pt => ("[i] Detalhes", "[Esc/2] Voltar"),
     };
 
     header_lines.push(Line::from(vec![
         Span::styled(format!(" 󰜉 {} ", short_hash), Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
-        Span::styled(msg_trunc, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("👤 {} · {}", commit.author, commit.date), Style::default().fg(theme.line_num_fg)),
+    ]));
+
+    // Commit subject (wrapped naturally without cutting off)
+    let first_line = commit.message.lines().next().unwrap_or("");
+    header_lines.push(Line::from(vec![
+        Span::styled(format!(" 󰈚 {}", first_line), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
     ]));
 
     if header_height >= 4 {
-        let auth_max_w = (chunks[0].width as usize).saturating_sub(16).max(8);
-        let auth_trunc = if commit.author.len() > auth_max_w {
-            format!("{}…", &commit.author[..auth_max_w.saturating_sub(1)])
-        } else {
-            commit.author.clone()
-        };
         header_lines.push(Line::from(vec![
-            Span::styled(format!(" 👤 {} · {}", auth_trunc, commit.date), Style::default().fg(theme.line_num_fg)),
+            Span::styled(format!(" 󰈚 {} files · {} · {}", items.len(), details_label, back_label), Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM)),
         ]));
     }
 
-    let back_hint = match language {
-        Language::En => format!(" 󰈚 {} files · [Esc / 2] ← Back", items.len()),
-        Language::Pt => format!(" 󰈚 {} arquivos · [Esc / 2] ← Voltar", items.len()),
-    };
-    header_lines.push(Line::from(Span::styled(
-        back_hint,
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
-    )));
-
-    frame.render_widget(Paragraph::new(header_lines), chunks[0]);
+    frame.render_widget(Paragraph::new(header_lines).wrap(Wrap { trim: true }), chunks[0]);
 
     render_changes_tab(
         frame,
@@ -587,7 +576,7 @@ fn render_stash_files_drawer(
     language: Language,
     theme: &Theme,
 ) {
-    let header_height = if area.height < 14 { 2 } else { 3 };
+    let header_height = if area.height < 16 { 3 } else { 4 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -597,29 +586,28 @@ fn render_stash_files_drawer(
         .split(area);
 
     let mut header_lines = Vec::new();
-    let msg_max_w = (chunks[0].width as usize).saturating_sub(14).max(8);
-    let msg_trunc = if stash.message.len() > msg_max_w {
-        format!("{}…", &stash.message[..msg_max_w.saturating_sub(1)])
-    } else {
-        stash.message.clone()
+    let (details_label, back_label) = match language {
+        Language::En => ("[i] Details", "[Esc/3] Back"),
+        Language::Pt => ("[i] Detalhes", "[Esc/3] Voltar"),
     };
 
     header_lines.push(Line::from(vec![
         Span::styled(format!(" 󰮎 {} ", stash.selector), Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.key_fg).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
-        Span::styled(msg_trunc, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(&stash.date, Style::default().fg(theme.line_num_fg)),
     ]));
 
-    let back_hint = match language {
-        Language::En => format!(" 󰈚 {} files · [Esc / 3] ← Back", items.len()),
-        Language::Pt => format!(" 󰈚 {} arquivos · [Esc / 3] ← Voltar", items.len()),
-    };
-    header_lines.push(Line::from(Span::styled(
-        back_hint,
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
-    )));
+    header_lines.push(Line::from(vec![
+        Span::styled(format!(" 󰈚 {}", stash.message), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+    ]));
 
-    frame.render_widget(Paragraph::new(header_lines), chunks[0]);
+    if header_height >= 4 {
+        header_lines.push(Line::from(vec![
+            Span::styled(format!(" 󰈚 {} files · {} · {}", items.len(), details_label, back_label), Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM)),
+        ]));
+    }
+
+    frame.render_widget(Paragraph::new(header_lines).wrap(Wrap { trim: true }), chunks[0]);
 
     render_changes_tab(
         frame,

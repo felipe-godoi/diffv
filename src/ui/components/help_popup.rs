@@ -8,14 +8,14 @@ use crate::core::models::Language;
 use crate::ui::theme::Theme;
 
 pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, theme: &Theme) {
-    let popup_area = centered_rect(80, 85, area);
+    let popup_area = centered_rect(88, 86, area);
 
     // Clear background
     frame.render_widget(Clear, popup_area);
 
     let title = match language {
-        Language::En => " 󰋖 Keyboard Shortcuts  ·  [Esc] or [?] to close ",
-        Language::Pt => " 󰋖 Atalhos de Teclado  ·  [Esc] ou [?] para fechar ",
+        Language::En => " 󰋖 Keyboard Shortcuts & Neovim Motions  ·  [Esc] or [?] to close ",
+        Language::Pt => " 󰋖 Atalhos de Teclado & Comandos Neovim  ·  [Esc] ou [?] para fechar ",
     };
 
     let block = Block::default()
@@ -29,82 +29,127 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    let sections: Vec<(&str, Vec<(&str, &str)>)> = match language {
-        Language::En => vec![
-            ("󰌌  Navigation & Scrolling", vec![
-                ("j / k or ↓ / ↑", "Scroll lines down / up"),
-                ("J / K or Ctrl+d / Ctrl+u", "Scroll half page down / up"),
-                ("] or n  /  [ or p", "Jump to Next / Previous hunk"),
-                ("Tab", "Switch focus between File Tree and Diff View"),
-                ("h / l or ← / →", "Diff: switch column (Old/New) · Tree: collapse/expand"),
-                ("Mouse Wheel / Click", "Smooth scroll and select files / rows / tabs"),
-            ]),
-            ("󰦨  Staging & Git Operations", vec![
-                ("s", "Stage hunk under cursor (or selected lines in Visual mode)"),
-                ("u", "Unstage hunk under cursor"),
-                ("d", "Discard hunk under cursor (with confirmation)"),
-                ("S / U / D", "Stage / Unstage / Discard entire file"),
-                ("v", "Toggle Visual Mode for line-by-line partial staging"),
-                ("H", "View commit History for active file"),
-                ("W", "Open Git Worktrees Switcher modal"),
-            ]),
-            ("󰈚  View & File Tree", vec![
-                ("1 / 2 / 3", "Switch Drawer Tab: [1] Changes  [2] Commits  [3] Stashes"),
-                ("b", "Toggle File Drawer sidebar visible ↔ hidden"),
-                ("t", "Toggle Folders (Tree) ↔ Flat List"),
-                ("< / > or , / .", "Resize File Drawer width"),
-                ("/", "Filter files by path or extension (fuzzy search)"),
-                ("m", "Toggle Side-by-Side ↔ Unified view mode"),
-                ("w", "Toggle AI live file watching mode (auto-reload)"),
-            ]),
-            ("󰒅  Integrations & System", vec![
-                ("Enter / e", "Open file in Neovim / $EDITOR at cursor line (+line)"),
-                ("c", "Copy hunk to system clipboard as Markdown"),
-                ("L", "Toggle Language (English ↔ Português)"),
-                ("? ", "Show / hide this help modal"),
-                ("q / Esc", "Quit diffv (or dismiss modal / visual mode)"),
-            ]),
-        ],
-        Language::Pt => vec![
-            ("󰌌  Navegação & Rolagem", vec![
-                ("j / k ou ↓ / ↑", "Rolar linhas para baixo / cima"),
-                ("J / K ou Ctrl+d / Ctrl+u", "Rolar meia página para baixo / cima"),
-                ("] ou n  /  [ ou p", "Ir para Próximo / Anterior hunk"),
-                ("Tab", "Alternar foco entre Árvore de Arquivos e Diff"),
-                ("h / l ou ← / →", "Diff: focar coluna (Old/New) · Árvore: fechar/abrir"),
-                ("Roda do Mouse / Clique", "Rolagem suave e seleção de arquivos / linhas / abas"),
-            ]),
-            ("󰦨  Staging & Operações Git", vec![
-                ("s", "Preparar (stage) hunk atual (ou linhas no modo Visual)"),
-                ("u", "Despreparar (unstage) hunk atual"),
-                ("d", "Descartar alterações do hunk atual (com confirmação)"),
-                ("S / U / D", "Preparar / Despreparar / Descartar arquivo inteiro"),
-                ("v", "Alternar Modo Visual para staging parcial linha por linha"),
-                ("H", "Ver Histórico de commits do arquivo ativo"),
-                ("W", "Abrir Alternador de Worktrees Git"),
-            ]),
-            ("󰈚  Visualização & Árvore", vec![
-                ("1 / 2 / 3", "Alternar Abas: [1] Mudanças  [2] Commits  [3] Stashes"),
-                ("b", "Exibir ↔ ocultar painel lateral (sidebar)"),
-                ("t", "Alternar entre Pastas (Tree) ↔ Lista Plana"),
-                ("< / > ou , / .", "Redimensionar largura do painel lateral"),
-                ("/", "Filtrar arquivos por caminho ou extensão (busca rápida)"),
-                ("m", "Alternar modo Side-by-Side ↔ Unificado"),
-                ("w", "Alternar modo Watch ao vivo para agentes de IA"),
-            ]),
-            ("󰒅  Integrações & Sistema", vec![
-                ("Enter / e", "Abrir arquivo no Neovim / $EDITOR na linha (+line)"),
-                ("c", "Copiar hunk em Markdown para a área de transferência"),
-                ("L", "Alternar Idioma (English ↔ Português)"),
-                ("? ", "Exibir / ocultar este modal de ajuda"),
-                ("q / Esc", "Sair do diffv (ou fechar modal / modo visual)"),
-            ]),
-        ],
+    let (left_sections, right_sections): (Vec<(&str, Vec<(&str, &str)>)>, Vec<(&str, Vec<(&str, &str)>)>) = match language {
+        Language::En => (
+            vec![
+                ("󰌌  Neovim Motions & Diff Navigation", vec![
+                    ("j / k or ↓ / ↑", "Move down / up line by line"),
+                    ("Ctrl+d / Ctrl+u", "Move half page down / up"),
+                    ("Ctrl+f / Ctrl+b", "Move full page down / up (PageDown/Up)"),
+                    ("gg / G", "Jump to top / bottom of diff or tree"),
+                    ("]c / [c (or ] / [)", "Jump to next / previous hunk"),
+                    ("n / N (or p)", "Next / previous hunk"),
+                    ("zz / zt / zb", "Center cursor / top / bottom of screen"),
+                    ("H / M / L", "Jump cursor to High / Middle / Low of screen"),
+                    ("Tab", "Switch focus: File Tree ↔ Diff View"),
+                    ("Mouse Wheel / Click", "Smooth scroll and select files / rows"),
+                ]),
+                ("󰦨  Staging & Git Operations", vec![
+                    ("s", "Stage hunk (or selected lines in Visual mode)"),
+                    ("u", "Unstage hunk under cursor"),
+                    ("d", "Discard hunk under cursor (with prompt)"),
+                    ("S / U / D", "Stage / Unstage / Discard entire file"),
+                    ("v", "Toggle Visual Mode (line-by-line selection)"),
+                    ("H / gh", "View commit History for active file"),
+                    ("W", "Open Git Worktrees Switcher modal"),
+                ]),
+            ],
+            vec![
+                ("󰈚  View, Drawer & Details", vec![
+                    ("1 / 2 / 3", "Switch Drawer Tab: [1] Changes [2] Commits [3] Stashes"),
+                    ("b", "Toggle File Drawer sidebar visible ↔ hidden"),
+                    ("o", "Toggle Folders (Tree) ↔ Flat List view"),
+                    ("< / > or , / .", "Resize File Drawer sidebar width"),
+                    ("/", "Filter files by path or extension (fuzzy search)"),
+                    ("i", "Open verbose Details Popup (Commit / File / Stash)"),
+                    ("m", "Toggle Side-by-Side ↔ Unified diff mode"),
+                    ("w", "Toggle AI live file watching (auto-reload)"),
+                ]),
+                ("󰒅  Integrations & System", vec![
+                    ("Enter / e", "Open in Neovim / $EDITOR at cursor line (+line)"),
+                    ("c", "Copy hunk to system clipboard as Markdown"),
+                    ("L", "Toggle Language (English ↔ Português)"),
+                    ("? ", "Show / hide this shortcuts cheat-sheet"),
+                    ("q / Esc", "Quit diffv (or dismiss modal / visual mode)"),
+                ]),
+            ],
+        ),
+        Language::Pt => (
+            vec![
+                ("󰌌  Movimentação Neovim & Navegação", vec![
+                    ("j / k ou ↓ / ↑", "Mover linha por linha para baixo / cima"),
+                    ("Ctrl+d / Ctrl+u", "Meia página para baixo / cima"),
+                    ("Ctrl+f / Ctrl+b", "Página inteira para baixo / cima (PageDown/Up)"),
+                    ("gg / G", "Saltar para início / fim do diff ou lista"),
+                    ("]c / [c (ou ] / [)", "Ir para próximo / anterior hunk"),
+                    ("n / N (ou p)", "Próximo / anterior hunk"),
+                    ("zz / zt / zb", "Centralizar cursor / topo / base da tela"),
+                    ("H / M / L", "Mover cursor para Topo / Meio / Base da tela"),
+                    ("Tab", "Alternar foco: Árvore de Arquivos ↔ Diff"),
+                    ("Roda do Mouse / Clique", "Rolagem suave e seleção de arquivos / linhas"),
+                ]),
+                ("󰦨  Staging & Operações Git", vec![
+                    ("s", "Preparar (stage) hunk ou linhas no modo Visual"),
+                    ("u", "Despreparar (unstage) hunk atual"),
+                    ("d", "Descartar alterações do hunk atual (com confirmação)"),
+                    ("S / U / D", "Preparar / Despreparar / Descartar arquivo inteiro"),
+                    ("v", "Alternar Modo Visual para seleção linha a linha"),
+                    ("H / gh", "Ver Histórico de commits do arquivo ativo"),
+                    ("W", "Abrir Alternador de Worktrees Git"),
+                ]),
+            ],
+            vec![
+                ("󰈚  Visualização, Painel & Detalhes", vec![
+                    ("1 / 2 / 3", "Alternar Abas: [1] Mudanças [2] Commits [3] Stashes"),
+                    ("b", "Exibir ↔ ocultar painel lateral (sidebar)"),
+                    ("o", "Alternar entre Pastas (Tree) ↔ Lista Plana"),
+                    ("< / > ou , / .", "Redimensionar largura do painel lateral"),
+                    ("/", "Filtrar arquivos por caminho ou extensão"),
+                    ("i", "Abrir Popup de Detalhes (Commit / Arquivo / Stash)"),
+                    ("m", "Alternar modo Side-by-Side ↔ Unificado"),
+                    ("w", "Alternar modo Watch ao vivo para agentes IA"),
+                ]),
+                ("󰒅  Integrações & Sistema", vec![
+                    ("Enter / e", "Abrir arquivo no Neovim / $EDITOR na linha (+line)"),
+                    ("c", "Copiar hunk em Markdown para clipboard"),
+                    ("L", "Alternar Idioma (English ↔ Português)"),
+                    ("? ", "Exibir / ocultar esta ajuda de atalhos"),
+                    ("q / Esc", "Sair do diffv (ou fechar modal / modo visual)"),
+                ]),
+            ],
+        ),
     };
 
-    let mut lines = Vec::new();
-    let key_pad = if inner.width < 75 { 18 } else { 26 };
+    if inner.width >= 86 {
+        // Dual column layout
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(inner);
 
+        let left_lines = build_section_lines(&left_sections, theme, 22);
+        frame.render_widget(Paragraph::new(left_lines), cols[0]);
+
+        let right_lines = build_section_lines(&right_sections, theme, 20);
+        frame.render_widget(Paragraph::new(right_lines), cols[1]);
+    } else {
+        // Single column layout
+        let mut combined = left_sections;
+        combined.extend(right_sections);
+        let lines = build_section_lines(&combined, theme, 18);
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
+}
+
+fn build_section_lines(
+    sections: &[(&str, Vec<(&str, &str)>)],
+    theme: &Theme,
+    key_pad: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     for (sec_title, bindings) in sections {
         lines.push(Line::from(vec![
             Span::styled(
@@ -116,14 +161,12 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
         for (key, desc) in bindings {
             lines.push(Line::from(vec![
                 Span::styled(format!("    {:<width$}", key, width = key_pad), Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-                Span::styled(desc, Style::default().fg(theme.fg)),
+                Span::styled(desc.to_string(), Style::default().fg(theme.fg)),
             ]));
         }
         lines.push(Line::from(""));
     }
-
-    let paragraph = Paragraph::new(lines);
-    frame.render_widget(paragraph, inner);
+    lines
 }
 
 pub fn render_confirm_popup(

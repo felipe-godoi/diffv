@@ -19,12 +19,14 @@ use crate::integration::clipboard::copy_hunk_as_markdown;
 use crate::ui::components::file_tree::{
     build_tree_items, render_drawer, FileViewMode, TreeItem,
 };
+use crate::ui::components::details_popup::{render_details_popup, DetailsContent};
 use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
 use crate::ui::components::history_popup::render_history_popup;
 use crate::ui::components::ruler::render_ruler;
 use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
 use crate::ui::components::status_bar::render_status_bar;
+use crate::ui::components::toast::render_toast;
 use crate::ui::components::unified::render_unified;
 use crate::ui::components::worktree_popup::render_worktree_popup;
 use crate::ui::theme::Theme;
@@ -120,6 +122,14 @@ pub struct App {
     pub live_snapshot: Option<(Vec<FileDiff>, RepoStats)>,
     pub active_commit_info: Option<CommitEntry>,
     pub active_stash_info: Option<StashEntry>,
+
+    // Pending multi-key sequences (e.g. 'g' then 'g', 'z' then 'z', ']' then 'c')
+    pub pending_key: Option<char>,
+    pub pending_key_time: Option<Instant>,
+
+    // Details popup (commit details, stash details, or verbose file details)
+    pub show_details_popup: bool,
+    pub details_popup_scroll: usize,
 }
 
 impl App {
@@ -210,6 +220,10 @@ impl App {
             live_snapshot: None,
             active_commit_info: None,
             active_stash_info: None,
+            pending_key: None,
+            pending_key_time: None,
+            show_details_popup: false,
+            details_popup_scroll: 0,
         };
 
         app.reload_diffs_internal(false)?;
@@ -233,6 +247,30 @@ impl App {
             return Some(commit_diff);
         }
         self.get_underlying_file()
+    }
+
+    pub fn total_diff_rows(&self) -> usize {
+        if let Some(file) = self.current_file() {
+            if self.is_unified {
+                file.hunks.iter().map(|h| h.lines.len() + 1).sum()
+            } else {
+                file.aligned_rows.len()
+            }
+        } else {
+            0
+        }
+    }
+
+    pub fn toggle_language(&mut self) {
+        self.language = match self.language {
+            Language::En => Language::Pt,
+            Language::Pt => Language::En,
+        };
+        let msg = match self.language {
+            Language::En => "Language: English",
+            Language::Pt => "Idioma: Português",
+        };
+        self.set_notification(msg);
     }
 
     pub fn get_underlying_file(&self) -> Option<&FileDiff> {
@@ -384,10 +422,127 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
-        // Clear old notification if older than 4 seconds
+        // Clear old notification if older than 1800ms
         if let Some((_, time)) = self.notification {
-            if time.elapsed() > Duration::from_secs(4) {
+            if time.elapsed() > Duration::from_millis(1800) {
                 self.notification = None;
+            }
+        }
+
+        // 0. Details Modal Active
+        if self.show_details_popup {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') => {
+                    self.show_details_popup = false;
+                    self.details_popup_scroll = 0;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.details_popup_scroll += 1;
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.details_popup_scroll = self.details_popup_scroll.saturating_sub(1);
+                }
+                KeyCode::PageDown | KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.details_popup_scroll += 10;
+                }
+                KeyCode::PageUp | KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.details_popup_scroll = self.details_popup_scroll.saturating_sub(10);
+                }
+                KeyCode::Enter => {
+                    if self.drawer_tab == DrawerTab::Commits && self.active_commit_info.is_none() {
+                        self.show_details_popup = false;
+                        self.details_popup_scroll = 0;
+                        self.load_selected_repo_commit();
+                    } else if self.drawer_tab == DrawerTab::Stashes && self.active_stash_info.is_none() {
+                        self.show_details_popup = false;
+                        self.details_popup_scroll = 0;
+                        self.load_selected_stash();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Check pending key sequence timeout (1 second)
+        if let Some(time) = self.pending_key_time {
+            if time.elapsed() > Duration::from_millis(1000) {
+                self.pending_key = None;
+                self.pending_key_time = None;
+            }
+        }
+
+        if let Some(pending) = self.pending_key.take() {
+            self.pending_key_time = None;
+            match pending {
+                'g' => match key.code {
+                    KeyCode::Char('g') => {
+                        // gg: jump to top of view
+                        if self.focus == Focus::DiffView {
+                            self.selected_row = 0;
+                            self.scroll_y = 0;
+                        } else if self.drawer_tab == DrawerTab::Changes || self.active_commit_info.is_some() || self.active_stash_info.is_some() {
+                            if self.file_view_mode == FileViewMode::Tree {
+                                self.selected_tree_idx = 0;
+                                self.file_tree_scroll = 0;
+                            } else {
+                                self.selected_filtered_idx = 0;
+                                self.file_tree_scroll = 0;
+                            }
+                        } else if self.drawer_tab == DrawerTab::Commits {
+                            self.selected_repo_commit_idx = 0;
+                            self.repo_commit_scroll = 0;
+                        } else if self.drawer_tab == DrawerTab::Stashes {
+                            self.selected_stash_idx = 0;
+                            self.stash_scroll = 0;
+                        }
+                        return;
+                    }
+                    KeyCode::Char('h') => {
+                        // gh: open git history
+                        self.open_file_history();
+                        return;
+                    }
+                    KeyCode::Char('l') => {
+                        // gl: toggle language
+                        self.toggle_language();
+                        return;
+                    }
+                    _ => {}
+                },
+                'z' => match key.code {
+                    KeyCode::Char('z') => {
+                        // zz: center cursor in viewport
+                        let vp = self.viewport_height.saturating_sub(3).max(1);
+                        self.scroll_y = self.selected_row.saturating_sub(vp / 2);
+                        return;
+                    }
+                    KeyCode::Char('t') => {
+                        // zt: scroll cursor to top of viewport
+                        self.scroll_y = self.selected_row;
+                        return;
+                    }
+                    KeyCode::Char('b') => {
+                        // zb: scroll cursor to bottom of viewport
+                        let vp = self.viewport_height.saturating_sub(3).max(1);
+                        self.scroll_y = self.selected_row.saturating_sub(vp.saturating_sub(1));
+                        return;
+                    }
+                    _ => {}
+                },
+                ']' => {
+                    if key.code == KeyCode::Char('c') {
+                        // ]c was pressed: already jumped hunk on ']'
+                        return;
+                    }
+                }
+                '[' => {
+                    if key.code == KeyCode::Char('c') {
+                        // [c was pressed: already jumped hunk on '['
+                        return;
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -556,7 +711,9 @@ impl App {
                 }
             }
             KeyCode::Char('H') => {
-                if self.active_commit_view.is_some() {
+                if self.focus == Focus::DiffView {
+                    self.selected_row = self.scroll_y;
+                } else if self.active_commit_view.is_some() {
                     self.active_commit_view = None;
                     let msg = match self.language {
                         Language::En => "Returned to live working tree diff",
@@ -567,21 +724,77 @@ impl App {
                     self.open_file_history();
                 }
             }
+            KeyCode::Char('M') => {
+                if self.focus == Focus::DiffView {
+                    let vp = self.viewport_height.saturating_sub(3).max(1);
+                    let total = self.total_diff_rows();
+                    self.selected_row = (self.scroll_y + vp / 2).min(total.saturating_sub(1));
+                }
+            }
+            KeyCode::Char('L') => {
+                if self.focus == Focus::DiffView {
+                    let vp = self.viewport_height.saturating_sub(3).max(1);
+                    let total = self.total_diff_rows();
+                    self.selected_row = (self.scroll_y + vp.saturating_sub(1)).min(total.saturating_sub(1));
+                } else {
+                    self.toggle_language();
+                }
+            }
+            KeyCode::F(2) => {
+                self.toggle_language();
+            }
+            KeyCode::Char('i') => {
+                self.show_details_popup = !self.show_details_popup;
+                self.details_popup_scroll = 0;
+            }
+            KeyCode::Char('g') => {
+                self.pending_key = Some('g');
+                self.pending_key_time = Some(Instant::now());
+            }
+            KeyCode::Char('G') => {
+                if self.focus == Focus::DiffView {
+                    let total = self.total_diff_rows();
+                    if total > 0 {
+                        self.selected_row = total - 1;
+                        let vp = self.viewport_height.saturating_sub(3).max(1);
+                        self.scroll_y = self.selected_row.saturating_sub(vp.saturating_sub(1));
+                    }
+                } else if self.drawer_tab == DrawerTab::Changes || self.active_commit_info.is_some() || self.active_stash_info.is_some() {
+                    if self.file_view_mode == FileViewMode::Tree {
+                        if !self.tree_items.is_empty() {
+                            self.selected_tree_idx = self.tree_items.len() - 1;
+                            let vp = self.file_tree_height.saturating_sub(4).max(1);
+                            self.file_tree_scroll = self.selected_tree_idx.saturating_sub(vp.saturating_sub(1));
+                        }
+                    } else if !self.filtered_indices.is_empty() {
+                        self.selected_filtered_idx = self.filtered_indices.len() - 1;
+                        let vp = self.file_tree_height.saturating_sub(4).max(1);
+                        self.file_tree_scroll = self.selected_filtered_idx.saturating_sub(vp.saturating_sub(1));
+                    }
+                } else if self.drawer_tab == DrawerTab::Commits {
+                    if !self.repo_commits.is_empty() {
+                        self.selected_repo_commit_idx = self.repo_commits.len() - 1;
+                        let vp = self.file_tree_height.saturating_sub(4).max(1);
+                        self.repo_commit_scroll = self.selected_repo_commit_idx.saturating_sub(vp.saturating_sub(1));
+                    }
+                } else if self.drawer_tab == DrawerTab::Stashes {
+                    if !self.stashes.is_empty() {
+                        self.selected_stash_idx = self.stashes.len() - 1;
+                        let vp = self.file_tree_height.saturating_sub(4).max(1);
+                        self.stash_scroll = self.selected_stash_idx.saturating_sub(vp.saturating_sub(1));
+                    }
+                }
+            }
+            KeyCode::Char('z') => {
+                if self.focus == Focus::DiffView {
+                    self.pending_key = Some('z');
+                    self.pending_key_time = Some(Instant::now());
+                }
+            }
             KeyCode::Char('W') => {
                 self.show_worktrees = true;
             }
-            KeyCode::Char('L') => {
-                self.language = match self.language {
-                    Language::En => Language::Pt,
-                    Language::Pt => Language::En,
-                };
-                let msg = match self.language {
-                    Language::En => "Language: English",
-                    Language::Pt => "Idioma: Português",
-                };
-                self.set_notification(msg);
-            }
-            KeyCode::Char('b') => {
+            KeyCode::Char('b') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.show_drawer = !self.show_drawer;
                 let msg = if self.show_drawer {
                     match self.language {
@@ -801,30 +1014,68 @@ impl App {
                     self.scroll_up(1);
                 }
             }
-            KeyCode::Char('J') | KeyCode::PageDown => {
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let page = self.viewport_height.saturating_sub(4).max(1);
                 if self.focus == Focus::FileTree {
-                    self.file_tree_down(10);
+                    self.file_tree_down(page);
                 } else {
-                    self.scroll_down(10);
+                    self.scroll_down(page);
+                }
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let page = self.viewport_height.saturating_sub(4).max(1);
+                if self.focus == Focus::FileTree {
+                    self.file_tree_up(page);
+                } else {
+                    self.scroll_up(page);
+                }
+            }
+            KeyCode::Char('J') | KeyCode::PageDown => {
+                let page = self.viewport_height.saturating_sub(4).max(1);
+                if self.focus == Focus::FileTree {
+                    self.file_tree_down(page);
+                } else {
+                    self.scroll_down(page);
                 }
             }
             KeyCode::Char('K') | KeyCode::PageUp => {
+                let page = self.viewport_height.saturating_sub(4).max(1);
                 if self.focus == Focus::FileTree {
-                    self.file_tree_up(10);
+                    self.file_tree_up(page);
                 } else {
-                    self.scroll_up(10);
+                    self.scroll_up(page);
                 }
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll_down(10);
+                let half = (self.viewport_height.saturating_sub(3) / 2).max(1);
+                if self.focus == Focus::FileTree {
+                    self.file_tree_down(half);
+                } else {
+                    self.scroll_down(half);
+                }
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll_up(10);
+                let half = (self.viewport_height.saturating_sub(3) / 2).max(1);
+                if self.focus == Focus::FileTree {
+                    self.file_tree_up(half);
+                } else {
+                    self.scroll_up(half);
+                }
             }
-            KeyCode::Char(']') | KeyCode::Char('n') => {
+            KeyCode::Char(']') => {
+                self.jump_next_hunk();
+                self.pending_key = Some(']');
+                self.pending_key_time = Some(Instant::now());
+            }
+            KeyCode::Char('[') => {
+                self.jump_prev_hunk();
+                self.pending_key = Some('[');
+                self.pending_key_time = Some(Instant::now());
+            }
+            KeyCode::Char('n') => {
                 self.jump_next_hunk();
             }
-            KeyCode::Char('[') | KeyCode::Char('p') => {
+            KeyCode::Char('N') | KeyCode::Char('p') => {
                 self.jump_prev_hunk();
             }
             KeyCode::Enter => {
@@ -1154,6 +1405,19 @@ impl App {
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseButton, MouseEventKind};
+
+        if self.show_details_popup {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => {
+                    self.details_popup_scroll += 3;
+                }
+                MouseEventKind::ScrollUp => {
+                    self.details_popup_scroll = self.details_popup_scroll.saturating_sub(3);
+                }
+                _ => {}
+            }
+            return;
+        }
 
         let effective_tree_width = if self.show_drawer { self.file_tree_width } else { 0 };
 
@@ -1840,6 +2104,7 @@ impl App {
                     cur_file,
                     self.scroll_y,
                     self.selected_row,
+                    visual_range,
                     self.focus == Focus::DiffView,
                     syntax_enabled,
                     &self.theme,
@@ -1865,54 +2130,15 @@ impl App {
             }
         }
 
-        // 3. Render Status Bar
-        let notif_text = if self.visual_mode {
-            match self.language {
-                Language::En => Some("VISUAL MODE: Select lines with j/k, press 's' to stage selected lines, Esc to exit"),
-                Language::Pt => Some("MODO VISUAL: Selecione linhas com j/k, pressione 's' para stage, Esc para sair"),
-            }
-        } else if self.active_commit_info.is_some() {
-            match self.language {
-                Language::En => Some("COMMIT VIEW: Inspecting commit files · Press [Esc] or [2] for Commits list · [1] Live Diff"),
-                Language::Pt => Some("MODO COMMIT: Inspecionando arquivos do commit · [Esc] ou [2] para Lista de Commits · [1] Diff ao vivo"),
-            }
-        } else if self.active_stash_info.is_some() {
-            match self.language {
-                Language::En => Some("STASH VIEW: Inspecting stash files · Press [Esc] or [3] for Stashes list · [1] Live Diff"),
-                Language::Pt => Some("MODO STASH: Inspecionando arquivos do stash · [Esc] ou [3] para Lista de Stashes · [1] Diff ao vivo"),
-            }
-        } else if self.active_commit_view.is_some() {
-            match self.language {
-                Language::En => Some("COMMIT VIEW: Viewing commit diff · Press [Esc] or [1] to return to Live Diff"),
-                Language::Pt => Some("VISUALIZAÇÃO DE COMMIT: Pressione [Esc] ou [1] para voltar ao Live Diff"),
-            }
-        } else if self.drawer_tab == DrawerTab::Commits {
-            match self.language {
-                Language::En => Some("COMMITS: [j/k] Select commit · [Enter] Inspect files & diff · [1] Live Diff"),
-                Language::Pt => Some("COMMITS: [j/k] Selecionar commit · [Enter] Inspecionar arquivos e diff · [1] Diff ao vivo"),
-            }
-        } else if self.drawer_tab == DrawerTab::Stashes {
-            match self.language {
-                Language::En => Some("STASHES: [j/k] Select stash · [Enter] Inspect files & diff · [1] Live Diff"),
-                Language::Pt => Some("STASHES: [j/k] Selecionar stash · [Enter] Inspecionar arquivos e diff · [1] Diff ao vivo"),
-            }
-        } else {
-            self.notification.as_ref().map(|(msg, _)| msg.as_str())
-        };
-
-        let mode_label = if self.visual_mode {
-            "VISUAL"
-        } else if self.focus == Focus::FileTree && self.show_drawer {
-            "TREE"
-        } else {
-            "DIFF"
-        };
-
+        // 3. Render Status Bar (always shows dedicated contextual shortcuts)
         render_status_bar(
             frame,
             chunks[2],
-            notif_text,
-            mode_label,
+            self.focus,
+            self.drawer_tab,
+            self.visual_mode,
+            self.active_commit_info.is_some(),
+            self.active_stash_info.is_some(),
             self.language,
             &self.theme,
         );
@@ -1920,6 +2146,27 @@ impl App {
         // 4. Overlays
         if self.show_help {
             render_help_popup(frame, size, self.language, &self.theme);
+        } else if self.show_details_popup {
+            let cur_file = self.current_file();
+            let content = if let Some(commit) = &self.active_commit_info {
+                DetailsContent::Commit(commit, &self.files)
+            } else if self.drawer_tab == DrawerTab::Commits && !self.repo_commits.is_empty() {
+                DetailsContent::Commit(&self.repo_commits[self.selected_repo_commit_idx], &[])
+            } else if let Some(stash) = &self.active_stash_info {
+                DetailsContent::Stash(stash, &self.files)
+            } else if self.drawer_tab == DrawerTab::Stashes && !self.stashes.is_empty() {
+                DetailsContent::Stash(&self.stashes[self.selected_stash_idx], &[])
+            } else if let Some(f) = cur_file {
+                DetailsContent::File(f)
+            } else {
+                DetailsContent::Commit(&CommitEntry {
+                    hash: "N/A".into(),
+                    author: "N/A".into(),
+                    date: "N/A".into(),
+                    message: "No commit or file details available".into(),
+                }, &[])
+            };
+            render_details_popup(frame, size, content, self.details_popup_scroll, self.language, &self.theme);
         } else if self.show_worktrees {
             render_worktree_popup(
                 frame,
@@ -1946,6 +2193,11 @@ impl App {
             );
         } else if let Some((_, msg)) = &self.confirm_action {
             render_confirm_popup(frame, size, msg, self.language, &self.theme);
+        }
+
+        // 5. Floating Toast Notification (does not overwrite status bar shortcuts)
+        if let Some((msg, _)) = &self.notification {
+            render_toast(frame, size, msg, &self.theme);
         }
     }
 }

@@ -89,18 +89,20 @@ pub fn render_commit_overview(
     frame.render_widget(msg_p, chunks[2]);
 
     // 4. Action buttons
-    let (inspect_btn, inspect_label, nav_label, back_label) = match language {
+    let (inspect_btn, inspect_label, details_label, nav_label, back_label) = match language {
         Language::En => (
             " [Enter] ",
-            "Inspect files & diffs of this commit",
-            "[j/k] Navigate commits",
-            "[1] Return to live diff",
+            "Inspect files",
+            " [i] Details ",
+            "[j/k] Navigate",
+            "[1] Live diff",
         ),
         Language::Pt => (
             " [Enter] ",
-            "Inspecionar arquivos e alterações deste commit",
-            "[j/k] Navegar commits",
-            "[1] Retornar ao diff local",
+            "Inspecionar",
+            " [i] Detalhes ",
+            "[j/k] Navegar",
+            "[1] Diff local",
         ),
     };
 
@@ -108,8 +110,10 @@ pub fn render_commit_overview(
         Line::from(""),
         Line::from(vec![
             Span::styled(inspect_btn, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {}    ", inspect_label), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{}    ", nav_label), Style::default().fg(theme.line_num_fg)),
+            Span::styled(format!(" {}   ", inspect_label), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+            Span::styled(details_label, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.key_fg).add_modifier(Modifier::BOLD)),
+            Span::styled("   ", Style::default()),
+            Span::styled(format!("{}   ", nav_label), Style::default().fg(theme.line_num_fg)),
             Span::styled(back_label, Style::default().fg(theme.line_num_fg)),
         ]),
     ];

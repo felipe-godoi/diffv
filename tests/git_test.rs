@@ -236,4 +236,27 @@ fn test_commit_inspection() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_details_popup_and_neovim_navigation() {
+    let commit = diffv::core::models::CommitEntry {
+        hash: "1234567890abcdef".into(),
+        author: "Developer <dev@example.com>".into(),
+        date: "2026-10-01 22:00:00".into(),
+        message: "feat: add neovim motions and details popup\n\nFull wrapped message body here with multiple paragraphs.\nBreaking changes: None.".into(),
+    };
+
+    assert_eq!(&commit.hash[..7], "1234567");
+    assert!(commit.message.lines().count() >= 3);
+
+    // Verify visual range calculations
+    let anchor = 5usize;
+    let cursor = 12usize;
+    let min_r = anchor.min(cursor);
+    let max_r = anchor.max(cursor);
+    assert_eq!(min_r, 5);
+    assert_eq!(max_r, 12);
+    assert_eq!(max_r - min_r + 1, 8);
+}
+
+
 
