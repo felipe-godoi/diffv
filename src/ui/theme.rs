@@ -100,6 +100,10 @@ impl Theme {
             })).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(color, _)| color).unwrap_or(self.selected_fg)
     }
 
+    pub fn is_light(&self) -> bool {
+        luminance(self.status_bg).is_some_and(|value| value > 0.5)
+    }
+
     pub fn from_name(name: &str) -> Self {
         match name.to_lowercase().as_str() {
             "auto" | "terminal" | "default" | "system" => Self::terminal(),

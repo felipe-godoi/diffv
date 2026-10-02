@@ -1,33 +1,29 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::core::models::Language;
+use crate::ui::components::style::{centered_rect, help_line, render_card};
 use crate::ui::theme::Theme;
 
 pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, theme: &Theme) {
     let popup_area = centered_rect(88, 86, area);
 
-    // Clear background
-    frame.render_widget(Clear, popup_area);
-
-    let title = match language {
-        Language::En => " 󰋖 Keyboard Shortcuts & Neovim Motions  ·  [Esc] or [?] to close ",
-        Language::Pt => " 󰋖 Atalhos de Teclado & Comandos Neovim  ·  [Esc] ou [?] para fechar ",
+    let (title, footer) = match language {
+        Language::En => ("Keyboard Shortcuts & Neovim Motions", [("esc / ? / q", "close")]),
+        Language::Pt => ("Atalhos de Teclado & Comandos Neovim", [("esc / ? / q", "fechar")]),
     };
 
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.header_bg));
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let card = render_card(frame, popup_area, "󰋖", title, theme.header_fg, theme);
+    if card.height < 3 {
+        return;
+    }
+    let [body, footer_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(card);
+    frame.render_widget(Paragraph::new(help_line(&footer, footer_area.width, theme)).alignment(Alignment::Center), footer_area);
+    let inner = Rect { y: body.y + 1, height: body.height.saturating_sub(1), ..body };
 
     let (left_sections, right_sections): (Vec<(&str, Vec<(&str, &str)>)>, Vec<(&str, Vec<(&str, &str)>)>) = match language {
         Language::En => (
@@ -36,7 +32,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("j / k or ↓ / ↑", "Move down / up line by line"),
                     ("Ctrl+e / Ctrl+y", "Scroll viewport down / up 1 line (Vim)"),
                     ("Ctrl+d / Ctrl+u", "Move half page down / up"),
-                    ("Ctrl+f / Ctrl+b", "Move full page down / up (PageDown/Up)"),
+                    ("PageDown / Ctrl+b", "Move full page down / up (PageUp)"),
                     ("gg / G", "Jump to top / bottom of diff or tree"),
                     ("]c / [c (or ] / [)", "Jump to next / previous hunk"),
                     ("n / N (or p)", "Next / previous hunk"),
@@ -58,8 +54,8 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
             ],
             vec![
                 ("󰈚  View, Drawer & Fuzzy Search", vec![
-                    ("Ctrl+p", "Fuzzy search files with fzf (interactive jump)"),
-                    ("Ctrl+s", "Fuzzy search text across diffs with fzf"),
+                    ("Ctrl+p", "Find file in current scope: changes / commit / stash"),
+                    ("Ctrl+f", "Search text in file / commit / changes (fzf)"),
                     ("b", "Toggle File Drawer sidebar visible ↔ hidden"),
                     ("t", "Toggle Folders (Tree) ↔ Flat List view"),
                     ("< / > or , / .", "Resize File Drawer sidebar width"),
@@ -69,6 +65,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("h/l · ←/→", "Scroll text horizontally (gutters stay fixed)"),
                     ("0 / $", "Horizontal start / end"),
                     ("r", "Toggle line wrap (default ON)"),
+                    ("x", "Expand full file ↔ changes only"),
                     ("m", "Toggle Side-by-Side ↔ Unified diff mode"),
                     ("w", "Toggle AI live file watching (auto-reload)"),
                 ]),
@@ -88,7 +85,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("j / k ou ↓ / ↑", "Mover linha por linha para baixo / cima"),
                     ("Ctrl+e / Ctrl+y", "Rolar viewport 1 linha abaixo / acima (Vim)"),
                     ("Ctrl+d / Ctrl+u", "Meia página para baixo / cima"),
-                    ("Ctrl+f / Ctrl+b", "Página inteira para baixo / cima (PageDown/Up)"),
+                    ("PageDown / Ctrl+b", "Página inteira para baixo / cima (PageUp)"),
                     ("gg / G", "Saltar para início / fim do diff ou lista"),
                     ("]c / [c (ou ] / [)", "Ir para próximo / anterior hunk"),
                     ("n / N (ou p)", "Próximo / anterior hunk"),
@@ -110,8 +107,8 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
             ],
             vec![
                 ("󰈚  Visualização, Painel & Busca Fuzzy", vec![
-                    ("Ctrl+p", "Busca fuzzy de arquivos com fzf (salto direto)"),
-                    ("Ctrl+s", "Busca fuzzy de texto nos diffs com fzf"),
+                    ("Ctrl+p", "Buscar arquivo no escopo: mudanças / commit / stash"),
+                    ("Ctrl+f", "Buscar texto no arquivo / commit / mudanças (fzf)"),
                     ("b", "Exibir ↔ ocultar painel lateral (sidebar)"),
                     ("t", "Alternar entre Pastas (Tree) ↔ Lista Plana"),
                     ("< / > ou , / .", "Redimensionar largura do painel lateral"),
@@ -121,6 +118,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("h/l · ←/→", "Rolar texto horizontalmente"),
                     ("0 / $", "Início / fim horizontal"),
                     ("r", "Alternar quebra de linha (padrão ligado)"),
+                    ("x", "Expandir arquivo inteiro ↔ só mudanças"),
                     ("m", "Alternar modo Side-by-Side ↔ Unificado"),
                     ("w", "Alternar modo Watch ao vivo para agentes IA"),
                 ]),
@@ -147,16 +145,16 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
             ])
             .split(inner);
 
-        let left_lines = build_section_lines(&left_sections, theme, 22);
+        let left_lines = build_section_lines(&left_sections, theme);
         frame.render_widget(Paragraph::new(left_lines), cols[0]);
 
-        let right_lines = build_section_lines(&right_sections, theme, 20);
+        let right_lines = build_section_lines(&right_sections, theme);
         frame.render_widget(Paragraph::new(right_lines), cols[1]);
     } else {
         // Single column layout
         let mut combined = left_sections;
         combined.extend(right_sections);
-        let lines = build_section_lines(&combined, theme, 18);
+        let lines = build_section_lines(&combined, theme);
         frame.render_widget(Paragraph::new(lines), inner);
     }
 }
@@ -164,20 +162,20 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
 fn build_section_lines(
     sections: &[(&str, Vec<(&str, &str)>)],
     theme: &Theme,
-    key_pad: usize,
 ) -> Vec<Line<'static>> {
+    let key_pad = sections.iter().flat_map(|(_, bindings)| bindings.iter().map(|(key, _)| key.width())).max().unwrap_or(0) + 2;
     let mut lines = Vec::new();
     for (sec_title, bindings) in sections {
         lines.push(Line::from(vec![
             Span::styled(
-                format!("  {}  ", sec_title),
+                format!("{}  ", sec_title),
                 Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD),
             ),
         ]));
 
         for (key, desc) in bindings {
             lines.push(Line::from(vec![
-                Span::styled(format!("    {:<width$}", key, width = key_pad), Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  {}{}", key, " ".repeat(key_pad - key.width())), Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
                 Span::styled(desc.to_string(), Style::default().fg(theme.fg)),
             ]));
         }
@@ -194,27 +192,15 @@ pub fn render_confirm_popup(
     theme: &Theme,
 ) {
     let popup_area = centered_rect(55, 25, area);
-    frame.render_widget(Clear, popup_area);
-
     let title = match language {
-        Language::En => " ⚠ Confirm Action ",
-        Language::Pt => " ⚠ Confirmar Ação ",
+        Language::En => "Confirm Action",
+        Language::Pt => "Confirmar Ação",
     };
-
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.del_fg).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.header_bg));
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let inner = render_card(frame, popup_area, "", title, theme.del_fg, theme);
 
     let (confirm_btn, cancel_btn) = match language {
-        Language::En => (" [y] Confirm ", " [n / Esc] Cancel "),
-        Language::Pt => (" [y] Confirmar ", " [n / Esc] Cancelar "),
+        Language::En => ("  y  Confirm  ", "  n / esc  Cancel  "),
+        Language::Pt => ("  y  Confirmar  ", "  n / esc  Cancelar  "),
     };
 
     let lines = vec![
@@ -225,34 +211,12 @@ pub fn render_confirm_popup(
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled(confirm_btn, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
-            Span::raw("    "),
-            Span::styled(cancel_btn, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_d).add_modifier(Modifier::BOLD)),
+            Span::styled(confirm_btn, Style::default().fg(theme.text_on(theme.del_fg)).bg(theme.del_fg).add_modifier(Modifier::BOLD)),
+            Span::raw("   "),
+            Span::styled(cancel_btn, Style::default().fg(theme.fg).bg(theme.selected_bg)),
         ]),
     ];
 
     let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
     frame.render_widget(paragraph, inner);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let px = if r.width < 90 { 96 } else { percent_x };
-    let py = if r.height < 30 { 92 } else { percent_y };
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - py) / 2),
-            Constraint::Percentage(py),
-            Constraint::Percentage((100 - py) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - px) / 2),
-            Constraint::Percentage(px),
-            Constraint::Percentage((100 - px) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }

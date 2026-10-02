@@ -1,11 +1,12 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::core::models::{DiffKind, DiffLine, FileDiff, HighlightSpan};
 use crate::core::syntax::SyntaxHighlighter;
+use crate::ui::components::style::diff_pane_block;
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,34 +29,27 @@ pub fn render_side_by_side(
     active_column: ColumnSide,
     is_focused: bool,
     syntax_enabled: bool,
+    full_context: bool,
     theme: &Theme,
 ) {
     row_map.clear();
-    let title = if let Some((start, end)) = visual_range {
-        let count = end.saturating_sub(start) + 1;
-        format!(" 󰒅 [VISUAL MODE: {} lines selected (s: stage, u: unstage, d: discard, Esc: exit)] ", count)
-    } else if let Some(diff) = file_diff {
-        format!(" 󰈚 {} (+{}, -{}) [Side-by-Side] ", diff.display_path(), diff.stats.additions, diff.stats.deletions)
+    let help: &[(&str, &str)] = if visual_range.is_some() {
+        &[("s", "stage"), ("u", "unstage"), ("d", "discard"), ("esc", "exit")]
     } else {
-        " Diff View [Side-by-Side] ".to_string()
+        &[("x", if full_context { "collapse" } else { "full file" }), ("h/l", "scroll"), ("0/$", "start/end"), ("tab", "old/new"), ("r", "wrap")]
     };
-
-    let border_style = if visual_range.is_some() {
-        Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD)
-    } else if is_focused {
-        Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.border)
-    };
-
-    let block = Block::default()
-        .title(title)
-        .title_bottom(format!(" ←/→ h/l Scroll · 0 Start · $ End · Tab OLD/NEW · x:{} / {} ", scroll_x[0], scroll_x[1]))
-        .title_top(if wrap { " Wrap ON [r] " } else { " Wrap OFF [r] " })
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(border_style)
-        .style(Style::default().bg(theme.bg));
+    let block = diff_pane_block(
+        file_diff,
+        "side-by-side",
+        visual_range.map(|(start, end)| end.saturating_sub(start) + 1),
+        is_focused,
+        wrap,
+        full_context,
+        help,
+        format!("x:{} / {}", scroll_x[0], scroll_x[1]),
+        area.width,
+        theme,
+    );
 
     let inner_area = block.inner(area);
     frame.render_widget(block, area);

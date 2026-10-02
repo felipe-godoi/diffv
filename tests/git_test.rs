@@ -329,7 +329,7 @@ fn test_tab_esc_worktree_fzf_features() {
     assert!(app.show_history);
     app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
     assert!(matches!(app.fzf_request.take(), Some(diffv::ui::app::FzfRequest::Files)));
-    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    app.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
     assert!(matches!(app.fzf_request.take(), Some(diffv::ui::app::FzfRequest::Text)));
     app.load_selected_commit_diff();
     assert!(app.show_history);
@@ -405,13 +405,20 @@ fn test_tab_esc_worktree_fzf_features() {
 
 
     // 6. Test fzf search line collection
-    let files = app.collect_diff_files();
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0], "main.rs");
+    app.focus = diffv::ui::app::Focus::FileTree;
+    let files = app.prepare_fzf(diffv::ui::app::FzfRequest::Files).items;
+    assert_eq!(files, vec!["main.rs".to_string()]);
 
-    let text_lines = app.collect_diff_text_lines();
+    let text_lines = app.prepare_fzf(diffv::ui::app::FzfRequest::Text).items;
     assert!(!text_lines.is_empty());
-    assert!(text_lines.iter().any(|l| l.contains("main.rs") && (l.contains('+') || l.contains('-'))));
+    assert!(text_lines.iter().all(|l| l.starts_with("main.rs:") && l.contains('\t')));
+
+    app.focus = diffv::ui::app::Focus::DiffView;
+    let query = app.prepare_fzf(diffv::ui::app::FzfRequest::Text);
+    assert_eq!(app.search_source, diffv::ui::app::SearchSource::CurrentFile);
+    assert!(query.header.contains("main.rs"));
+    app.handle_fzf_text_result(text_lines[0].clone());
+    assert_eq!(app.focus, diffv::ui::app::Focus::DiffView);
 
     // 7. Test jumping to file and line
     assert!(app.jump_to_file("main.rs"));
@@ -581,4 +588,138 @@ fn history_previews_selected_diff_and_opens_commit_details() {
         assert!(app.active_stash_info.is_none());
     }
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn full_context_toggle_expands_whole_file_and_keeps_cursor() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::ui::app::{App, AppMode, Focus};
+    let dir = std::env::temp_dir().join(format!("diffv_full_context_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git").args(args).current_dir(&dir).output().unwrap().status.success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Context Tester"]);
+    git(&["config", "user.email", "context@example.com"]);
+    let original: String = (1..=30).map(|i| format!("line {}\n", i)).collect();
+    fs::write(dir.join("file.txt"), &original).unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "base"]);
+    fs::write(dir.join("file.txt"), original.replace("line 15\n", "line 15 changed\n")).unwrap();
+
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
+        diffv::config::Config::load(), false, false, false, None, false, false).unwrap();
+    app.config.diff.context_lines = 3;
+    app.is_unified = true;
+    app.reload_diffs();
+    let visible_lines = |app: &App| app.current_file().unwrap().hunks.iter().map(|h| h.lines.len()).sum::<usize>();
+    assert_eq!(visible_lines(&app), 8);
+
+    app.focus = Focus::DiffView;
+    app.jump_to_line(15);
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(app.full_context);
+    assert_eq!(visible_lines(&app), 31);
+    assert_eq!(app.focus, Focus::DiffView);
+    let line = &app.current_file().unwrap().hunks[0].lines[app.selected_row - 1];
+    assert_eq!(line.old_line_no.or(line.new_line_no), Some(15));
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(!app.full_context);
+    assert_eq!(visible_lines(&app), 8);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn live_reload_keeps_open_commit_and_its_selection() {
+    use diffv::core::models::DrawerTab;
+    use diffv::ui::app::{App, AppMode};
+    let dir = std::env::temp_dir().join(format!("diffv_live_commit_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git").args(args).current_dir(&dir).output().unwrap().status.success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Live Tester"]);
+    git(&["config", "user.email", "live@example.com"]);
+    fs::write(dir.join("a.txt"), "one\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "first"]);
+    fs::write(dir.join("b.txt"), "two\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "second"]);
+    fs::write(dir.join("a.txt"), "one edited\n").unwrap();
+
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
+        diffv::config::Config::load(), true, false, false, None, false, false).unwrap();
+    app.drawer_tab = DrawerTab::Commits;
+    app.selected_repo_commit_idx = 1;
+    app.load_selected_repo_commit();
+    let commit_files: Vec<String> = app.files.iter().map(|f| f.display_path()).collect();
+    assert_eq!(commit_files, vec!["a.txt".to_string()]);
+
+    fs::write(dir.join("c.txt"), "new\n").unwrap();
+    app.reload_diffs();
+    let after: Vec<String> = app.files.iter().map(|f| f.display_path()).collect();
+    assert_eq!(after, commit_files, "live reload must not replace the open commit's files");
+    assert_eq!(app.selected_repo_commit_idx, 1);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stage_hunk_under_cursor_in_both_view_modes() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::ui::app::{App, AppMode, Focus};
+    for unified in [false, true] {
+        let dir = std::env::temp_dir().join(format!("diffv_stage_hunk_{}_{}", unified, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| -> String {
+            let out = Command::new("git").args(args).current_dir(&dir).output().unwrap();
+            assert!(out.status.success(), "{:?}", args);
+            String::from_utf8_lossy(&out.stdout).to_string()
+        };
+        git(&["init"]);
+        git(&["config", "user.name", "Stage Tester"]);
+        git(&["config", "user.email", "stage@example.com"]);
+        let original: String = (1..=40).map(|i| format!("line {}\n", i)).collect();
+        fs::write(dir.join("file.txt"), &original).unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-m", "base"]);
+        let original: String = (1..=120).map(|i| format!("line {}\n", i)).collect();
+        fs::write(dir.join("file.txt"), &original).unwrap();
+        git(&["commit", "-am", "longer"]);
+        let mut modified = original.clone();
+        for i in [5, 25, 45, 65, 85, 105] {
+            modified = modified.replace(&format!("line {}\n", i), &format!("line {} changed\n", i));
+        }
+        fs::write(dir.join("file.txt"), modified).unwrap();
+
+        let provider = GitProvider::discover(Some(&dir)).unwrap();
+        let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
+            diffv::config::Config::load(), false, false, false, None, false, false).unwrap();
+        app.config.diff.context_lines = 3;
+        app.is_unified = unified;
+        app.reload_diffs();
+        assert_eq!(app.current_file().unwrap().hunks.len(), 6);
+        app.focus = Focus::DiffView;
+        app.jump_to_line(105);
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        let cached = git(&["diff", "--cached"]);
+        assert!(cached.contains("+line 105 changed"), "unified={} cached:\n{}", unified, cached);
+        assert_eq!(cached.matches("changed").count(), 1, "unified={} staged extra hunks:\n{}", unified, cached);
+
+        app.selected_row = 0;
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+        let cached = git(&["diff", "--cached"]);
+        assert!(cached.contains("+line 45 changed"), "unified={} hunk navigation:\n{}", unified, cached);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

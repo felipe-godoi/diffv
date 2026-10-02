@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::core::models::{CommitEntry, Language, StashEntry};
+use crate::ui::components::style::pill_title;
 use crate::ui::theme::Theme;
 
 pub fn render_commit_overview(
@@ -15,15 +16,15 @@ pub fn render_commit_overview(
     theme: &Theme,
 ) {
     let title = match language {
-        Language::En => format!(" 󰜉 Commit Details: {} ", &commit.hash[..7.min(commit.hash.len())]),
-        Language::Pt => format!(" 󰜉 Detalhes do Commit: {} ", &commit.hash[..7.min(commit.hash.len())]),
+        Language::En => format!("Commit Details · {}", &commit.hash[..7.min(commit.hash.len())]),
+        Language::Pt => format!("Detalhes do Commit · {}", &commit.hash[..7.min(commit.hash.len())]),
     };
 
     let block = Block::default()
-        .title(title)
+        .title(pill_title("󰜉", &title, theme.header_fg, theme))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD))
+        .border_style(Style::default().fg(theme.header_fg))
         .style(Style::default().bg(theme.bg));
 
     let inner = block.inner(area);
@@ -129,15 +130,15 @@ pub fn render_stash_overview(
     theme: &Theme,
 ) {
     let title = match language {
-        Language::En => format!(" 󰮎 Stash Details: {} ", stash.selector),
-        Language::Pt => format!(" 󰮎 Detalhes do Stash: {} ", stash.selector),
+        Language::En => format!("Stash Details · {}", stash.selector),
+        Language::Pt => format!("Detalhes do Stash · {}", stash.selector),
     };
 
     let block = Block::default()
-        .title(title)
+        .title(pill_title("󰮎", &title, theme.key_fg, theme))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
+        .border_style(Style::default().fg(theme.key_fg))
         .style(Style::default().bg(theme.bg));
 
     let inner = block.inner(area);

@@ -1,10 +1,11 @@
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::core::models::CommitEntry;
+use crate::ui::components::style::{centered_rect, help_line, render_card};
 use crate::ui::theme::Theme;
 
 pub fn render_history_popup(
@@ -17,19 +18,8 @@ pub fn render_history_popup(
     theme: &Theme,
 ) {
     let popup_area = centered_rect(85, 80, area);
-    frame.render_widget(Clear, popup_area);
-
-    let title = format!(" 󰜉 File History: {} ({} commits) ", file_path, commits.len());
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Left)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.header_bg));
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let title = format!("File History · {} · {} commits", file_path, commits.len());
+    let inner = render_card(frame, popup_area, "󰜉", &title, theme.header_fg, theme);
 
     if commits.is_empty() {
         let msg = Paragraph::new("  No git commit history found for this file.")
@@ -109,48 +99,6 @@ pub fn render_history_popup(
 
     frame.render_widget(Paragraph::new(lines), list_area);
 
-    // Footer shortcuts
-    let footer_w = chunks[1].width;
-    let footer_line = if footer_w < 55 {
-        Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled("View ", Style::default().fg(theme.fg)),
-            Span::styled("│ [j/k] ", Style::default().fg(theme.key_fg)),
-            Span::styled("Nav ", Style::default().fg(theme.line_num_fg)),
-            Span::styled("│ [Esc] ", Style::default().fg(theme.key_fg)),
-            Span::styled("Close", Style::default().fg(theme.line_num_fg)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" View Commit Diff    ", Style::default().fg(theme.fg)),
-            Span::styled(" [j/k] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" Navigate    ", Style::default().fg(theme.line_num_fg)),
-            Span::styled(" [Esc / H] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" Close History", Style::default().fg(theme.line_num_fg)),
-        ])
-    };
+    let footer_line = help_line(&[("enter", "view commit diff"), ("esc / H", "close"), ("i", "details"), ("j/k", "navigate")], chunks[1].width, theme);
     frame.render_widget(Paragraph::new(footer_line), chunks[1]);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let px = if r.width < 90 { 96 } else { percent_x };
-    let py = if r.height < 30 { 90 } else { percent_y };
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - py) / 2),
-            Constraint::Percentage(py),
-            Constraint::Percentage((100 - py) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - px) / 2),
-            Constraint::Percentage(px),
-            Constraint::Percentage((100 - px) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }

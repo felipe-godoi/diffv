@@ -34,8 +34,15 @@ jobs:
             version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
             test "v$version" = "$RELEASE_TAG"
           fi
-      - run: cargo test --locked
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Embed commit in version
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
+          echo "DIFFV_VERSION=$version (${GITHUB_SHA::7} $(date -u +%Y-%m-%d))" >> "$GITHUB_ENV"
       - run: cargo build --release --locked
+      - run: cargo test --release --locked
       - name: Package binary
         env:
           TARGET: ${{ matrix.target }}

@@ -26,7 +26,7 @@ use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
 use crate::ui::components::ruler::render_ruler;
 use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
-use crate::ui::components::toast::render_toast;
+use crate::ui::components::toast::{render_toast, TOAST_DURATION};
 use crate::ui::components::unified::render_unified;
 use crate::ui::components::worktree_popup::{render_worktree_popup, WorktreeCreationState};
 use crate::ui::theme::Theme;
@@ -42,6 +42,21 @@ pub enum FzfRequest {
     Files,
     Text,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSource {
+    Loaded,
+    CurrentFile,
+    RepoCommit(usize),
+    Stash(usize),
+}
+
+pub struct FzfQuery {
+    pub items: Vec<String>,
+    pub header: String,
+}
+
+const FULL_CONTEXT_LINES: usize = 1_000_000;
 
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
@@ -83,6 +98,8 @@ pub struct App {
     pub editor_request: Option<(PathBuf, usize)>,
     pub staged_only: bool,
     pub ignore_whitespace: bool,
+    pub full_context: bool,
+    pub search_source: SearchSource,
 
     // Visual mode & column side
     pub visual_mode: bool,
@@ -212,6 +229,8 @@ impl App {
             editor_request: None,
             staged_only,
             ignore_whitespace,
+            full_context: false,
+            search_source: SearchSource::Loaded,
             visual_mode: false,
             visual_anchor: 0,
             column_side: ColumnSide::Right,
@@ -469,33 +488,103 @@ impl App {
         }
     }
 
-    pub fn collect_diff_files(&self) -> Vec<String> {
-        self.files.iter().map(|f| f.display_path()).collect()
-    }
-
-    pub fn collect_diff_text_lines(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        for f in &self.files {
-            let path = f.display_path();
-            for hunk in &f.hunks {
-                for line in &hunk.lines {
-                    let line_no = line.new_line_no.or(line.old_line_no).unwrap_or(0);
-                    let prefix = match line.kind {
-                        DiffKind::Addition => "+",
-                        DiffKind::Deletion => "-",
-                        _ => " ",
-                    };
-
-                    let clean_content = line.content.trim_end_matches(['\r', '\n']);
-                    out.push(format!("{}:{}: {} {}", path, line_no, prefix, clean_content));
-                }
+    fn search_label(&self, source: SearchSource) -> String {
+        let (en, pt) = match source {
+            SearchSource::CurrentFile => {
+                let path = self.current_file().map(|f| f.display_path()).unwrap_or_default();
+                (format!("file {}", path), format!("arquivo {}", path))
             }
+            SearchSource::RepoCommit(idx) => {
+                let hash: String = self.repo_commits[idx].hash.chars().take(7).collect();
+                (format!("commit {}", hash), format!("commit {}", hash))
+            }
+            SearchSource::Stash(idx) => {
+                let sel = self.stashes[idx].selector.clone();
+                (format!("stash {}", sel), format!("stash {}", sel))
+            }
+            SearchSource::Loaded => match (&self.active_commit_info, &self.active_stash_info) {
+                (Some(commit), _) => {
+                    let hash: String = commit.hash.chars().take(7).collect();
+                    (format!("commit {}", hash), format!("commit {}", hash))
+                }
+                (None, Some(stash)) => (format!("stash {}", stash.selector), format!("stash {}", stash.selector)),
+                (None, None) => ("working tree changes".to_string(), "mudanças da working tree".to_string()),
+            },
+        };
+        match self.language {
+            Language::En => en,
+            Language::Pt => pt,
         }
-        out
     }
 
+    fn resolve_search_source(&self, request: FzfRequest) -> SearchSource {
+        let in_diff = self.focus == Focus::DiffView || (self.show_history && self.active_commit_view.is_some());
+        if request == FzfRequest::Text && in_diff && self.current_file().is_some() {
+            return SearchSource::CurrentFile;
+        }
+        if self.active_commit_info.is_some() || self.active_stash_info.is_some() || self.show_history {
+            return SearchSource::Loaded;
+        }
+        match self.drawer_tab {
+            DrawerTab::Commits if self.selected_repo_commit_idx < self.repo_commits.len() => SearchSource::RepoCommit(self.selected_repo_commit_idx),
+            DrawerTab::Stashes if self.selected_stash_idx < self.stashes.len() => SearchSource::Stash(self.selected_stash_idx),
+            _ => SearchSource::Loaded,
+        }
+    }
+
+    /// Builds the fzf candidates for the current context: the open diff file,
+    /// the selected/open commit or stash, or the working tree changes.
+    pub fn prepare_fzf(&mut self, request: FzfRequest) -> FzfQuery {
+        self.sync_git_context();
+        let source = self.resolve_search_source(request);
+        self.search_source = source;
+        let external = match (source, &self.mode) {
+            (SearchSource::RepoCommit(idx), AppMode::Git { git_provider, .. }) => git_provider.load_commit_full_diff(&self.repo_commits[idx].hash),
+            (SearchSource::Stash(idx), AppMode::Git { git_provider, .. }) => git_provider.load_stash_diff(&self.stashes[idx].selector),
+            _ => Ok(Vec::new()),
+        };
+        let external = match external {
+            Ok(files) => files,
+            Err(e) => {
+                self.set_notification(format!("Search error: {}", e));
+                Vec::new()
+            }
+        };
+        let files: Vec<&FileDiff> = match source {
+            SearchSource::CurrentFile => self.current_file().into_iter().collect(),
+            SearchSource::Loaded => self.files.iter().collect(),
+            _ => external.iter().collect(),
+        };
+        let items = match request {
+            FzfRequest::Files => files.iter().map(|f| f.display_path()).collect(),
+            FzfRequest::Text => diff_text_lines(&files),
+        };
+        let label = self.search_label(source);
+        let header = match (request, self.language) {
+            (FzfRequest::Files, Language::En) => format!("Files in {} (Esc to cancel)", label),
+            (FzfRequest::Files, Language::Pt) => format!("Arquivos em {} (Esc para cancelar)", label),
+            (FzfRequest::Text, Language::En) => format!("Search text in {} (Esc to cancel)", label),
+            (FzfRequest::Text, Language::Pt) => format!("Buscar texto em {} (Esc para cancelar)", label),
+        };
+        FzfQuery { items, header }
+    }
+
+    fn enter_search_source(&mut self) {
+        match self.search_source {
+            SearchSource::RepoCommit(idx) => {
+                self.selected_repo_commit_idx = idx;
+                self.load_selected_repo_commit();
+            }
+            SearchSource::Stash(idx) => {
+                self.selected_stash_idx = idx;
+                self.load_selected_stash();
+            }
+            SearchSource::Loaded | SearchSource::CurrentFile => {}
+        }
+    }
 
     pub fn handle_fzf_file_result(&mut self, selected_file: String) {
+        self.enter_search_source();
         if self.jump_to_file(&selected_file) {
             let msg = match self.language {
                 Language::En => format!("Jumped to file: {}", selected_file),
@@ -506,23 +595,161 @@ impl App {
     }
 
     pub fn handle_fzf_text_result(&mut self, selected_line: String) {
-        let parts: Vec<&str> = selected_line.splitn(3, ':').collect();
-        if parts.len() >= 2 {
-            let path = parts[0];
-            let line_no: usize = parts[1].parse().unwrap_or(0);
-            if self.jump_to_file(path) {
-                if line_no > 0 {
-                    self.jump_to_line(line_no);
-                }
-                let msg = match self.language {
-                    Language::En => format!("Jumped to {}:{}", path, line_no),
-                    Language::Pt => format!("Saltou para {}:{}", path, line_no),
-                };
-                self.set_notification(msg);
+        let location = selected_line.split('\t').next().unwrap_or_default();
+        let Some((path, line)) = location.rsplit_once(':') else { return; };
+        let line_no: usize = line.parse().unwrap_or(0);
+        if self.search_source != SearchSource::CurrentFile {
+            self.enter_search_source();
+            if !self.jump_to_file(path) {
+                return;
             }
+        }
+        self.focus = Focus::DiffView;
+        if line_no > 0 {
+            self.jump_to_line(line_no);
+        }
+        let msg = match self.language {
+            Language::En => format!("Jumped to {}:{}", path, line_no),
+            Language::Pt => format!("Saltou para {}:{}", path, line_no),
+        };
+        self.set_notification(msg);
+    }
+
+    fn effective_context_lines(&self) -> usize {
+        if self.full_context { FULL_CONTEXT_LINES } else { self.config.diff.context_lines }
+    }
+
+    fn sync_git_context(&mut self) {
+        let context = self.effective_context_lines();
+        if let AppMode::Git { git_provider, .. } = &mut self.mode {
+            git_provider.context_lines = context;
         }
     }
 
+    fn cursor_line_no(&self) -> Option<usize> {
+        let file = self.current_file()?;
+        if self.is_unified {
+            let mut row = 0;
+            for hunk in &file.hunks {
+                if row == self.selected_row {
+                    return hunk.lines.first().and_then(|l| l.new_line_no.or(l.old_line_no));
+                }
+                row += 1;
+                for line in &hunk.lines {
+                    if row == self.selected_row {
+                        return line.new_line_no.or(line.old_line_no);
+                    }
+                    row += 1;
+                }
+            }
+            None
+        } else {
+            let r = file.aligned_rows.get(self.selected_row)?;
+            r.right.as_ref().and_then(|l| l.new_line_no).or_else(|| r.left.as_ref().and_then(|l| l.old_line_no))
+        }
+    }
+
+    /// Hunk under a view row, plus the hunk-line index when the row is a line
+    /// (unified rows include one header row per hunk; side-by-side rows are aligned pairs).
+    fn row_hunk(&self, row: usize) -> Option<(usize, Vec<usize>)> {
+        let file = self.current_file()?;
+        if self.is_unified {
+            let mut start = 0;
+            for (h_idx, hunk) in file.hunks.iter().enumerate() {
+                let end = start + hunk.lines.len();
+                if row == start {
+                    return Some((h_idx, Vec::new()));
+                }
+                if row <= end {
+                    return Some((h_idx, vec![row - start - 1]));
+                }
+                start = end + 1;
+            }
+            None
+        } else {
+            let r = file.aligned_rows.get(row)?;
+            Some((r.hunk_index?, r.left_line_idx.into_iter().chain(r.right_line_idx).collect()))
+        }
+    }
+
+    fn cursor_hunk(&self) -> Option<usize> {
+        self.row_hunk(self.selected_row).map(|(h, _)| h)
+    }
+
+    fn hunk_start_row(&self, hunk_idx: usize) -> Option<usize> {
+        let file = self.current_file()?;
+        if self.is_unified {
+            Some(file.hunks.iter().take(hunk_idx).map(|h| h.lines.len() + 1).sum())
+        } else {
+            file.aligned_rows.iter().position(|r| r.hunk_index == Some(hunk_idx))
+        }
+    }
+
+    fn can_act_on_hunk(&mut self) -> bool {
+        if !self.can_modify_index() {
+            return false;
+        }
+        if self.full_context {
+            self.set_notification(match self.language {
+                Language::En => "Full file is one hunk · press x to collapse, or use v to select lines",
+                Language::Pt => "Arquivo inteiro é um hunk só · aperte x para recolher, ou use v para selecionar linhas",
+            });
+            return false;
+        }
+        true
+    }
+
+    fn can_modify_index(&mut self) -> bool {
+        if self.active_commit_info.is_some() || self.active_stash_info.is_some() || self.show_history {
+            self.set_notification(match self.language {
+                Language::En => "Staging only works on working tree changes",
+                Language::Pt => "Stage só funciona nas mudanças da working tree",
+            });
+            return false;
+        }
+        true
+    }
+
+    /// Toggles between hunk-only diffs and the whole file as context,
+    /// keeping the current file and cursor line.
+    pub fn toggle_full_context(&mut self) {
+        let path = self.current_file().map(|f| f.display_path());
+        let line = self.cursor_line_no();
+        let focus = self.focus;
+        let scroll_x = self.scroll_x;
+        self.full_context = !self.full_context;
+
+        if self.active_commit_view.is_some() {
+            self.active_commit_view = None;
+            self.load_selected_commit_diff();
+        } else if self.active_commit_info.is_some() {
+            self.load_selected_repo_commit();
+        } else if self.active_stash_info.is_some() {
+            self.load_selected_stash();
+        }
+        if let Err(e) = self.reload_diffs_internal(false) {
+            self.set_notification(format!("Reload error: {}", e));
+            return;
+        }
+
+        if self.active_commit_view.is_none() {
+            if let Some(path) = &path {
+                self.jump_to_file(path);
+            }
+        }
+        if let Some(line) = line {
+            self.jump_to_line(line);
+        }
+        self.focus = focus;
+        self.scroll_x = scroll_x;
+        let msg = match (self.language, self.full_context) {
+            (Language::En, true) => "Showing full file · x to collapse",
+            (Language::En, false) => "Showing changes only · x to expand",
+            (Language::Pt, true) => "Mostrando arquivo inteiro · x para recolher",
+            (Language::Pt, false) => "Mostrando apenas mudanças · x para expandir",
+        };
+        self.set_notification(msg);
+    }
 
     pub fn get_underlying_file(&self) -> Option<&FileDiff> {
         if self.file_view_mode == FileViewMode::Tree {
@@ -541,6 +768,12 @@ impl App {
         self.files.get(real_idx)
     }
 
+    pub fn expire_notification(&mut self) {
+        if self.notification.as_ref().is_some_and(|(_, time)| time.elapsed() > TOAST_DURATION) {
+            self.notification = None;
+        }
+    }
+
     pub fn set_notification(&mut self, msg: impl Into<String>) {
         self.notification = Some((msg.into(), Instant::now()));
     }
@@ -556,26 +789,23 @@ impl App {
         let prev_scroll = self.scroll_y;
         let prev_row = self.selected_row;
 
+        self.sync_git_context();
         let diff_engine = DiffEngine::new(
             &self.config.diff.algorithm,
-            self.config.diff.context_lines,
+            self.effective_context_lines(),
             self.ignore_whitespace,
         );
 
-        match &self.mode {
-            AppMode::Git { target_ref, git_provider } => {
-                let (files, stats) = git_provider.load_diffs(
-                    target_ref.as_deref(),
-                    self.staged_only,
-                    self.config.watcher.watch_untracked,
-                    self.ignore_whitespace,
-                )?;
-                self.files = files;
-                self.repo_stats = stats;
-            }
+        let (files, stats) = match &self.mode {
+            AppMode::Git { target_ref, git_provider } => git_provider.load_diffs(
+                target_ref.as_deref(),
+                self.staged_only,
+                self.config.watcher.watch_untracked,
+                self.ignore_whitespace,
+            )?,
             AppMode::FilePair(a, b) => {
                 let diff = diff_engine.compare_files(a, b)?;
-                self.repo_stats = RepoStats {
+                let stats = RepoStats {
                     repo_name: "files".to_string(),
                     branch: "local".to_string(),
                     root_dir: PathBuf::from("."),
@@ -583,32 +813,31 @@ impl App {
                     total_deletions: diff.stats.deletions,
                     file_count: 1,
                 };
-                self.files = vec![diff];
+                (vec![diff], stats)
             }
             AppMode::DirPair(a, b) => {
                 let files = diff_engine.compare_directories(a, b)?;
-                let mut total_add = 0;
-                let mut total_del = 0;
-                for f in &files {
-                    total_add += f.stats.additions;
-                    total_del += f.stats.deletions;
-                }
-                self.repo_stats = RepoStats {
+                let stats = RepoStats {
                     repo_name: "directories".to_string(),
                     branch: "local".to_string(),
                     root_dir: PathBuf::from("."),
-                    total_additions: total_add,
-                    total_deletions: total_del,
+                    total_additions: files.iter().map(|f| f.stats.additions).sum(),
+                    total_deletions: files.iter().map(|f| f.stats.deletions).sum(),
                     file_count: files.len(),
                 };
-                self.files = files;
+                (files, stats)
             }
-            AppMode::Stdin => {
-                let (files, stats) = diff_engine.compare_stdin()?;
-                self.files = files;
-                self.repo_stats = stats;
-            }
+            AppMode::Stdin => diff_engine.compare_stdin()?,
+        };
+
+        // While a commit or stash is open, the working tree only refreshes the
+        // snapshot restored on exit; the inspected files stay untouched.
+        if self.active_commit_info.is_some() || self.active_stash_info.is_some() {
+            self.live_snapshot = Some((files, stats));
+            return Ok(());
         }
+        self.files = files;
+        self.repo_stats = stats;
 
         self.update_filter();
 
@@ -713,12 +942,7 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
-        // Clear old notification if older than 1800ms
-        if let Some((_, time)) = self.notification {
-            if time.elapsed() > Duration::from_millis(1800) {
-                self.notification = None;
-            }
-        }
+        self.expire_notification();
 
         // 0. Details Modal Active
         if self.show_details_popup {
@@ -761,7 +985,7 @@ impl App {
         {
             let request = match key.code {
                 KeyCode::Char('p' | 'P') => Some(FzfRequest::Files),
-                KeyCode::Char('s' | 'S') => Some(FzfRequest::Text),
+                KeyCode::Char('f' | 'F') => Some(FzfRequest::Text),
                 _ => None,
             };
             if let Some(request) = request {
@@ -1264,9 +1488,6 @@ impl App {
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.fzf_request = Some(FzfRequest::Files);
             }
-            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.fzf_request = Some(FzfRequest::Text);
-            }
             KeyCode::Char('\\') => {
                 self.fzf_request = Some(FzfRequest::Text);
             }
@@ -1301,6 +1522,7 @@ impl App {
                 let mode = if self.is_unified { "Unified" } else { "Side-by-Side" };
                 self.set_notification(format!("Switched to {} view", mode));
             }
+            KeyCode::Char('x') => self.toggle_full_context(),
             KeyCode::Char('w') => {
                 self.watch_mode = !self.watch_mode;
                 let status = if self.watch_mode { "ON" } else { "OFF" };
@@ -1410,14 +1632,6 @@ impl App {
                     self.file_tree_up(1);
                 } else {
                     self.scroll_up(1);
-                }
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page = self.viewport_height.saturating_sub(4).max(1);
-                if self.focus == Focus::FileTree {
-                    self.file_tree_down(page);
-                } else {
-                    self.scroll_down(page);
                 }
             }
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1734,6 +1948,7 @@ impl App {
     }
 
     pub fn load_selected_repo_commit(&mut self) {
+        self.sync_git_context();
         if let Some(commit) = self.repo_commits.get(self.selected_repo_commit_idx).cloned() {
             if let AppMode::Git { git_provider, .. } = &self.mode {
                 match git_provider.load_commit_full_diff(&commit.hash) {
@@ -1779,6 +1994,7 @@ impl App {
     }
 
     pub fn load_selected_stash(&mut self) {
+        self.sync_git_context();
         if let Some(stash) = self.stashes.get(self.selected_stash_idx).cloned() {
             if let AppMode::Git { git_provider, .. } = &self.mode {
                 match git_provider.load_stash_diff(&stash.selector) {
@@ -2113,52 +2329,34 @@ impl App {
     }
 
     fn jump_next_hunk(&mut self) {
-        if let Some(file) = self.current_file() {
-            let rows = &file.aligned_rows;
-            if rows.is_empty() {
-                return;
+        let Some(total) = self.current_file().map(|f| f.hunks.len()) else { return; };
+        let next = match self.cursor_hunk() {
+            Some(h) => h + 1,
+            None => (0..total).find(|&h| self.hunk_start_row(h).is_some_and(|r| r > self.selected_row)).unwrap_or(total),
+        };
+        match self.hunk_start_row(next).filter(|_| next < total) {
+            Some(row) => {
+                self.selected_row = row;
+                self.scroll_y = row.saturating_sub(2);
+                self.set_notification(format!("Jumped to Hunk #{}", next + 1));
             }
-            let current_hunk_idx = rows.get(self.selected_row).and_then(|r| r.hunk_index);
-
-            for (idx, row) in rows.iter().enumerate().skip(self.selected_row + 1) {
-                if let Some(h_idx) = row.hunk_index {
-                    if current_hunk_idx != Some(h_idx) {
-                        self.selected_row = idx;
-                        self.scroll_y = idx.saturating_sub(2);
-                        self.set_notification(format!("Jumped to Hunk #{}", h_idx + 1));
-                        return;
-                    }
-                }
-            }
-            self.set_notification("Reached last hunk");
+            None => self.set_notification("Reached last hunk"),
         }
     }
 
     fn jump_prev_hunk(&mut self) {
-        if let Some(file) = self.current_file() {
-            let rows = &file.aligned_rows;
-            if rows.is_empty() {
-                return;
+        let Some(total) = self.current_file().map(|f| f.hunks.len()) else { return; };
+        let prev = match self.cursor_hunk() {
+            Some(h) => h.checked_sub(1),
+            None => (0..total).rev().find(|&h| self.hunk_start_row(h).is_some_and(|r| r < self.selected_row)),
+        };
+        match prev.and_then(|h| self.hunk_start_row(h).map(|row| (h, row))) {
+            Some((h, row)) => {
+                self.selected_row = row;
+                self.scroll_y = row.saturating_sub(2);
+                self.set_notification(format!("Jumped to Hunk #{}", h + 1));
             }
-            let current_hunk_idx = rows.get(self.selected_row).and_then(|r| r.hunk_index);
-
-            for idx in (0..self.selected_row).rev() {
-                if let Some(h_idx) = rows[idx].hunk_index {
-                    if current_hunk_idx != Some(h_idx) {
-                        // Find the start of this hunk
-                        let start_of_hunk = rows
-                            .iter()
-                            .take(idx + 1)
-                            .rposition(|r| r.hunk_index == Some(h_idx))
-                            .unwrap_or(idx);
-                        self.selected_row = start_of_hunk;
-                        self.scroll_y = start_of_hunk.saturating_sub(2);
-                        self.set_notification(format!("Jumped to Hunk #{}", h_idx + 1));
-                        return;
-                    }
-                }
-            }
-            self.set_notification("Reached first hunk");
+            None => self.set_notification("Reached first hunk"),
         }
     }
 
@@ -2191,11 +2389,7 @@ impl App {
 
     fn copy_current_hunk(&mut self) {
         if let Some(file) = self.current_file() {
-            let hunk_opt = file
-                .aligned_rows
-                .get(self.selected_row)
-                .and_then(|r| r.hunk_index)
-                .and_then(|idx| file.hunks.get(idx));
+            let hunk_opt = self.cursor_hunk().and_then(|idx| file.hunks.get(idx));
 
             if let Some(hunk) = hunk_opt {
                 match copy_hunk_as_markdown(&file.new_path, hunk) {
@@ -2212,6 +2406,9 @@ impl App {
     }
 
     fn stage_current_hunk(&mut self) {
+        if !self.can_act_on_hunk() {
+            return;
+        }
         let (repo_root, file_path, hunk) = match self.get_current_hunk_and_context() {
             Some(v) => v,
             None => return,
@@ -2227,55 +2424,30 @@ impl App {
     }
 
     fn stage_visual_selection(&mut self) {
-        let file = match self.current_file() {
-            Some(f) => f,
-            None => return,
-        };
-
+        if !self.can_modify_index() {
+            return;
+        }
         let repo_root = match &self.mode {
             AppMode::Git { git_provider, .. } => git_provider.repo_root.clone(),
             _ => return,
         };
-
-        let hunk_idx = match file.aligned_rows.get(self.selected_row).and_then(|r| r.hunk_index) {
-            Some(idx) => idx,
-            None => return,
-        };
-
-        let hunk = match file.hunks.get(hunk_idx) {
-            Some(h) => h,
-            None => return,
-        };
-
+        let Some(hunk_idx) = self.cursor_hunk() else { return; };
         let min_r = self.visual_anchor.min(self.selected_row);
         let max_r = self.visual_anchor.max(self.selected_row);
-
-        // Find which lines in hunk.lines correspond to the visual range
-        let mut selected_indices = Vec::new();
-        for r_idx in min_r..=max_r {
-            if let Some(row) = file.aligned_rows.get(r_idx) {
-                if row.hunk_index != Some(hunk_idx) {
-                    continue;
-                }
-
-                if let Some(l_idx) = row.left_line_idx {
-                    if !selected_indices.contains(&l_idx) {
-                        selected_indices.push(l_idx);
-                    }
-                }
-                if let Some(r_idx) = row.right_line_idx {
-                    if !selected_indices.contains(&r_idx) {
-                        selected_indices.push(r_idx);
-                    }
-                }
-            }
-        }
+        let mut selected_indices: Vec<usize> = (min_r..=max_r)
+            .filter_map(|row| self.row_hunk(row))
+            .filter(|(h, _)| *h == hunk_idx)
+            .flat_map(|(_, lines)| lines)
+            .collect();
         selected_indices.sort_unstable();
+        selected_indices.dedup();
 
         if selected_indices.is_empty() {
             self.set_notification("No changed lines in visual selection to stage");
             return;
         }
+        let Some(file) = self.current_file() else { return; };
+        let Some(hunk) = file.hunks.get(hunk_idx) else { return; };
 
         match stage_partial_hunk(&repo_root, &file.new_path, hunk, &selected_indices) {
             Ok(_) => {
@@ -2290,6 +2462,9 @@ impl App {
     }
 
     fn unstage_current_hunk(&mut self) {
+        if !self.can_act_on_hunk() {
+            return;
+        }
         let (repo_root, file_path, hunk) = match self.get_current_hunk_and_context() {
             Some(v) => v,
             None => return,
@@ -2305,8 +2480,11 @@ impl App {
     }
 
     fn request_discard_hunk(&mut self) {
+        if !self.can_act_on_hunk() {
+            return;
+        }
         if let Some(file) = self.current_file() {
-            if let Some(hunk_idx) = file.aligned_rows.get(self.selected_row).and_then(|r| r.hunk_index) {
+            if let Some(hunk_idx) = self.cursor_hunk() {
                 let msg = format!("Discard Hunk #{} in {}? Changes cannot be undone.", hunk_idx + 1, file.display_path());
                 self.confirm_action = Some((ConfirmAction::DiscardHunk(hunk_idx), msg));
             } else {
@@ -2316,6 +2494,9 @@ impl App {
     }
 
     fn stage_current_file(&mut self) {
+        if !self.can_modify_index() {
+            return;
+        }
         if let Some(file) = self.current_file() {
             let repo_root = match &self.mode {
                 AppMode::Git { git_provider, .. } => git_provider.repo_root.clone(),
@@ -2333,6 +2514,9 @@ impl App {
     }
 
     fn unstage_current_file(&mut self) {
+        if !self.can_modify_index() {
+            return;
+        }
         if let Some(file) = self.current_file() {
             let repo_root = match &self.mode {
                 AppMode::Git { git_provider, .. } => git_provider.repo_root.clone(),
@@ -2350,6 +2534,9 @@ impl App {
     }
 
     fn request_discard_file(&mut self) {
+        if !self.can_modify_index() {
+            return;
+        }
         if let Some(file) = self.current_file() {
             let msg = format!("DISCARD ALL changes in {}? All modifications will be lost.", file.display_path());
             self.confirm_action = Some((ConfirmAction::DiscardFile, msg));
@@ -2398,8 +2585,8 @@ impl App {
             AppMode::Git { git_provider, .. } => git_provider.repo_root.clone(),
             _ => return None,
         };
+        let hunk_idx = self.cursor_hunk()?;
         let file = self.current_file()?;
-        let hunk_idx = file.aligned_rows.get(self.selected_row).and_then(|r| r.hunk_index)?;
         let hunk = file.hunks.get(hunk_idx)?.clone();
         Some((repo_root, file.new_path.clone(), hunk))
     }
@@ -2438,6 +2625,7 @@ impl App {
         if self.active_commit_view.as_ref().map(|(active, _)| active == &hash).unwrap_or(false) { return; }
         let path = self.history_file_path.clone().or_else(|| self.get_underlying_file().map(|f| f.new_path.clone()));
         self.active_commit_view = None;
+        self.sync_git_context();
         self.scroll_x = [0, 0];
         self.wrap_skip = 0;
         self.scroll_y = 0;
@@ -2617,6 +2805,7 @@ impl App {
                     visual_range,
                     self.focus == Focus::DiffView,
                     syntax_enabled,
+                    self.full_context,
                     &self.theme,
                 );
             } else {
@@ -2634,6 +2823,7 @@ impl App {
                     self.column_side,
                     self.focus == Focus::DiffView,
                     syntax_enabled,
+                    self.full_context,
                     &self.theme,
                 );
             }
@@ -2714,3 +2904,20 @@ impl App {
     }
 }
 
+
+fn diff_text_lines(files: &[&FileDiff]) -> Vec<String> {
+    let mut out = Vec::new();
+    for f in files {
+        let path = f.display_path();
+        for line in f.hunks.iter().flat_map(|h| &h.lines) {
+            let line_no = line.new_line_no.or(line.old_line_no).unwrap_or(0);
+            let prefix = match line.kind {
+                DiffKind::Addition => "+",
+                DiffKind::Deletion => "-",
+                _ => " ",
+            };
+            out.push(format!("{}:{}\t{} {}", path, line_no, prefix, line.content.trim_end_matches(['\r', '\n'])));
+        }
+    }
+    out
+}

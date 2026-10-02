@@ -1,10 +1,11 @@
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
 use ratatui::Frame;
 
 use crate::core::models::{Language, WorktreeEntry};
+use crate::ui::components::style::{centered_rect, help_line, render_card};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone)]
@@ -61,7 +62,6 @@ pub fn render_worktree_popup(
     theme: &Theme,
 ) {
     let popup_area = centered_rect(82, 68, area);
-    frame.render_widget(Clear, popup_area);
 
     if let Some(create_state) = creation {
         render_creation_form(frame, popup_area, create_state, language, theme);
@@ -69,20 +69,11 @@ pub fn render_worktree_popup(
     }
 
     let title = match language {
-        Language::En => format!(" 󰹹 Git Worktrees ({} worktrees) ", worktrees.len()),
-        Language::Pt => format!(" 󰹹 Worktrees Git ({} worktrees) ", worktrees.len()),
+        Language::En => format!("Git Worktrees · {}", worktrees.len()),
+        Language::Pt => format!("Worktrees Git · {}", worktrees.len()),
     };
 
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Left)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.header_bg));
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
+    let inner = render_card(frame, popup_area, "󰹹", &title, theme.header_fg, theme);
 
     if worktrees.is_empty() {
         let msg = match language {
@@ -187,29 +178,11 @@ pub fn render_worktree_popup(
         frame.render_widget(Paragraph::new(full_path_line), detail_inner);
     }
 
-    // Footer shortcuts
-    let footer_line = match language {
-        Language::En => Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled("Switch  ", Style::default().fg(theme.fg)),
-            Span::styled(" [a / n] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
-            Span::styled("New Worktree  ", Style::default().fg(theme.fg)),
-            Span::styled(" [j/k] ", Style::default().fg(theme.key_fg)),
-            Span::styled("Nav  ", Style::default().fg(theme.line_num_fg)),
-            Span::styled(" [Esc / W] ", Style::default().fg(theme.key_fg)),
-            Span::styled("Close", Style::default().fg(theme.line_num_fg)),
-        ]),
-        Language::Pt => Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled("Alternar  ", Style::default().fg(theme.fg)),
-            Span::styled(" [a / n] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
-            Span::styled("Nova Worktree  ", Style::default().fg(theme.fg)),
-            Span::styled(" [j/k] ", Style::default().fg(theme.key_fg)),
-            Span::styled("Navegar  ", Style::default().fg(theme.line_num_fg)),
-            Span::styled(" [Esc / W] ", Style::default().fg(theme.key_fg)),
-            Span::styled("Fechar", Style::default().fg(theme.line_num_fg)),
-        ]),
+    let footer_items: &[(&str, &str)] = match language {
+        Language::En => &[("enter", "switch"), ("a / n", "new worktree"), ("esc / W", "close"), ("j/k", "navigate")],
+        Language::Pt => &[("enter", "alternar"), ("a / n", "nova worktree"), ("esc / W", "fechar"), ("j/k", "navegar")],
     };
+    let footer_line = help_line(footer_items, chunks[2].width, theme);
     frame.render_widget(Paragraph::new(footer_line), chunks[2]);
 }
 
@@ -221,20 +194,11 @@ fn render_creation_form(
     theme: &Theme,
 ) {
     let title = match language {
-        Language::En => " 󰹹 Create New Git Worktree ",
-        Language::Pt => " 󰹹 Criar Nova Worktree Git ",
+        Language::En => "Create New Git Worktree",
+        Language::Pt => "Criar Nova Worktree Git",
     };
 
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.status_a).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.header_bg));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_card(frame, area, "󰹹", title, theme.status_a, theme);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -329,54 +293,12 @@ fn render_creation_form(
         frame.render_widget(Paragraph::new(err_line), chunks[4]);
     }
 
-    // Footer actions
-    let footer_line = match language {
-        Language::En => Line::from(vec![
-            Span::styled(" [Tab] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled("Complete / field  ", Style::default().fg(theme.fg)),
-            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
-            Span::styled("Create & Switch  ", Style::default().fg(theme.fg)),
-            Span::styled(" [Esc] ", Style::default().fg(theme.key_fg)),
-            Span::styled("Cancel", Style::default().fg(theme.line_num_fg)),
-        ]),
-        Language::Pt => Line::from(vec![
-            Span::styled(" [Tab] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled("Completar / campo  ", Style::default().fg(theme.fg)),
-            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
-            Span::styled("Criar e Alternar  ", Style::default().fg(theme.fg)),
-            Span::styled(" [Esc] ", Style::default().fg(theme.key_fg)),
-            Span::styled("Cancelar", Style::default().fg(theme.line_num_fg)),
-        ]),
+    let footer_items: &[(&str, &str)] = match language {
+        Language::En => &[("enter", "create & switch"), ("esc", "cancel"), ("tab", "complete / field"), ("↑↓", "select")],
+        Language::Pt => &[("enter", "criar e alternar"), ("esc", "cancelar"), ("tab", "completar / campo"), ("↑↓", "seleção")],
     };
-    let footer_line = if chunks[5].width < 80 {
-        Line::from(match language {
-            Language::En => "↑↓ Select · Tab Complete · Enter Create · Esc Cancel",
-            Language::Pt => "↑↓ Seleção · Tab Completar · Enter Criar · Esc Cancelar",
-        })
-    } else { footer_line };
+    let footer_line = help_line(footer_items, chunks[5].width, theme);
     frame.render_widget(Paragraph::new(footer_line), chunks[5]);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let px = if r.width < 90 { 96 } else { percent_x };
-    let py = if r.height < 30 { 92 } else { percent_y };
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - py) / 2),
-            Constraint::Percentage(py),
-            Constraint::Percentage((100 - py) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - px) / 2),
-            Constraint::Percentage(px),
-            Constraint::Percentage((100 - px) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
 
 #[cfg(test)]
@@ -409,6 +331,6 @@ mod tests {
         let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
         assert!(content.contains("main"));
         assert!(content.contains(".worktree/"));
-        assert!(content.contains("Cancelar"));
+        assert!(content.contains("cancelar"));
     }
 }

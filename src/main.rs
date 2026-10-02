@@ -31,8 +31,36 @@ enum AppEvent {
     Tick,
 }
 
-fn main() -> Result<()> {
+fn main() {
     let args = Cli::parse();
+    let wait_on_error = args.wait_on_error;
+    let result = match &args.tmux_toggle {
+        Some(toggle) => diffv::integration::tmux::toggle_popup(&toggle[0], &toggle[1], Path::new(&toggle[2])),
+        None => run(args),
+    };
+    if let Err(err) = result {
+        eprintln!("Error: {:#}", err);
+        if wait_on_error {
+            wait_for_key();
+        }
+        std::process::exit(1);
+    }
+}
+
+fn wait_for_key() {
+    eprintln!("\nPress any key to close…");
+    if enable_raw_mode().is_err() {
+        return;
+    }
+    while let Ok(evt) = event::read() {
+        if matches!(evt, Event::Key(key) if key.kind == KeyEventKind::Press) {
+            break;
+        }
+    }
+    let _ = disable_raw_mode();
+}
+
+fn run(args: Cli) -> Result<()> {
     if !args.no_update && std::env::var_os("DIFFV_NO_UPDATE").is_none()
         && std::env::var_os("DIFFV_UPDATE_RESTART").is_none() {
         match diffv::update::check_and_install() {
@@ -80,12 +108,7 @@ fn main() -> Result<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen, event::DisableMouseCapture)?;
     terminal.show_cursor()?;
 
-    if let Err(err) = app_result {
-        eprintln!("Error: {:#}", err);
-        std::process::exit(1);
-    }
-
-    Ok(())
+    app_result
 }
 
 fn determine_app_mode(args: &Cli, cwd: &Path) -> Result<AppMode> {
@@ -274,6 +297,12 @@ fn run_app(
                 continue;
             }
 
+            let query = app.prepare_fzf(fzf_req);
+            if query.items.is_empty() {
+                needs_redraw = true;
+                continue;
+            }
+
             is_editor_active.store(true, Ordering::SeqCst);
             while rx.try_recv().is_ok() {}
 
@@ -282,22 +311,8 @@ fn run_app(
             terminal.show_cursor()?;
 
             let res = match fzf_req {
-                FzfRequest::Files => {
-                    let files = app.collect_diff_files();
-                    if files.is_empty() {
-                        Ok(None)
-                    } else {
-                        search_files_fzf(&files)
-                    }
-                }
-                FzfRequest::Text => {
-                    let lines = app.collect_diff_text_lines();
-                    if lines.is_empty() {
-                        Ok(None)
-                    } else {
-                        search_diff_text_fzf(&lines)
-                    }
-                }
+                FzfRequest::Files => search_files_fzf(&query.items, &query.header),
+                FzfRequest::Text => search_diff_text_fzf(&query.items, &query.header),
             };
 
             enable_raw_mode()?;
@@ -347,8 +362,9 @@ fn run_app(
                 }
             }
             AppEvent::Tick => {
-                // Only trigger redraw if there's an active notification or pending multi-key sequence
-                if app.notification.is_some() || app.pending_key.is_some() {
+                let had_notification = app.notification.is_some();
+                app.expire_notification();
+                if had_notification || app.pending_key.is_some() {
                     needs_redraw = true;
                 }
             }

@@ -10,3 +10,4 @@ pub mod toast;
 pub mod unified;
 pub mod worktree_popup;
 pub mod horizontal;
+pub mod style;

@@ -106,6 +106,9 @@ diffv --theme tokyonight
 | `Mouse Drag` | General | **Drag vertical divider** to resize File Tree width |
 | `t` | File Tree | Toggle **📁 Pastas (Tree)** ↔ **📄 Lista (Flat)** |
 | `v` | Diff | Toggle **Visual Mode** for line-level partial staging |
+| `x` | General | **Expand full file** ↔ changes only (keeps file and cursor line) |
+| `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash) |
+| `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched |
 | `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in Neovim |
 | `e` | Diff | Open file in Neovim / `$EDITOR` at cursor line (`+line`) |
 | `s` | Diff | **Stage** current hunk (or selected lines in Visual Mode) |
@@ -126,12 +129,15 @@ diffv --theme tokyonight
 
 ## 🪟 Tmux Integration
 
-To open `diffv` in a centered, floating popup at the touch of a shortcut in Tmux, add the following to your `~/.tmux.conf`:
+To show/hide `diffv` in a centered, floating popup with a single shortcut, add the following to your `~/.tmux.conf`:
 
 ```tmux
-# Press Prefix + d to open diffv floating popup in watch mode
-bind-key d display-popup -d "#{pane_current_path}" -w 92% -h 90% -E "diffv --watch"
+# Prefix + d shows/hides diffv (live watch mode). While hidden, diffv keeps running
+# in a background session per project, so file, cursor and open commit are preserved.
+bind-key d run-shell -b "diffv --tmux-toggle '#{client_name}' '#{session_name}' '#{pane_current_path}'"
 ```
+
+Press `q` inside diffv to close it for real. If diffv cannot start (e.g. the directory is not a git repository), the popup shows the error and waits for a key instead of closing immediately. Use `--wait-on-error` for the same behavior in your own popups or scripts.
 
 Reload tmux configuration:
 ```bash

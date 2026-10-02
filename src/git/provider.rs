@@ -11,6 +11,7 @@ use crate::git::patch::parse_unified_diff;
 
 pub struct GitProvider {
     pub repo_root: PathBuf,
+    pub context_lines: usize,
 }
 
 impl GitProvider {
@@ -29,7 +30,12 @@ impl GitProvider {
         let root_str = String::from_utf8(output.stdout)?.trim().to_string();
         Ok(Self {
             repo_root: PathBuf::from(root_str),
+            context_lines: 3,
         })
+    }
+
+    fn unified_arg(&self) -> String {
+        format!("-U{}", self.context_lines)
     }
 
     pub fn get_branch(&self) -> String {
@@ -88,7 +94,7 @@ impl GitProvider {
         let mut cmd = Command::new("git");
         cmd.current_dir(&self.repo_root);
         cmd.arg("diff");
-        cmd.arg("-u");
+        cmd.arg(self.unified_arg());
 
         if ignore_whitespace {
             cmd.arg("--ignore-all-space");
@@ -319,7 +325,7 @@ impl GitProvider {
 
     pub fn load_commit_diff_for_file(&self, commit_hash: &str, file_path: &Path) -> Result<Option<FileDiff>> {
         let output = Command::new("git")
-            .args(["show", "--format=", "-p", commit_hash, "--"])
+            .args(["show", "--format=", "-p", &self.unified_arg(), commit_hash, "--"])
             .arg(file_path)
             .current_dir(&self.repo_root)
             .output()?;
@@ -372,7 +378,7 @@ impl GitProvider {
 
     pub fn load_commit_full_diff(&self, commit_hash: &str) -> Result<Vec<FileDiff>> {
         let output = Command::new("git")
-            .args(["show", "--format=", "-p", commit_hash])
+            .args(["show", "--format=", "-p", &self.unified_arg(), commit_hash])
             .current_dir(&self.repo_root)
             .output()?;
 
@@ -418,7 +424,7 @@ impl GitProvider {
 
     pub fn load_stash_diff(&self, stash_selector: &str) -> Result<Vec<FileDiff>> {
         let output = Command::new("git")
-            .args(["stash", "show", "-p", stash_selector])
+            .args(["stash", "show", "-p", &self.unified_arg(), stash_selector])
             .current_dir(&self.repo_root)
             .output()?;
 

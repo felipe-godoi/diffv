@@ -1,6 +1,6 @@
 [package]
 name = "diffv"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["Felipe Godoi"]
 description = "High-performance VS Code style CLI diff viewer and companion for AI coding agents"
@@ -26,3 +26,12 @@ sha2 = "0.10"
 semver = "1"
 tempfile = "3"
 fs2 = "0.4"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+strip = true

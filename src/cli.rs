@@ -1,10 +1,16 @@
 use clap::Parser;
 use std::path::PathBuf;
 
+/// Release builds set `DIFFV_VERSION` (e.g. "0.2.2 (16742ac 2026-10-02)") so binaries are identifiable.
+const VERSION: &str = match option_env!("DIFFV_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "diffv",
-    version,
+    version = VERSION,
     about = "High-performance VS Code style CLI diff viewer and companion for AI coding agents",
     long_about = "diffv is a high-performance terminal diff viewer featuring dual-column side-by-side view, \
     intra-line word/character highlighting, live file watching for AI coding agents, \
@@ -47,4 +53,13 @@ pub struct Cli {
     /// Run as if started in <PATH> instead of the current working directory
     #[arg(short = 'C', long = "cwd")]
     pub cwd: Option<PathBuf>,
+
+    /// On error, print it and wait for a key before exiting (keeps tmux popups readable)
+    #[arg(long)]
+    pub wait_on_error: bool,
+
+    /// Show/hide diffv in a tmux popup, keeping its state between toggles.
+    /// Meant for a tmux key binding (see README)
+    #[arg(long, num_args = 3, value_names = ["CLIENT", "SESSION", "PATH"])]
+    pub tmux_toggle: Option<Vec<String>>,
 }

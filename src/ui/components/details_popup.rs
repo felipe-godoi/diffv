@@ -1,10 +1,11 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::core::models::{CommitEntry, FileDiff, FileStatus, Language, StashEntry};
+use crate::ui::components::style::{centered_rect, help_line, render_card};
 use crate::ui::theme::Theme;
 
 fn file_status_char(file: &FileDiff) -> &'static str {
@@ -33,7 +34,6 @@ pub fn render_details_popup(
     theme: &Theme,
 ) {
     let popup_area = centered_rect(82, 80, area);
-    frame.render_widget(Clear, popup_area);
 
     match content {
         DetailsContent::Commit(commit, files) => {
@@ -58,20 +58,11 @@ fn render_commit_details(
     theme: &Theme,
 ) {
     let title = match language {
-        Language::En => format!(" 󰜉 Commit Details: {} ", &commit.hash[..7.min(commit.hash.len())]),
-        Language::Pt => format!(" 󰜉 Detalhes do Commit: {} ", &commit.hash[..7.min(commit.hash.len())]),
+        Language::En => format!("Commit Details · {}", &commit.hash[..7.min(commit.hash.len())]),
+        Language::Pt => format!("Detalhes do Commit · {}", &commit.hash[..7.min(commit.hash.len())]),
     };
 
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Left)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.header_bg));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_card(frame, area, "󰜉", &title, theme.header_fg, theme);
 
     if inner.height < 6 || inner.width < 20 {
         return;
@@ -187,17 +178,11 @@ fn render_commit_details(
     frame.render_widget(p, chunks[2]);
 
     // 4. Footer controls
-    let footer_text = match language {
-        Language::En => " [j/k or ↓/↑] Scroll message · [Esc / q / i] Close popup ",
-        Language::Pt => " [j/k ou ↓/↑] Rolar mensagem · [Esc / q / i] Fechar popup ",
+    let footer_items: &[(&str, &str)] = match language {
+        Language::En => &[("esc / q / i", "close"), ("j/k", "scroll message")],
+        Language::Pt => &[("esc / q / i", "fechar"), ("j/k", "rolar mensagem")],
     };
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            footer_text,
-            Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
-        )).alignment(Alignment::Center),
-        chunks[3],
-    );
+    frame.render_widget(Paragraph::new(help_line(footer_items, chunks[3].width, theme)).alignment(Alignment::Center), chunks[3]);
 }
 
 fn render_file_details(
@@ -209,20 +194,11 @@ fn render_file_details(
     theme: &Theme,
 ) {
     let title = match language {
-        Language::En => format!(" 󰈚 File Details: {} ", file.display_path()),
-        Language::Pt => format!(" 󰈚 Detalhes do Arquivo: {} ", file.display_path()),
+        Language::En => format!("File Details · {}", file.display_path()),
+        Language::Pt => format!("Detalhes do Arquivo · {}", file.display_path()),
     };
 
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Left)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.header_bg));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_card(frame, area, "󰈚", &title, theme.key_fg, theme);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -265,17 +241,11 @@ fn render_file_details(
 
     frame.render_widget(Paragraph::new(lines), chunks[0]);
 
-    let footer_text = match language {
-        Language::En => " [Esc / q / i] Close popup ",
-        Language::Pt => " [Esc / q / i] Fechar popup ",
+    let footer_items: &[(&str, &str)] = match language {
+        Language::En => &[("esc / q / i", "close")],
+        Language::Pt => &[("esc / q / i", "fechar")],
     };
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            footer_text,
-            Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
-        )).alignment(Alignment::Center),
-        chunks[1],
-    );
+    frame.render_widget(Paragraph::new(help_line(footer_items, chunks[1].width, theme)).alignment(Alignment::Center), chunks[1]);
 }
 
 fn render_stash_details(
@@ -288,20 +258,11 @@ fn render_stash_details(
     theme: &Theme,
 ) {
     let title = match language {
-        Language::En => format!(" 󰮎 Stash Details: {} ", stash.selector),
-        Language::Pt => format!(" 󰮎 Detalhes do Stash: {} ", stash.selector),
+        Language::En => format!("Stash Details · {}", stash.selector),
+        Language::Pt => format!("Detalhes do Stash · {}", stash.selector),
     };
 
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Left)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.header_bg));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_card(frame, area, "󰮎", &title, theme.key_fg, theme);
 
     if inner.height < 6 || inner.width < 20 {
         return;
@@ -370,37 +331,9 @@ fn render_stash_details(
     let p = Paragraph::new(body).wrap(Wrap { trim: false }).scroll((scroll as u16, 0));
     frame.render_widget(p, chunks[2]);
 
-    let footer_text = match language {
-        Language::En => " [j/k] Scroll · [Esc / q / i] Close popup ",
-        Language::Pt => " [j/k] Rolar · [Esc / q / i] Fechar popup ",
+    let footer_items: &[(&str, &str)] = match language {
+        Language::En => &[("esc / q / i", "close"), ("j/k", "scroll")],
+        Language::Pt => &[("esc / q / i", "fechar"), ("j/k", "rolar")],
     };
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            footer_text,
-            Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
-        )).alignment(Alignment::Center),
-        chunks[3],
-    );
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let px = if r.width < 90 { 96 } else { percent_x };
-    let py = if r.height < 30 { 92 } else { percent_y };
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - py) / 2),
-            Constraint::Percentage(py),
-            Constraint::Percentage((100 - py) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - px) / 2),
-            Constraint::Percentage(px),
-            Constraint::Percentage((100 - px) / 2),
-        ])
-        .split(popup_layout[1])[1]
+    frame.render_widget(Paragraph::new(help_line(footer_items, chunks[3].width, theme)).alignment(Alignment::Center), chunks[3]);
 }

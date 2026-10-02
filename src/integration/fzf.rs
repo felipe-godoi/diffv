@@ -11,60 +11,34 @@ pub fn is_fzf_available() -> bool {
         .unwrap_or(false)
 }
 
-pub fn search_files_fzf(files: &[String]) -> anyhow::Result<Option<String>> {
-    let mut child = Command::new("fzf")
-        .args([
-            "--prompt=󰈞 Files> ",
-            "--layout=reverse",
-            "--border=rounded",
-            "--info=inline",
-            "--header=Select a file to open diff (Esc to cancel)",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        for f in files {
-            let _ = writeln!(stdin, "{}", f);
-        }
-    }
-
-    let output = child.wait_with_output()?;
-    if output.status.success() {
-        let sel = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !sel.is_empty() {
-            return Ok(Some(sel));
-        }
-    }
-    if !matches!(output.status.code(), Some(0 | 1 | 130)) {
-        anyhow::bail!("fzf exited with {}", output.status);
-    }
-    Ok(None)
+pub fn search_files_fzf(files: &[String], header: &str) -> anyhow::Result<Option<String>> {
+    run_fzf(files, "󰈞 Files> ", header, &[])
 }
 
-pub fn search_diff_text_fzf(lines: &[String]) -> anyhow::Result<Option<String>> {
+/// Candidates are `path:line<TAB>content`; only the content is matched.
+pub fn search_diff_text_fzf(lines: &[String], header: &str) -> anyhow::Result<Option<String>> {
+    run_fzf(lines, "󰈞 Diff Text> ", header, &["--delimiter=\t", "--nth=2..", "--tabstop=2"])
+}
+
+fn run_fzf(items: &[String], prompt: &str, header: &str, extra: &[&str]) -> anyhow::Result<Option<String>> {
     let mut child = Command::new("fzf")
-        .args([
-            "--prompt=󰈞 Diff Text> ",
-            "--layout=reverse",
-            "--border=rounded",
-            "--info=inline",
-            "--header=Search changes across all diffs (Esc to cancel)",
-        ])
+        .args(["--layout=reverse", "--border=rounded", "--info=inline"])
+        .arg(format!("--prompt={}", prompt))
+        .arg(format!("--header={}", header))
+        .args(extra)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        for l in lines {
-            let _ = writeln!(stdin, "{}", l);
+        for item in items {
+            let _ = writeln!(stdin, "{}", item);
         }
     }
 
     let output = child.wait_with_output()?;
     if output.status.success() {
-        let sel = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let sel = String::from_utf8_lossy(&output.stdout).trim_end_matches(['\r', '\n']).to_string();
         if !sel.is_empty() {
             return Ok(Some(sel));
         }
