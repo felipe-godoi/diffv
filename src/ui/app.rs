@@ -118,6 +118,8 @@ pub struct App {
 
     // Snapshot of live diffs when viewing a commit or stash diff
     pub live_snapshot: Option<(Vec<FileDiff>, RepoStats)>,
+    pub active_commit_info: Option<CommitEntry>,
+    pub active_stash_info: Option<StashEntry>,
 }
 
 impl App {
@@ -206,6 +208,8 @@ impl App {
             selected_worktree_idx: active_wt_idx,
             worktree_scroll: 0,
             live_snapshot: None,
+            active_commit_info: None,
+            active_stash_info: None,
         };
 
         app.reload_diffs_internal(false)?;
@@ -495,7 +499,35 @@ impl App {
         // 5. Normal / Visual Navigation
         match key.code {
             KeyCode::Esc => {
-                if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                if self.active_commit_info.is_some() {
+                    self.active_commit_info = None;
+                    if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                        self.files = saved_files;
+                        self.repo_stats = saved_stats;
+                        self.update_filter();
+                    }
+                    self.focus = Focus::FileTree;
+                    self.drawer_tab = DrawerTab::Commits;
+                    let msg = match self.language {
+                        Language::En => "Returned to Commits list",
+                        Language::Pt => "Retornou à lista de commits",
+                    };
+                    self.set_notification(msg);
+                } else if self.active_stash_info.is_some() {
+                    self.active_stash_info = None;
+                    if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                        self.files = saved_files;
+                        self.repo_stats = saved_stats;
+                        self.update_filter();
+                    }
+                    self.focus = Focus::FileTree;
+                    self.drawer_tab = DrawerTab::Stashes;
+                    let msg = match self.language {
+                        Language::En => "Returned to Stashes list",
+                        Language::Pt => "Retornou à lista de stashes",
+                    };
+                    self.set_notification(msg);
+                } else if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
                     self.files = saved_files;
                     self.repo_stats = saved_stats;
                     self.active_commit_view = None;
@@ -569,22 +601,33 @@ impl App {
             }
             KeyCode::Char('1') => {
                 self.show_drawer = true;
+                self.active_commit_info = None;
+                self.active_stash_info = None;
+                self.active_commit_view = None;
                 self.drawer_tab = DrawerTab::Changes;
                 if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
                     self.files = saved_files;
                     self.repo_stats = saved_stats;
-                    self.active_commit_view = None;
                     self.update_filter();
                 }
                 self.focus = Focus::FileTree;
                 let msg = match self.language {
-                    Language::En => "Tab: Changes",
-                    Language::Pt => "Aba: Mudanças",
+                    Language::En => "Tab: Changes (Live Diff)",
+                    Language::Pt => "Aba: Mudanças (Diff ao vivo)",
                 };
                 self.set_notification(msg);
             }
             KeyCode::Char('2') => {
                 self.show_drawer = true;
+                if self.active_commit_info.is_some() {
+                    self.active_commit_info = None;
+                    if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                        self.files = saved_files;
+                        self.repo_stats = saved_stats;
+                        self.update_filter();
+                    }
+                }
+                self.active_stash_info = None;
                 self.drawer_tab = DrawerTab::Commits;
                 self.focus = Focus::FileTree;
                 let msg = match self.language {
@@ -595,6 +638,15 @@ impl App {
             }
             KeyCode::Char('3') => {
                 self.show_drawer = true;
+                if self.active_stash_info.is_some() {
+                    self.active_stash_info = None;
+                    if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                        self.files = saved_files;
+                        self.repo_stats = saved_stats;
+                        self.update_filter();
+                    }
+                }
+                self.active_commit_info = None;
                 self.drawer_tab = DrawerTab::Stashes;
                 self.focus = Focus::FileTree;
                 let msg = match self.language {
@@ -797,10 +849,48 @@ impl App {
                             }
                         }
                         DrawerTab::Commits => {
-                            self.load_selected_repo_commit();
+                            if self.active_commit_info.is_some() {
+                                if self.file_view_mode == FileViewMode::Tree {
+                                    if let Some(item) = self.tree_items.get(self.selected_tree_idx) {
+                                        if item.is_dir {
+                                            if item.is_collapsed {
+                                                self.collapsed_dirs.remove(&item.path);
+                                            } else {
+                                                self.collapsed_dirs.insert(item.path.clone());
+                                            }
+                                            self.update_filter();
+                                        } else {
+                                            self.focus = Focus::DiffView;
+                                        }
+                                    }
+                                } else {
+                                    self.focus = Focus::DiffView;
+                                }
+                            } else {
+                                self.load_selected_repo_commit();
+                            }
                         }
                         DrawerTab::Stashes => {
-                            self.load_selected_stash();
+                            if self.active_stash_info.is_some() {
+                                if self.file_view_mode == FileViewMode::Tree {
+                                    if let Some(item) = self.tree_items.get(self.selected_tree_idx) {
+                                        if item.is_dir {
+                                            if item.is_collapsed {
+                                                self.collapsed_dirs.remove(&item.path);
+                                            } else {
+                                                self.collapsed_dirs.insert(item.path.clone());
+                                            }
+                                            self.update_filter();
+                                        } else {
+                                            self.focus = Focus::DiffView;
+                                        }
+                                    }
+                                } else {
+                                    self.focus = Focus::DiffView;
+                                }
+                            } else {
+                                self.load_selected_stash();
+                            }
                         }
                     }
                 } else {
@@ -841,26 +931,28 @@ impl App {
 
     pub fn file_tree_down(&mut self, amount: usize) {
         let tree_vp = self.file_tree_height.saturating_sub(4).max(1);
-        match self.drawer_tab {
-            DrawerTab::Changes => {
-                if self.file_view_mode == FileViewMode::Tree {
-                    if !self.tree_items.is_empty() {
-                        self.selected_tree_idx = (self.selected_tree_idx + amount).min(self.tree_items.len() - 1);
-                        if self.selected_tree_idx >= self.file_tree_scroll + tree_vp {
-                            self.file_tree_scroll = self.selected_tree_idx.saturating_sub(tree_vp - 1);
-                        }
-                        self.scroll_y = 0;
-                        self.selected_row = 0;
-                    }
-                } else if !self.filtered_indices.is_empty() {
-                    self.selected_filtered_idx = (self.selected_filtered_idx + amount).min(self.filtered_indices.len() - 1);
-                    if self.selected_filtered_idx >= self.file_tree_scroll + tree_vp {
-                        self.file_tree_scroll = self.selected_filtered_idx.saturating_sub(tree_vp - 1);
+        if self.drawer_tab == DrawerTab::Changes || self.active_commit_info.is_some() || self.active_stash_info.is_some() {
+            if self.file_view_mode == FileViewMode::Tree {
+                if !self.tree_items.is_empty() {
+                    self.selected_tree_idx = (self.selected_tree_idx + amount).min(self.tree_items.len() - 1);
+                    if self.selected_tree_idx >= self.file_tree_scroll + tree_vp {
+                        self.file_tree_scroll = self.selected_tree_idx.saturating_sub(tree_vp - 1);
                     }
                     self.scroll_y = 0;
                     self.selected_row = 0;
                 }
+            } else if !self.filtered_indices.is_empty() {
+                self.selected_filtered_idx = (self.selected_filtered_idx + amount).min(self.filtered_indices.len() - 1);
+                if self.selected_filtered_idx >= self.file_tree_scroll + tree_vp {
+                    self.file_tree_scroll = self.selected_filtered_idx.saturating_sub(tree_vp - 1);
+                }
+                self.scroll_y = 0;
+                self.selected_row = 0;
             }
+            return;
+        }
+
+        match self.drawer_tab {
             DrawerTab::Commits => {
                 if !self.repo_commits.is_empty() {
                     self.selected_repo_commit_idx = (self.selected_repo_commit_idx + amount).min(self.repo_commits.len() - 1);
@@ -877,28 +969,31 @@ impl App {
                     }
                 }
             }
+            _ => {}
         }
     }
 
     pub fn file_tree_up(&mut self, amount: usize) {
-        match self.drawer_tab {
-            DrawerTab::Changes => {
-                if self.file_view_mode == FileViewMode::Tree {
-                    self.selected_tree_idx = self.selected_tree_idx.saturating_sub(amount);
-                    if self.selected_tree_idx < self.file_tree_scroll {
-                        self.file_tree_scroll = self.selected_tree_idx;
-                    }
-                    self.scroll_y = 0;
-                    self.selected_row = 0;
-                } else {
-                    self.selected_filtered_idx = self.selected_filtered_idx.saturating_sub(amount);
-                    if self.selected_filtered_idx < self.file_tree_scroll {
-                        self.file_tree_scroll = self.selected_filtered_idx;
-                    }
-                    self.scroll_y = 0;
-                    self.selected_row = 0;
+        if self.drawer_tab == DrawerTab::Changes || self.active_commit_info.is_some() || self.active_stash_info.is_some() {
+            if self.file_view_mode == FileViewMode::Tree {
+                self.selected_tree_idx = self.selected_tree_idx.saturating_sub(amount);
+                if self.selected_tree_idx < self.file_tree_scroll {
+                    self.file_tree_scroll = self.selected_tree_idx;
                 }
+                self.scroll_y = 0;
+                self.selected_row = 0;
+            } else {
+                self.selected_filtered_idx = self.selected_filtered_idx.saturating_sub(amount);
+                if self.selected_filtered_idx < self.file_tree_scroll {
+                    self.file_tree_scroll = self.selected_filtered_idx;
+                }
+                self.scroll_y = 0;
+                self.selected_row = 0;
             }
+            return;
+        }
+
+        match self.drawer_tab {
             DrawerTab::Commits => {
                 self.selected_repo_commit_idx = self.selected_repo_commit_idx.saturating_sub(amount);
                 if self.selected_repo_commit_idx < self.repo_commit_scroll {
@@ -911,6 +1006,7 @@ impl App {
                     self.stash_scroll = self.selected_stash_idx;
                 }
             }
+            _ => {}
         }
     }
 
@@ -983,17 +1079,22 @@ impl App {
                             }
                             let mut stats = self.repo_stats.clone();
                             stats.branch = format!("commit: {}", &commit.hash[..7.min(commit.hash.len())]);
+                            stats.file_count = files.len();
+                            stats.total_additions = files.iter().map(|f| f.stats.additions).sum();
+                            stats.total_deletions = files.iter().map(|f| f.stats.deletions).sum();
                             self.repo_stats = stats;
                             self.files = files;
+                            self.active_commit_info = Some(commit.clone());
+                            self.active_stash_info = None;
                             self.update_filter();
                             self.selected_filtered_idx = 0;
                             self.selected_tree_idx = 0;
                             self.scroll_y = 0;
                             self.selected_row = 0;
-                            self.focus = Focus::DiffView;
+                            self.focus = Focus::FileTree;
                             let msg = match self.language {
-                                Language::En => format!("Viewing commit {} · Esc/1 to return", &commit.hash[..7.min(commit.hash.len())]),
-                                Language::Pt => format!("Visualizando commit {} · Esc/1 para voltar", &commit.hash[..7.min(commit.hash.len())]),
+                                Language::En => format!("Inspecting commit {} ({} files) · Esc/2 to list", &commit.hash[..7.min(commit.hash.len())], self.files.len()),
+                                Language::Pt => format!("Inspecionando commit {} ({} arquivos) · Esc/2 para lista", &commit.hash[..7.min(commit.hash.len())], self.files.len()),
                             };
                             self.set_notification(msg);
                         }
@@ -1023,17 +1124,22 @@ impl App {
                             }
                             let mut stats = self.repo_stats.clone();
                             stats.branch = format!("stash: {}", stash.selector);
+                            stats.file_count = files.len();
+                            stats.total_additions = files.iter().map(|f| f.stats.additions).sum();
+                            stats.total_deletions = files.iter().map(|f| f.stats.deletions).sum();
                             self.repo_stats = stats;
                             self.files = files;
+                            self.active_stash_info = Some(stash.clone());
+                            self.active_commit_info = None;
                             self.update_filter();
                             self.selected_filtered_idx = 0;
                             self.selected_tree_idx = 0;
                             self.scroll_y = 0;
                             self.selected_row = 0;
-                            self.focus = Focus::DiffView;
+                            self.focus = Focus::FileTree;
                             let msg = match self.language {
-                                Language::En => format!("Viewing stash {} · Esc/1 to return", stash.selector),
-                                Language::Pt => format!("Visualizando stash {} · Esc/1 para voltar", stash.selector),
+                                Language::En => format!("Inspecting stash {} ({} files) · Esc/3 to list", stash.selector, self.files.len()),
+                                Language::Pt => format!("Inspecionando stash {} ({} arquivos) · Esc/3 para lista", stash.selector, self.files.len()),
                             };
                             self.set_notification(msg);
                         }
@@ -1095,6 +1201,78 @@ impl App {
                             return;
                         }
 
+                        if self.active_commit_info.is_some() {
+                            if mouse.row <= 5 {
+                                self.active_commit_info = None;
+                                if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                                    self.files = saved_files;
+                                    self.repo_stats = saved_stats;
+                                    self.update_filter();
+                                }
+                                self.focus = Focus::FileTree;
+                                return;
+                            }
+                            let item_row = (mouse.row.saturating_sub(6)) as usize;
+                            let target_idx = self.file_tree_scroll + item_row;
+                            if self.file_view_mode == FileViewMode::Tree {
+                                if target_idx < self.tree_items.len() {
+                                    self.selected_tree_idx = target_idx;
+                                    self.scroll_y = 0;
+                                    self.selected_row = 0;
+                                    let item = &self.tree_items[target_idx];
+                                    if item.is_dir {
+                                        if item.is_collapsed {
+                                            self.collapsed_dirs.remove(&item.path);
+                                        } else {
+                                            self.collapsed_dirs.insert(item.path.clone());
+                                        }
+                                        self.update_filter();
+                                    }
+                                }
+                            } else if target_idx < self.filtered_indices.len() {
+                                self.selected_filtered_idx = target_idx;
+                                self.scroll_y = 0;
+                                self.selected_row = 0;
+                            }
+                            return;
+                        }
+
+                        if self.active_stash_info.is_some() {
+                            if mouse.row <= 4 {
+                                self.active_stash_info = None;
+                                if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                                    self.files = saved_files;
+                                    self.repo_stats = saved_stats;
+                                    self.update_filter();
+                                }
+                                self.focus = Focus::FileTree;
+                                return;
+                            }
+                            let item_row = (mouse.row.saturating_sub(5)) as usize;
+                            let target_idx = self.file_tree_scroll + item_row;
+                            if self.file_view_mode == FileViewMode::Tree {
+                                if target_idx < self.tree_items.len() {
+                                    self.selected_tree_idx = target_idx;
+                                    self.scroll_y = 0;
+                                    self.selected_row = 0;
+                                    let item = &self.tree_items[target_idx];
+                                    if item.is_dir {
+                                        if item.is_collapsed {
+                                            self.collapsed_dirs.remove(&item.path);
+                                        } else {
+                                            self.collapsed_dirs.insert(item.path.clone());
+                                        }
+                                        self.update_filter();
+                                    }
+                                }
+                            } else if target_idx < self.filtered_indices.len() {
+                                self.selected_filtered_idx = target_idx;
+                                self.scroll_y = 0;
+                                self.selected_row = 0;
+                            }
+                            return;
+                        }
+
                         let item_row = (mouse.row.saturating_sub(3)) as usize;
                         match self.drawer_tab {
                             DrawerTab::Changes => {
@@ -1123,13 +1301,21 @@ impl App {
                             DrawerTab::Commits => {
                                 let target_idx = self.repo_commit_scroll + item_row;
                                 if target_idx < self.repo_commits.len() {
-                                    self.selected_repo_commit_idx = target_idx;
+                                    if self.selected_repo_commit_idx == target_idx {
+                                        self.load_selected_repo_commit();
+                                    } else {
+                                        self.selected_repo_commit_idx = target_idx;
+                                    }
                                 }
                             }
                             DrawerTab::Stashes => {
                                 let target_idx = self.stash_scroll + item_row;
                                 if target_idx < self.stashes.len() {
-                                    self.selected_stash_idx = target_idx;
+                                    if self.selected_stash_idx == target_idx {
+                                        self.load_selected_stash();
+                                    } else {
+                                        self.selected_stash_idx = target_idx;
+                                    }
                                 }
                             }
                         }
@@ -1138,6 +1324,15 @@ impl App {
                 }
 
                 if mouse.column > effective_tree_width && mouse.row >= 1 {
+                    if self.drawer_tab == DrawerTab::Commits && self.active_commit_info.is_none() {
+                        self.load_selected_repo_commit();
+                        return;
+                    }
+                    if self.drawer_tab == DrawerTab::Stashes && self.active_stash_info.is_none() {
+                        self.load_selected_stash();
+                        return;
+                    }
+
                     self.focus = Focus::DiffView;
                     let diff_inner_x = mouse.column.saturating_sub(effective_tree_width + 1);
                     if diff_inner_x < (self.viewport_height.max(30) as u16) {
@@ -1594,6 +1789,8 @@ impl App {
                 &self.stashes,
                 self.selected_stash_idx,
                 self.stash_scroll,
+                self.active_commit_info.as_ref(),
+                self.active_stash_info.as_ref(),
                 self.focus == Focus::FileTree,
                 self.filter_mode,
                 &self.filter_query,
@@ -1603,44 +1800,69 @@ impl App {
             );
         }
 
-        let cur_file = self.current_file();
-        let syntax_enabled = self.config.ui.syntax_highlighting;
+        let is_commits_overview = self.drawer_tab == DrawerTab::Commits && self.active_commit_info.is_none();
+        let is_stashes_overview = self.drawer_tab == DrawerTab::Stashes && self.active_stash_info.is_none();
 
-        let visual_range = if self.visual_mode {
-            Some((self.visual_anchor.min(self.selected_row), self.visual_anchor.max(self.selected_row)))
+        if is_commits_overview {
+            if let Some(commit) = self.repo_commits.get(self.selected_repo_commit_idx) {
+                crate::ui::components::commit_view::render_commit_overview(
+                    frame,
+                    diff_area,
+                    commit,
+                    self.language,
+                    &self.theme,
+                );
+            }
+        } else if is_stashes_overview {
+            if let Some(stash) = self.stashes.get(self.selected_stash_idx) {
+                crate::ui::components::commit_view::render_stash_overview(
+                    frame,
+                    diff_area,
+                    stash,
+                    self.language,
+                    &self.theme,
+                );
+            }
         } else {
-            None
-        };
+            let cur_file = self.current_file();
+            let syntax_enabled = self.config.ui.syntax_highlighting;
 
-        if self.is_unified {
-            render_unified(
-                frame,
-                diff_area,
-                cur_file,
-                self.scroll_y,
-                self.selected_row,
-                self.focus == Focus::DiffView,
-                syntax_enabled,
-                &self.theme,
-            );
-        } else {
-            render_side_by_side(
-                frame,
-                diff_area,
-                cur_file,
-                self.scroll_y,
-                self.selected_row,
-                visual_range,
-                self.column_side,
-                self.focus == Focus::DiffView,
-                syntax_enabled,
-                &self.theme,
-            );
-        }
+            let visual_range = if self.visual_mode {
+                Some((self.visual_anchor.min(self.selected_row), self.visual_anchor.max(self.selected_row)))
+            } else {
+                None
+            };
 
-        if self.config.ui.overview_ruler {
-            let vp_height = diff_area.height as usize;
-            render_ruler(frame, ruler_area, cur_file, self.scroll_y, vp_height, &self.theme);
+            if self.is_unified {
+                render_unified(
+                    frame,
+                    diff_area,
+                    cur_file,
+                    self.scroll_y,
+                    self.selected_row,
+                    self.focus == Focus::DiffView,
+                    syntax_enabled,
+                    &self.theme,
+                );
+            } else {
+                render_side_by_side(
+                    frame,
+                    diff_area,
+                    cur_file,
+                    self.scroll_y,
+                    self.selected_row,
+                    visual_range,
+                    self.column_side,
+                    self.focus == Focus::DiffView,
+                    syntax_enabled,
+                    &self.theme,
+                );
+            }
+
+            if self.config.ui.overview_ruler {
+                let vp_height = diff_area.height as usize;
+                render_ruler(frame, ruler_area, cur_file, self.scroll_y, vp_height, &self.theme);
+            }
         }
 
         // 3. Render Status Bar
@@ -1649,10 +1871,30 @@ impl App {
                 Language::En => Some("VISUAL MODE: Select lines with j/k, press 's' to stage selected lines, Esc to exit"),
                 Language::Pt => Some("MODO VISUAL: Selecione linhas com j/k, pressione 's' para stage, Esc para sair"),
             }
+        } else if self.active_commit_info.is_some() {
+            match self.language {
+                Language::En => Some("COMMIT VIEW: Inspecting commit files · Press [Esc] or [2] for Commits list · [1] Live Diff"),
+                Language::Pt => Some("MODO COMMIT: Inspecionando arquivos do commit · [Esc] ou [2] para Lista de Commits · [1] Diff ao vivo"),
+            }
+        } else if self.active_stash_info.is_some() {
+            match self.language {
+                Language::En => Some("STASH VIEW: Inspecting stash files · Press [Esc] or [3] for Stashes list · [1] Live Diff"),
+                Language::Pt => Some("MODO STASH: Inspecionando arquivos do stash · [Esc] ou [3] para Lista de Stashes · [1] Diff ao vivo"),
+            }
         } else if self.active_commit_view.is_some() {
             match self.language {
                 Language::En => Some("COMMIT VIEW: Viewing commit diff · Press [Esc] or [1] to return to Live Diff"),
                 Language::Pt => Some("VISUALIZAÇÃO DE COMMIT: Pressione [Esc] ou [1] para voltar ao Live Diff"),
+            }
+        } else if self.drawer_tab == DrawerTab::Commits {
+            match self.language {
+                Language::En => Some("COMMITS: [j/k] Select commit · [Enter] Inspect files & diff · [1] Live Diff"),
+                Language::Pt => Some("COMMITS: [j/k] Selecionar commit · [Enter] Inspecionar arquivos e diff · [1] Diff ao vivo"),
+            }
+        } else if self.drawer_tab == DrawerTab::Stashes {
+            match self.language {
+                Language::En => Some("STASHES: [j/k] Select stash · [Enter] Inspect files & diff · [1] Live Diff"),
+                Language::Pt => Some("STASHES: [j/k] Selecionar stash · [Enter] Inspecionar arquivos e diff · [1] Diff ao vivo"),
             }
         } else {
             self.notification.as_ref().map(|(msg, _)| msg.as_str())

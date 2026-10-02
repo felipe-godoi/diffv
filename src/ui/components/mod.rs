@@ -1,3 +1,4 @@
+pub mod commit_view;
 pub mod file_tree;
 pub mod header;
 pub mod help_popup;
@@ -7,3 +8,4 @@ pub mod side_by_side;
 pub mod status_bar;
 pub mod unified;
 pub mod worktree_popup;
+

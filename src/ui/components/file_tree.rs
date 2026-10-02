@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
@@ -352,6 +352,8 @@ pub fn render_drawer(
     stashes: &[StashEntry],
     selected_stash_idx: usize,
     stash_scroll: usize,
+    active_commit_info: Option<&CommitEntry>,
+    active_stash_info: Option<&StashEntry>,
     is_focused: bool,
     filter_mode: bool,
     filter_query: &str,
@@ -441,28 +443,196 @@ pub fn render_drawer(
             );
         }
         DrawerTab::Commits => {
-            render_commits_tab(
-                frame,
-                inner_area,
-                commits,
-                selected_commit_idx,
-                commit_scroll,
-                language,
-                theme,
-            );
+            if let Some(commit) = active_commit_info {
+                render_commit_files_drawer(
+                    frame,
+                    inner_area,
+                    commit,
+                    items,
+                    selected_file_idx,
+                    file_scroll,
+                    filter_mode,
+                    filter_query,
+                    view_mode,
+                    language,
+                    theme,
+                );
+            } else {
+                render_commits_tab(
+                    frame,
+                    inner_area,
+                    commits,
+                    selected_commit_idx,
+                    commit_scroll,
+                    language,
+                    theme,
+                );
+            }
         }
         DrawerTab::Stashes => {
-            render_stashes_tab(
-                frame,
-                inner_area,
-                stashes,
-                selected_stash_idx,
-                stash_scroll,
-                language,
-                theme,
-            );
+            if let Some(stash) = active_stash_info {
+                render_stash_files_drawer(
+                    frame,
+                    inner_area,
+                    stash,
+                    items,
+                    selected_file_idx,
+                    file_scroll,
+                    filter_mode,
+                    filter_query,
+                    view_mode,
+                    language,
+                    theme,
+                );
+            } else {
+                render_stashes_tab(
+                    frame,
+                    inner_area,
+                    stashes,
+                    selected_stash_idx,
+                    stash_scroll,
+                    language,
+                    theme,
+                );
+            }
         }
     }
+}
+
+fn render_commit_files_drawer(
+    frame: &mut Frame,
+    area: Rect,
+    commit: &CommitEntry,
+    items: &[TreeItem],
+    selected_file_idx: usize,
+    file_scroll: usize,
+    filter_mode: bool,
+    filter_query: &str,
+    view_mode: FileViewMode,
+    language: Language,
+    theme: &Theme,
+) {
+    let header_height = if area.height < 14 { 3 } else { 4 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(3),
+        ])
+        .split(area);
+
+    let short_hash = &commit.hash[..7.min(commit.hash.len())];
+    let mut header_lines = Vec::new();
+
+    let msg_max_w = (chunks[0].width as usize).saturating_sub(12).max(8);
+    let msg_trunc = if commit.message.len() > msg_max_w {
+        format!("{}…", &commit.message[..msg_max_w.saturating_sub(1)])
+    } else {
+        commit.message.clone()
+    };
+
+    header_lines.push(Line::from(vec![
+        Span::styled(format!(" 󰜉 {} ", short_hash), Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled(msg_trunc, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+    ]));
+
+    if header_height >= 4 {
+        let auth_max_w = (chunks[0].width as usize).saturating_sub(16).max(8);
+        let auth_trunc = if commit.author.len() > auth_max_w {
+            format!("{}…", &commit.author[..auth_max_w.saturating_sub(1)])
+        } else {
+            commit.author.clone()
+        };
+        header_lines.push(Line::from(vec![
+            Span::styled(format!(" 👤 {} · {}", auth_trunc, commit.date), Style::default().fg(theme.line_num_fg)),
+        ]));
+    }
+
+    let back_hint = match language {
+        Language::En => format!(" 󰈚 {} files · [Esc / 2] ← Back", items.len()),
+        Language::Pt => format!(" 󰈚 {} arquivos · [Esc / 2] ← Voltar", items.len()),
+    };
+    header_lines.push(Line::from(Span::styled(
+        back_hint,
+        Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
+    )));
+
+    frame.render_widget(Paragraph::new(header_lines), chunks[0]);
+
+    render_changes_tab(
+        frame,
+        chunks[1],
+        items,
+        selected_file_idx,
+        file_scroll,
+        filter_mode,
+        filter_query,
+        view_mode,
+        language,
+        theme,
+    );
+}
+
+fn render_stash_files_drawer(
+    frame: &mut Frame,
+    area: Rect,
+    stash: &StashEntry,
+    items: &[TreeItem],
+    selected_file_idx: usize,
+    file_scroll: usize,
+    filter_mode: bool,
+    filter_query: &str,
+    view_mode: FileViewMode,
+    language: Language,
+    theme: &Theme,
+) {
+    let header_height = if area.height < 14 { 2 } else { 3 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(3),
+        ])
+        .split(area);
+
+    let mut header_lines = Vec::new();
+    let msg_max_w = (chunks[0].width as usize).saturating_sub(14).max(8);
+    let msg_trunc = if stash.message.len() > msg_max_w {
+        format!("{}…", &stash.message[..msg_max_w.saturating_sub(1)])
+    } else {
+        stash.message.clone()
+    };
+
+    header_lines.push(Line::from(vec![
+        Span::styled(format!(" 󰮎 {} ", stash.selector), Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.key_fg).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled(msg_trunc, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+    ]));
+
+    let back_hint = match language {
+        Language::En => format!(" 󰈚 {} files · [Esc / 3] ← Back", items.len()),
+        Language::Pt => format!(" 󰈚 {} arquivos · [Esc / 3] ← Voltar", items.len()),
+    };
+    header_lines.push(Line::from(Span::styled(
+        back_hint,
+        Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
+    )));
+
+    frame.render_widget(Paragraph::new(header_lines), chunks[0]);
+
+    render_changes_tab(
+        frame,
+        chunks[1],
+        items,
+        selected_file_idx,
+        file_scroll,
+        filter_mode,
+        filter_query,
+        view_mode,
+        language,
+        theme,
+    );
 }
 
 fn render_changes_tab(

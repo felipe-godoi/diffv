@@ -31,7 +31,15 @@ pub struct Theme {
     pub status_u: Color,
 }
 
+use once_cell::sync::Lazy;
+
+static DETECTED_DARK_MODE: Lazy<bool> = Lazy::new(detect_dark_mode_internal);
+
 pub fn detect_dark_mode() -> bool {
+    *DETECTED_DARK_MODE
+}
+
+fn detect_dark_mode_internal() -> bool {
     // 1. Check COLORFGBG environment variable (format: "fg;bg")
     if let Ok(colorfgbg) = std::env::var("COLORFGBG") {
         let parts: Vec<&str> = colorfgbg.split(';').collect();

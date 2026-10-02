@@ -197,3 +197,43 @@ fn test_models_language_and_drawer() {
     assert_eq!(default_tree_mode, FileViewMode::Tree);
 }
 
+#[test]
+fn test_commit_inspection() {
+    let temp_dir = std::env::temp_dir().join("diffv_test_commit_inspect");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&temp_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "Git command failed: {:?}", args);
+    };
+
+    run(&["init"]);
+    run(&["config", "user.name", "Commit Tester"]);
+    run(&["config", "user.email", "committester@example.com"]);
+
+    let f1 = temp_dir.join("file1.rs");
+    let f2 = temp_dir.join("file2.py");
+    fs::write(&f1, "fn main() {}\n").unwrap();
+    fs::write(&f2, "print('hello')\n").unwrap();
+
+    run(&["add", "."]);
+    run(&["commit", "-m", "feat: first commit with two files"]);
+
+    let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
+    let commits = provider.get_repo_commits(5).unwrap();
+    assert_eq!(commits.len(), 1);
+
+    let commit_diff = provider.load_commit_full_diff(&commits[0].hash).unwrap();
+    assert_eq!(commit_diff.len(), 2);
+    assert!(commit_diff.iter().any(|f| f.display_path().contains("file1.rs")));
+    assert!(commit_diff.iter().any(|f| f.display_path().contains("file2.py")));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+

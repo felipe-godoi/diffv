@@ -1,4 +1,6 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Color as SynColor, ThemeSet};
@@ -6,6 +8,9 @@ use syntect::parsing::SyntaxSet;
 
 pub static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
 pub static THEME_SET: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
+
+static HIGHLIGHT_CACHE: Lazy<Mutex<HashMap<(PathBuf, String), Vec<SyntaxToken>>>> =
+    Lazy::new(|| Mutex::new(HashMap::with_capacity(4096)));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyntaxToken {
@@ -23,6 +28,17 @@ impl SyntaxHighlighter {
         path: &Path,
         line: &str,
     ) -> Vec<SyntaxToken> {
+        if line.is_empty() {
+            return Vec::new();
+        }
+
+        let cache_key = (path.to_path_buf(), line.to_string());
+        if let Ok(cache) = HIGHLIGHT_CACHE.lock() {
+            if let Some(tokens) = cache.get(&cache_key) {
+                return tokens.clone();
+            }
+        }
+
         let syntax = path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -66,6 +82,13 @@ impl SyntaxHighlighter {
                     break;
                 }
             }
+        }
+
+        if let Ok(mut cache) = HIGHLIGHT_CACHE.lock() {
+            if cache.len() > 8192 {
+                cache.clear();
+            }
+            cache.insert(cache_key, tokens.clone());
         }
 
         tokens
