@@ -920,6 +920,192 @@ fn render_stashes_tab(
     frame.render_widget(paragraph, area);
 }
 
+pub fn render_drawer_line_overlay(
+    frame: &mut Frame,
+    file_tree_area: Rect,
+    active_tab: DrawerTab,
+    items: &[TreeItem],
+    selected_file_idx: usize,
+    file_scroll: usize,
+    commits: &[CommitEntry],
+    selected_commit_idx: usize,
+    commit_scroll: usize,
+    stashes: &[StashEntry],
+    selected_stash_idx: usize,
+    stash_scroll: usize,
+    active_commit_info: Option<&CommitEntry>,
+    active_stash_info: Option<&StashEntry>,
+    theme: &Theme,
+) {
+    if file_tree_area.width == 0 || file_tree_area.height < 4 {
+        return;
+    }
+
+    let avail_w = file_tree_area.width.saturating_sub(2) as usize;
+
+    let (spans, row_y) = match active_tab {
+        DrawerTab::Changes => {
+            if items.is_empty() || selected_file_idx >= items.len() {
+                return;
+            }
+            let item = &items[selected_file_idx];
+            let indent = "  ".repeat(item.depth);
+
+            let mut s = vec![
+                Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                Span::styled(indent, Style::default().bg(theme.selected_bg)),
+            ];
+
+            if item.is_dir {
+                let dir_icon = if item.is_collapsed { " " } else { " " };
+                let path_text = format!("{}/", item.path.display());
+                let stats = format!(" +{} -{}", item.additions, item.deletions);
+                s.push(Span::styled(dir_icon, Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
+                s.push(Span::styled(path_text, Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
+                s.push(Span::styled(stats, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
+            } else {
+                let (status_badge, status_color) = match item.status.unwrap_or(FileStatus::Modified) {
+                    FileStatus::Modified => ("● ", theme.status_m),
+                    FileStatus::Added => ("✚ ", theme.status_a),
+                    FileStatus::Deleted => ("✖ ", theme.status_d),
+                    FileStatus::Untracked => ("? ", theme.status_u),
+                    FileStatus::Renamed => ("➜ ", theme.key_fg),
+                    FileStatus::Copied => ("✚ ", theme.status_a),
+                };
+                let (stage_badge, stage_color) = match item.stage_status.unwrap_or(StageStatus::Unstaged) {
+                    StageStatus::Staged => ("󰄬 ", theme.status_a),
+                    StageStatus::PartiallyStaged => ("󰄬* ", theme.key_fg),
+                    StageStatus::Untracked => ("? ", theme.status_u),
+                    StageStatus::Unstaged => ("  ", theme.line_num_fg),
+                };
+                let (file_ico, ico_color) = file_icon(&item.name);
+                let path_text = item.path.display().to_string();
+                let stats = format!(" +{} -{}", item.additions, item.deletions);
+
+                s.push(Span::styled(status_badge, Style::default().fg(status_color).bg(theme.selected_bg)));
+                s.push(Span::styled(stage_badge, Style::default().fg(stage_color).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
+                s.push(Span::styled(file_ico, Style::default().fg(ico_color).bg(theme.selected_bg)));
+                s.push(Span::styled(path_text, Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
+                s.push(Span::styled(stats, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
+            }
+            s.push(Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
+
+            let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
+            let y = if active_commit_info.is_some() || active_stash_info.is_some() {
+                file_tree_area.y + 2 + commit_header_h + (selected_file_idx.saturating_sub(file_scroll)) as u16
+            } else {
+                file_tree_area.y + 2 + (selected_file_idx.saturating_sub(file_scroll)) as u16
+            };
+            (s, y)
+        }
+        DrawerTab::Commits => {
+            if active_commit_info.is_some() {
+                if items.is_empty() || selected_file_idx >= items.len() {
+                    return;
+                }
+                let item = &items[selected_file_idx];
+                let indent = "  ".repeat(item.depth);
+                let mut s = vec![
+                    Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(indent, Style::default().bg(theme.selected_bg)),
+                ];
+                let (file_ico, ico_color) = file_icon(&item.name);
+                s.push(Span::styled(file_ico, Style::default().fg(ico_color).bg(theme.selected_bg)));
+                s.push(Span::styled(item.path.display().to_string(), Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
+                s.push(Span::styled(format!(" +{} -{}", item.additions, item.deletions), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
+                s.push(Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
+                let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
+                let y = file_tree_area.y + 2 + commit_header_h + (selected_file_idx.saturating_sub(file_scroll)) as u16;
+                (s, y)
+            } else {
+                if commits.is_empty() || selected_commit_idx >= commits.len() {
+                    return;
+                }
+                let commit = &commits[selected_commit_idx];
+                let short_h = &commit.hash[..7.min(commit.hash.len())];
+                let subject = commit.message.lines().next().unwrap_or("").trim();
+                let s = vec![
+                    Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("  {} ", short_h), Style::default().fg(theme.header_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(subject, Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" ({}) · 👤 {}", commit.date, commit.author), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)),
+                    Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)),
+                ];
+                let y = file_tree_area.y + 2 + (selected_commit_idx.saturating_sub(commit_scroll)) as u16;
+                (s, y)
+            }
+        }
+        DrawerTab::Stashes => {
+            if active_stash_info.is_some() {
+                if items.is_empty() || selected_file_idx >= items.len() {
+                    return;
+                }
+                let item = &items[selected_file_idx];
+                let indent = "  ".repeat(item.depth);
+                let mut s = vec![
+                    Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(indent, Style::default().bg(theme.selected_bg)),
+                ];
+                let (file_ico, ico_color) = file_icon(&item.name);
+                s.push(Span::styled(file_ico, Style::default().fg(ico_color).bg(theme.selected_bg)));
+                s.push(Span::styled(item.path.display().to_string(), Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
+                s.push(Span::styled(format!(" +{} -{}", item.additions, item.deletions), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
+                s.push(Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
+                let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
+                let y = file_tree_area.y + 2 + commit_header_h + (selected_file_idx.saturating_sub(file_scroll)) as u16;
+                (s, y)
+            } else {
+                if stashes.is_empty() || selected_stash_idx >= stashes.len() {
+                    return;
+                }
+                let stash = &stashes[selected_stash_idx];
+                let s = vec![
+                    Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" 󰮎 {:<9} ", stash.selector), Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(&stash.message, Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" ({})", stash.date), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)),
+                    Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)),
+                ];
+                let y = file_tree_area.y + 2 + (selected_stash_idx.saturating_sub(stash_scroll)) as u16;
+                (s, y)
+            }
+        }
+    };
+
+    let total_len = spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
+
+    // ONLY show overlay if the line content overflows the drawer's inner width!
+    if total_len <= avail_w {
+        return;
+    }
+
+    let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
+    let min_y = if active_commit_info.is_some() || active_stash_info.is_some() {
+        file_tree_area.y + 2 + commit_header_h
+    } else {
+        file_tree_area.y + 2
+    };
+
+    if row_y < min_y || row_y >= file_tree_area.y + file_tree_area.height.saturating_sub(1) {
+        return;
+    }
+
+    let screen_w = frame.area().width;
+    let overlay_w = (total_len as u16 + 1).min(screen_w.saturating_sub(file_tree_area.x + 1));
+
+    let overlay_rect = Rect {
+        x: file_tree_area.x,
+        y: row_y,
+        width: overlay_w,
+        height: 1,
+    };
+
+    use ratatui::widgets::Clear;
+    frame.render_widget(Clear, overlay_rect);
+    frame.render_widget(Paragraph::new(Line::from(spans)), overlay_rect);
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

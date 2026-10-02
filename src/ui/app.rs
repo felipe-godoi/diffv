@@ -19,7 +19,7 @@ use crate::git::actions::{
 use crate::git::provider::GitProvider;
 use crate::integration::clipboard::copy_hunk_as_markdown;
 use crate::ui::components::file_tree::{
-    build_tree_items, render_drawer, FileViewMode, TreeItem,
+    build_tree_items, render_drawer, render_drawer_line_overlay, FileViewMode, TreeItem,
 };
 use crate::ui::components::details_popup::{render_details_popup, DetailsContent};
 use crate::ui::components::header::render_header;
@@ -31,7 +31,6 @@ use crate::ui::components::status_bar::render_status_bar;
 use crate::ui::components::toast::render_toast;
 use crate::ui::components::unified::render_unified;
 use crate::ui::components::worktree_popup::{render_worktree_popup, WorktreeCreationState};
-use crate::ui::components::item_overlay::render_item_overlay;
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +294,22 @@ impl App {
             Language::Pt => "Idioma: Português",
         };
         self.set_notification(msg);
+    }
+
+    pub fn toggle_file_view_mode(&mut self) {
+        self.show_drawer = true;
+        self.file_view_mode = match self.file_view_mode {
+            FileViewMode::Flat => FileViewMode::Tree,
+            FileViewMode::Tree => FileViewMode::Flat,
+        };
+        self.update_filter();
+        let mode_str = match (self.file_view_mode, self.language) {
+            (FileViewMode::Flat, Language::En) => "Flat List",
+            (FileViewMode::Flat, Language::Pt) => "Lista Plana",
+            (FileViewMode::Tree, Language::En) => "Folders (Tree)",
+            (FileViewMode::Tree, Language::Pt) => "Pastas (Árvore)",
+        };
+        self.set_notification(format!("File Drawer: {}", mode_str));
     }
 
     pub fn switch_drawer_tab(&mut self, new_tab: DrawerTab) {
@@ -1161,19 +1176,7 @@ impl App {
                 self.set_notification(format!("Live Watch Mode: {}", status));
             }
             KeyCode::Char('t') => {
-                self.show_drawer = true;
-                self.file_view_mode = match self.file_view_mode {
-                    FileViewMode::Flat => FileViewMode::Tree,
-                    FileViewMode::Tree => FileViewMode::Flat,
-                };
-                self.update_filter();
-                let mode_str = match (self.file_view_mode, self.language) {
-                    (FileViewMode::Flat, Language::En) => "Flat List",
-                    (FileViewMode::Flat, Language::Pt) => "Lista Plana",
-                    (FileViewMode::Tree, Language::En) => "Folders (Tree)",
-                    (FileViewMode::Tree, Language::Pt) => "Pastas (Árvore)",
-                };
-                self.set_notification(format!("File Drawer: {}", mode_str));
+                self.toggle_file_view_mode();
             }
             KeyCode::Char('v') => {
                 if self.focus == Focus::DiffView {
@@ -1740,7 +1743,8 @@ impl App {
                         }
 
                         if self.active_commit_info.is_some() {
-                            if mouse.row <= 5 {
+                            let commit_header_h: u16 = if self.viewport_height < 18 { 3 } else { 4 };
+                            if mouse.row <= 2 + commit_header_h {
                                 self.active_commit_info = None;
                                 if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
                                     self.files = saved_files;
@@ -1750,7 +1754,10 @@ impl App {
                                 self.focus = Focus::FileTree;
                                 return;
                             }
-                            let item_row = (mouse.row.saturating_sub(6)) as usize;
+                            if mouse.row == 3 + commit_header_h {
+                                return;
+                            }
+                            let item_row = (mouse.row.saturating_sub(4 + commit_header_h)) as usize;
                             let target_idx = self.file_tree_scroll + item_row;
                             if self.file_view_mode == FileViewMode::Tree {
                                 if target_idx < self.tree_items.len() {
@@ -1776,7 +1783,8 @@ impl App {
                         }
 
                         if self.active_stash_info.is_some() {
-                            if mouse.row <= 4 {
+                            let stash_header_h: u16 = if self.viewport_height < 18 { 3 } else { 4 };
+                            if mouse.row <= 2 + stash_header_h {
                                 self.active_stash_info = None;
                                 if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
                                     self.files = saved_files;
@@ -1786,7 +1794,10 @@ impl App {
                                 self.focus = Focus::FileTree;
                                 return;
                             }
-                            let item_row = (mouse.row.saturating_sub(5)) as usize;
+                            if mouse.row == 3 + stash_header_h {
+                                return;
+                            }
+                            let item_row = (mouse.row.saturating_sub(4 + stash_header_h)) as usize;
                             let target_idx = self.file_tree_scroll + item_row;
                             if self.file_view_mode == FileViewMode::Tree {
                                 if target_idx < self.tree_items.len() {
@@ -1811,7 +1822,14 @@ impl App {
                             return;
                         }
 
-                        let item_row = (mouse.row.saturating_sub(3)) as usize;
+                        if mouse.row == 3 {
+                            if self.drawer_tab == DrawerTab::Changes {
+                                self.toggle_file_view_mode();
+                            }
+                            return;
+                        }
+
+                        let item_row = (mouse.row.saturating_sub(4)) as usize;
                         match self.drawer_tab {
                             DrawerTab::Changes => {
                                 let target_idx = self.file_tree_scroll + item_row;
@@ -1879,7 +1897,10 @@ impl App {
                         self.column_side = ColumnSide::Right;
                     }
 
-                    let line_row = (mouse.row.saturating_sub(2)) as usize;
+                    if mouse.row <= 2 {
+                        return;
+                    }
+                    let line_row = (mouse.row.saturating_sub(3)) as usize;
                     let target_row = self.scroll_y + line_row;
                     if let Some(file) = self.current_file() {
                         let total = if self.is_unified {
@@ -2477,23 +2498,23 @@ impl App {
             render_confirm_popup(frame, size, msg, self.language, &self.theme);
         }
 
-        // 5. Floating Item Overlay (displays full untruncated name over the interface)
-        if self.focus == Focus::FileTree && self.show_drawer && !self.show_help && !self.show_worktrees && !self.show_history && !self.show_details_popup && self.confirm_action.is_none() {
-            render_item_overlay(
+        // 5. Drawer Line Overlay (extends row over right border if name exceeds drawer width)
+        if self.show_drawer && !self.show_help && !self.show_worktrees && !self.show_history && !self.show_details_popup && self.confirm_action.is_none() {
+            render_drawer_line_overlay(
                 frame,
-                diff_area,
+                file_tree_area,
                 self.drawer_tab,
                 &self.tree_items,
                 selected_file_idx,
-                &self.files,
-                &self.filtered_indices,
-                self.file_view_mode,
+                self.file_tree_scroll,
                 &self.repo_commits,
                 self.selected_repo_commit_idx,
+                self.repo_commit_scroll,
                 &self.stashes,
                 self.selected_stash_idx,
-                self.active_commit_info.is_some() || self.active_stash_info.is_some(),
-                self.language,
+                self.stash_scroll,
+                self.active_commit_info.as_ref(),
+                self.active_stash_info.as_ref(),
                 &self.theme,
             );
         }

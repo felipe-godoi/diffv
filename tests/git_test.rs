@@ -356,5 +356,45 @@ fn test_tab_esc_worktree_fzf_features() {
     assert!(app.jump_to_file("main.rs"));
     app.jump_to_line(1);
 
+    // 8. Test mouse click coordinates and row mapping
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    // Clicking row 3 toggles file view mode between Tree and Flat
+    assert_eq!(app.file_view_mode, diffv::ui::components::file_tree::FileViewMode::Tree);
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 5,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.file_view_mode, diffv::ui::components::file_tree::FileViewMode::Flat);
+
+    // Clicking row 4 selects item 0 (first file)
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 5,
+        row: 4,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.selected_filtered_idx, 0);
+
+    // Clicking diff view at row 3 selects line 0 of diff
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.focus, diffv::ui::app::Focus::DiffView);
+    assert_eq!(app.selected_row, 0);
+
+    // Clicking diff view at row 4 selects line 1 of diff
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,
+        row: 4,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.selected_row, 1);
+
     let _ = fs::remove_dir_all(&temp_dir);
 }
