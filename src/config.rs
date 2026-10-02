@@ -1,0 +1,172 @@
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    #[serde(default)]
+    pub ui: UiConfig,
+    #[serde(default)]
+    pub diff: DiffConfig,
+    #[serde(default)]
+    pub watcher: WatcherConfig,
+    #[serde(default)]
+    pub editor: EditorConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    #[serde(default = "default_view")]
+    pub default_view: String,
+    #[serde(default = "default_true")]
+    pub show_line_numbers: bool,
+    #[serde(default = "default_true")]
+    pub syntax_highlighting: bool,
+    #[serde(default = "default_true")]
+    pub overview_ruler: bool,
+    #[serde(default = "default_tab_width")]
+    pub tab_width: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffConfig {
+    #[serde(default = "default_algorithm")]
+    pub algorithm: String,
+    #[serde(default)]
+    pub ignore_whitespace: bool,
+    #[serde(default = "default_context_lines")]
+    pub context_lines: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatcherConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_debounce_ms")]
+    pub debounce_ms: u64,
+    #[serde(default = "default_true")]
+    pub watch_untracked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorConfig {
+    #[serde(default = "default_editor_command")]
+    pub command: String,
+    #[serde(default = "default_editor_args")]
+    pub args: Vec<String>,
+    #[serde(default = "default_true")]
+    pub use_nvr: bool,
+}
+
+fn default_theme() -> String {
+    "vscode-dark".to_string()
+}
+fn default_view() -> String {
+    "side-by-side".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_tab_width() -> usize {
+    4
+}
+fn default_algorithm() -> String {
+    "patience".to_string()
+}
+fn default_context_lines() -> usize {
+    3
+}
+fn default_debounce_ms() -> u64 {
+    150
+}
+fn default_editor_command() -> String {
+    if let Ok(editor) = std::env::var("EDITOR") {
+        if !editor.is_empty() {
+            return editor;
+        }
+    }
+    "nvim".to_string()
+}
+fn default_editor_args() -> Vec<String> {
+    vec!["+{{line}}".to_string(), "{{file}}".to_string()]
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            theme: default_theme(),
+            default_view: default_view(),
+            show_line_numbers: default_true(),
+            syntax_highlighting: default_true(),
+            overview_ruler: default_true(),
+            tab_width: default_tab_width(),
+        }
+    }
+}
+
+impl Default for DiffConfig {
+    fn default() -> Self {
+        Self {
+            algorithm: default_algorithm(),
+            ignore_whitespace: false,
+            context_lines: default_context_lines(),
+        }
+    }
+}
+
+impl Default for WatcherConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            debounce_ms: default_debounce_ms(),
+            watch_untracked: default_true(),
+        }
+    }
+}
+
+impl Default for EditorConfig {
+    fn default() -> Self {
+        Self {
+            command: default_editor_command(),
+            args: default_editor_args(),
+            use_nvr: default_true(),
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            ui: UiConfig::default(),
+            diff: DiffConfig::default(),
+            watcher: WatcherConfig::default(),
+            editor: EditorConfig::default(),
+        }
+    }
+}
+
+impl Config {
+    pub fn config_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|p| p.join("diffv").join("config.toml"))
+    }
+
+    pub fn load() -> Self {
+        if let Some(path) = Self::config_path() {
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(cfg) = toml::from_str::<Config>(&content) {
+                        return cfg;
+                    }
+                }
+            }
+        }
+        Config::default()
+    }
+
+    pub fn load_from_path(path: &Path) -> anyhow::Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        let cfg: Config = toml::from_str(&content)?;
+        Ok(cfg)
+    }
+}
