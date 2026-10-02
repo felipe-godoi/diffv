@@ -10,7 +10,7 @@
 - 🌟 **Side-by-Side Dual-Column Diffing**: Flawless vertical synchronization with filler/padding lines matching the VS Code Diff Editor.
 - 🔍 **Intra-Line Character & Word Highlighting**: Subtle background coloring for deleted/added lines with high-contrast highlighted spans for changed tokens.
 - ⚡ **AI Companion Mode (`--watch`)**: Listens to disk changes via debounced filesystem events (150ms). Silently reloads diffs in real-time without resetting your scroll position or active file.
-- 🎨 **Syntax Highlighting & Built-in Themes**: Native syntax styling with `syntect` and beautiful built-in color schemes (`vscode-dark`, `tokyonight`, `catppuccin`, `gruvbox`).
+- 🎨 **Adaptive Terminal Theme & Built-in Themes**: Adapts naturally to your terminal's active palette, transparency, and dark/light mode by default (`auto`), with optional built-in themes (`vscode-dark`, `tokyonight`, `catppuccin`, `gruvbox`).
 - 🌲 **Interactive File Drawer & Quick Filter**: Fast navigation with `j`/`k`, status indicators (`M`, `A`, `D`, `?`, `[S]`, `[U]`), and instant fuzzy search filtering (`/`).
 - 🎯 **Granular Staging & Discarding**: Stage (`s`), unstage (`u`), or discard (`d`) individual hunks, or stage (`S`), unstage (`U`), or discard (`D`) entire files with quick confirmation dialogs.
 - 📋 **AI Context Copying (`c`)**: One-key copy of the active hunk or file diff formatted in Markdown directly to your system clipboard (`arboard`) to easily paste into AI agent prompts.
@@ -22,21 +22,30 @@
 
 ## 🚀 Installation
 
-### From Source (Cargo)
+### Automated Installer (macOS & Linux)
+
+You can install `diffv` with a single command:
 
 ```bash
-# Clone the repository
-git clone https://github.com/felipegodoi/cli-diffviewer.git
-cd cli-diffviewer
+# Via curl
+curl -fsSL https://raw.githubusercontent.com/felipegodoi/cli-diffviewer/main/install.sh | bash
 
-# Build optimized release binary
-cargo build --release
-
-# Install to Cargo bin path (~/.cargo/bin/diffv)
-cargo install --path .
+# Or from a cloned repository
+./install.sh
 ```
 
-Ensure `~/.cargo/bin` is in your `PATH`.
+The installer detects your OS and architecture, compiles an optimized release build, copies the executable to `~/.local/bin/diffv`, and ensures it is available in your `$PATH`.
+
+To uninstall:
+```bash
+./install.sh --uninstall
+```
+
+### Manual Install via Cargo
+
+```bash
+cargo install --git https://github.com/felipegodoi/cli-diffviewer.git
+```
 
 ---
 

@@ -48,7 +48,7 @@ use_nvr = false
 
 #[test]
 fn test_all_themes_loading() {
-    let themes = ["vscode-dark", "tokyonight", "catppuccin", "gruvbox"];
+    let themes = ["auto", "terminal", "vscode-dark", "tokyonight", "catppuccin", "gruvbox"];
     for theme_name in themes {
         let theme = Theme::from_name(theme_name);
         assert!(!theme.name.is_empty());

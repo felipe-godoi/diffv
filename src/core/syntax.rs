@@ -34,7 +34,9 @@ impl SyntaxHighlighter {
             })
             .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
 
-        let theme = &THEME_SET.themes["base16-ocean.dark"];
+        let is_dark = crate::ui::theme::detect_dark_mode();
+        let theme_key = if is_dark { "base16-ocean.dark" } else { "base16-ocean.light" };
+        let theme = THEME_SET.themes.get(theme_key).unwrap_or(&THEME_SET.themes["base16-ocean.dark"]);
         let mut highlighter = HighlightLines::new(syntax, theme);
 
         let mut tokens = Vec::new();

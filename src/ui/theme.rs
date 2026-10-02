@@ -31,13 +31,129 @@ pub struct Theme {
     pub status_u: Color,
 }
 
+pub fn detect_dark_mode() -> bool {
+    // 1. Check COLORFGBG environment variable (format: "fg;bg")
+    if let Ok(colorfgbg) = std::env::var("COLORFGBG") {
+        let parts: Vec<&str> = colorfgbg.split(';').collect();
+        if let Some(bg_str) = parts.last() {
+            if let Ok(bg_num) = bg_str.parse::<u8>() {
+                return bg_num <= 6 || bg_num == 8;
+            }
+        }
+    }
+
+    // 2. On macOS, query AppleInterfaceStyle
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+        {
+            if output.status.success() {
+                let style = String::from_utf8_lossy(&output.stdout);
+                if style.trim().eq_ignore_ascii_case("Dark") {
+                    return true;
+                }
+            } else {
+                return false;
+            }
+        }
+    }
+
+    // 3. On Linux, query GNOME / Freedesktop color-scheme
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(output) = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+            .output()
+        {
+            if output.status.success() {
+                let scheme = String::from_utf8_lossy(&output.stdout);
+                if scheme.contains("prefer-light") {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Default to dark mode
+    true
+}
+
 impl Theme {
     pub fn from_name(name: &str) -> Self {
         match name.to_lowercase().as_str() {
+            "auto" | "terminal" | "default" | "system" => Self::terminal(),
             "tokyonight" | "tokyo-night" => Self::tokyonight(),
             "catppuccin" | "catppuccin-mocha" => Self::catppuccin(),
             "gruvbox" => Self::gruvbox(),
-            _ => Self::vscode_dark(),
+            "vscode-dark" | "vscode" => Self::vscode_dark(),
+            _ => Self::terminal(),
+        }
+    }
+
+    pub fn terminal() -> Self {
+        let is_dark = detect_dark_mode();
+        if is_dark {
+            Self {
+                name: "terminal-dark".to_string(),
+                bg: Color::Reset,
+                fg: Color::Reset,
+                border: Color::DarkGray,
+                header_bg: Color::Reset,
+                header_fg: Color::Cyan,
+                status_bg: Color::Blue,
+                status_fg: Color::Black,
+                key_fg: Color::Yellow,
+                selected_bg: Color::Indexed(237),
+                selected_fg: Color::Reset,
+                line_num_fg: Color::DarkGray,
+                line_num_bg: Color::Reset,
+                add_bg: Color::Rgb(20, 50, 25),
+                add_fg: Color::Green,
+                add_intraline: Color::Rgb(35, 95, 45),
+                del_bg: Color::Rgb(55, 25, 25),
+                del_fg: Color::Red,
+                del_intraline: Color::Rgb(105, 35, 40),
+                virtual_bg: Color::Reset,
+                virtual_fg: Color::DarkGray,
+                ruler_bg: Color::Reset,
+                ruler_viewport: Color::Cyan,
+                status_m: Color::Yellow,
+                status_a: Color::Green,
+                status_d: Color::Red,
+                status_u: Color::Blue,
+            }
+        } else {
+            Self {
+                name: "terminal-light".to_string(),
+                bg: Color::Reset,
+                fg: Color::Reset,
+                border: Color::Gray,
+                header_bg: Color::Reset,
+                header_fg: Color::Blue,
+                status_bg: Color::Blue,
+                status_fg: Color::White,
+                key_fg: Color::Yellow,
+                selected_bg: Color::Indexed(254),
+                selected_fg: Color::Black,
+                line_num_fg: Color::Gray,
+                line_num_bg: Color::Reset,
+                add_bg: Color::Rgb(220, 245, 220),
+                add_fg: Color::Green,
+                add_intraline: Color::Rgb(190, 235, 190),
+                del_bg: Color::Rgb(250, 225, 225),
+                del_fg: Color::Red,
+                del_intraline: Color::Rgb(240, 195, 195),
+                virtual_bg: Color::Reset,
+                virtual_fg: Color::Gray,
+                ruler_bg: Color::Reset,
+                ruler_viewport: Color::Blue,
+                status_m: Color::Yellow,
+                status_a: Color::Green,
+                status_d: Color::Red,
+                status_u: Color::Blue,
+            }
         }
     }
 

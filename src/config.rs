@@ -60,7 +60,7 @@ pub struct EditorConfig {
 }
 
 fn default_theme() -> String {
-    "vscode-dark".to_string()
+    "auto".to_string()
 }
 fn default_view() -> String {
     "side-by-side".to_string()
