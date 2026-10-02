@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::Frame;
 
-use crate::config::Config;
+use crate::config::{Config, UpdateChannel};
 use crate::core::engine::DiffEngine;
 use crate::core::models::{
     CommitEntry, DiffKind, DiffSection, DrawerTab, FileDiff, Language, RepoStats, StageStatus, StashEntry,
@@ -27,6 +27,7 @@ use crate::ui::components::details_popup::{render_details_popup, DetailsContent}
 use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
 use crate::ui::components::ruler::render_ruler;
+use crate::ui::components::settings_popup::{render_settings_popup, SettingItem, SETTING_ITEMS};
 use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
 use crate::ui::components::toast::{render_toast, TOAST_DURATION};
 use crate::ui::components::unified::render_unified;
@@ -177,6 +178,10 @@ pub struct App {
     // Watcher scanning state and animation
     pub watcher_state: WatcherScanState,
     pub spinner_idx: usize,
+
+    // Settings popup state
+    pub show_settings: bool,
+    pub settings_selected_idx: usize,
 }
 
 impl App {
@@ -290,6 +295,8 @@ impl App {
                 WatcherScanState::Idle
             },
             spinner_idx: 0,
+            show_settings: false,
+            settings_selected_idx: 0,
         };
 
         app.reload_diffs_internal(false)?;
@@ -299,6 +306,18 @@ impl App {
                 Language::Pt => "Nenhuma alteração encontrada.",
             };
             app.set_notification(msg);
+        } else if app.config.update.channel == UpdateChannel::Beta {
+            let msg = match app.language {
+                Language::En => "Beta channel active (latest main builds) · Config [C]",
+                Language::Pt => "Canal Beta ativo (builds da main) · Configurações [C]",
+            };
+            app.set_notification(msg);
+        } else if !app.config.update.auto_update {
+            let msg = match app.language {
+                Language::En => "Auto-update disabled · Config [C]",
+                Language::Pt => "Auto-update desativado · Configurações [C]",
+            };
+            app.set_notification(msg);
         }
 
         if history_mode {
@@ -306,6 +325,195 @@ impl App {
         }
 
         Ok(app)
+    }
+
+    pub fn open_settings(&mut self) {
+        self.show_settings = true;
+    }
+
+    pub fn close_settings(&mut self) {
+        self.show_settings = false;
+        self.save_settings();
+    }
+
+    pub fn toggle_settings(&mut self) {
+        if self.show_settings {
+            self.close_settings();
+        } else {
+            self.open_settings();
+        }
+    }
+
+    pub fn save_settings(&mut self) {
+        match self.config.save() {
+            Ok(path) => {
+                let msg = match self.language {
+                    Language::En => format!("Settings saved to {}", path.display()),
+                    Language::Pt => format!("Configurações salvas em {}", path.display()),
+                };
+                self.set_notification(msg);
+            }
+            Err(err) => {
+                let msg = match self.language {
+                    Language::En => format!("Could not save settings: {}", err),
+                    Language::Pt => format!("Erro ao salvar configurações: {}", err),
+                };
+                self.set_notification(msg);
+            }
+        }
+    }
+
+    pub fn toggle_update_channel(&mut self) {
+        self.config.update.channel = match self.config.update.channel {
+            UpdateChannel::Stable => UpdateChannel::Beta,
+            UpdateChannel::Beta => UpdateChannel::Stable,
+        };
+        let _ = self.config.save();
+        let msg = match self.config.update.channel {
+            UpdateChannel::Beta => match self.language {
+                Language::En => "Channel: Beta (opt-in for latest main builds) · Config [C]",
+                Language::Pt => "Canal: Beta (opt-in para últimas builds da main) · Configurações [C]",
+            },
+            UpdateChannel::Stable => match self.language {
+                Language::En => "Channel: Stable (official releases) · Config [C]",
+                Language::Pt => "Canal: Stable (versões estáveis) · Configurações [C]",
+            },
+        };
+        self.set_notification(msg);
+    }
+
+    pub fn cycle_setting(&mut self, forward: bool) {
+        let Some(&item) = SETTING_ITEMS.get(self.settings_selected_idx) else { return; };
+        match item {
+            SettingItem::AutoUpdate => {
+                self.config.update.auto_update = !self.config.update.auto_update;
+                let msg = if self.config.update.auto_update {
+                    match self.language {
+                        Language::En => "Auto-Update: Enabled · Config [C]",
+                        Language::Pt => "Auto-Update: Ativado · Configurações [C]",
+                    }
+                } else {
+                    match self.language {
+                        Language::En => "Auto-Update: Disabled (opt-out) · Config [C]",
+                        Language::Pt => "Auto-Update: Desativado (opt-out) · Configurações [C]",
+                    }
+                };
+                self.set_notification(msg);
+            }
+            SettingItem::UpdateChannel => {
+                self.config.update.channel = match self.config.update.channel {
+                    UpdateChannel::Stable => UpdateChannel::Beta,
+                    UpdateChannel::Beta => UpdateChannel::Stable,
+                };
+                let msg = match self.config.update.channel {
+                    UpdateChannel::Beta => match self.language {
+                        Language::En => "Channel: Beta (opt-in for latest main builds) · Config [C]",
+                        Language::Pt => "Canal: Beta (opt-in para últimas builds da main) · Configurações [C]",
+                    },
+                    UpdateChannel::Stable => match self.language {
+                        Language::En => "Channel: Stable (official releases) · Config [C]",
+                        Language::Pt => "Canal: Stable (versões estáveis) · Configurações [C]",
+                    },
+                };
+                self.set_notification(msg);
+            }
+            SettingItem::Theme => {
+                let themes = ["auto", "terminal", "vscode-dark", "tokyonight", "catppuccin", "gruvbox"];
+                let cur = themes.iter().position(|&t| t == self.config.ui.theme).unwrap_or(0);
+                let next = if forward {
+                    (cur + 1) % themes.len()
+                } else {
+                    (cur + themes.len() - 1) % themes.len()
+                };
+                self.config.ui.theme = themes[next].to_string();
+                self.theme = Theme::from_name(&self.config.ui.theme);
+                let msg = match self.language {
+                    Language::En => format!("Theme: {}", self.config.ui.theme),
+                    Language::Pt => format!("Tema: {}", self.config.ui.theme),
+                };
+                self.set_notification(msg);
+            }
+            SettingItem::DefaultView => {
+                self.config.ui.default_view = if self.config.ui.default_view == "unified" {
+                    "side-by-side".to_string()
+                } else {
+                    "unified".to_string()
+                };
+                let msg = match self.language {
+                    Language::En => format!("Default view: {}", self.config.ui.default_view),
+                    Language::Pt => format!("Visualização padrão: {}", self.config.ui.default_view),
+                };
+                self.set_notification(msg);
+            }
+            SettingItem::LineNumbers => {
+                self.config.ui.show_line_numbers = !self.config.ui.show_line_numbers;
+                let msg = match (self.config.ui.show_line_numbers, self.language) {
+                    (true, Language::En) => "Line numbers: Enabled",
+                    (false, Language::En) => "Line numbers: Disabled",
+                    (true, Language::Pt) => "Números de linha: Ativado",
+                    (false, Language::Pt) => "Números de linha: Desativado",
+                };
+                self.set_notification(msg);
+            }
+            SettingItem::OverviewRuler => {
+                self.config.ui.overview_ruler = !self.config.ui.overview_ruler;
+                let msg = match (self.config.ui.overview_ruler, self.language) {
+                    (true, Language::En) => "Overview ruler: Enabled",
+                    (false, Language::En) => "Overview ruler: Disabled",
+                    (true, Language::Pt) => "Régua lateral: Ativada",
+                    (false, Language::Pt) => "Régua lateral: Desativada",
+                };
+                self.set_notification(msg);
+            }
+            SettingItem::TabWidth => {
+                self.config.ui.tab_width = match self.config.ui.tab_width {
+                    2 => 4,
+                    4 => 8,
+                    _ => 2,
+                };
+                let msg = match self.language {
+                    Language::En => format!("Tab width: {} spaces", self.config.ui.tab_width),
+                    Language::Pt => format!("Largura do tab: {} espaços", self.config.ui.tab_width),
+                };
+                self.set_notification(msg);
+            }
+            SettingItem::DiffAlgorithm => {
+                self.config.diff.algorithm = if self.config.diff.algorithm == "patience" {
+                    "myers".to_string()
+                } else {
+                    "patience".to_string()
+                };
+                let _ = self.reload_diffs_internal(false);
+                let msg = match self.language {
+                    Language::En => format!("Diff algorithm: {}", self.config.diff.algorithm),
+                    Language::Pt => format!("Algoritmo de diff: {}", self.config.diff.algorithm),
+                };
+                self.set_notification(msg);
+            }
+            SettingItem::IgnoreWhitespace => {
+                self.config.diff.ignore_whitespace = !self.config.diff.ignore_whitespace;
+                self.ignore_whitespace = self.config.diff.ignore_whitespace;
+                let _ = self.reload_diffs_internal(false);
+                let msg = match (self.config.diff.ignore_whitespace, self.language) {
+                    (true, Language::En) => "Ignore whitespace: Enabled",
+                    (false, Language::En) => "Ignore whitespace: Disabled",
+                    (true, Language::Pt) => "Ignorar espaços: Ativado",
+                    (false, Language::Pt) => "Ignorar espaços: Desativado",
+                };
+                self.set_notification(msg);
+            }
+            SettingItem::WatcherEnabled => {
+                self.config.watcher.enabled = !self.config.watcher.enabled;
+                let msg = match (self.config.watcher.enabled, self.language) {
+                    (true, Language::En) => "Auto watch mode: Enabled",
+                    (false, Language::En) => "Auto watch mode: Disabled",
+                    (true, Language::Pt) => "Modo watch automático: Ativado",
+                    (false, Language::Pt) => "Modo watch automático: Desativado",
+                };
+                self.set_notification(msg);
+            }
+        }
+        let _ = self.config.save();
     }
 
     pub fn is_watcher_scanning(&self) -> bool {
@@ -1069,6 +1277,32 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
         self.expire_notification();
 
+        // -1. Settings Modal Active
+        if self.show_settings {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q' | 'Q' | 'C') => {
+                    self.close_settings();
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.settings_selected_idx = self.settings_selected_idx.saturating_sub(1);
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.settings_selected_idx = (self.settings_selected_idx + 1).min(SETTING_ITEMS.len().saturating_sub(1));
+                }
+                KeyCode::Char('h') | KeyCode::Left => {
+                    self.cycle_setting(false);
+                }
+                KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
+                    self.cycle_setting(true);
+                }
+                KeyCode::Char('s' | 'S') => {
+                    self.save_settings();
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // 0. Details Modal Active
         if self.show_details_popup {
             match key.code {
@@ -1635,6 +1869,18 @@ impl App {
             KeyCode::Char('?') => {
                 self.show_help = true;
             }
+            KeyCode::Char('C') => {
+                self.open_settings();
+            }
+            KeyCode::Char('B') => {
+                self.toggle_update_channel();
+            }
+            KeyCode::F(10) => {
+                self.open_settings();
+            }
+            KeyCode::Char(',') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_settings();
+            }
 
             KeyCode::Char('r') => {
                 self.wrap_lines = !self.wrap_lines;
@@ -2177,6 +2423,19 @@ impl App {
                 }
                 MouseEventKind::ScrollUp => {
                     self.details_popup_scroll = self.details_popup_scroll.saturating_sub(3);
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if self.show_settings {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => {
+                    self.settings_selected_idx = (self.settings_selected_idx + 1).min(SETTING_ITEMS.len().saturating_sub(1));
+                }
+                MouseEventKind::ScrollUp => {
+                    self.settings_selected_idx = self.settings_selected_idx.saturating_sub(1);
                 }
                 _ => {}
             }
@@ -2992,7 +3251,16 @@ impl App {
         }
 
         // 4. Overlays
-        if self.show_help {
+        if self.show_settings {
+            render_settings_popup(
+                frame,
+                size,
+                &self.config,
+                self.settings_selected_idx,
+                self.language,
+                &self.theme,
+            );
+        } else if self.show_help {
             render_help_popup(frame, size, self.language, &self.theme);
         } else if self.show_details_popup {
             let cur_file = self.current_file();
@@ -3033,7 +3301,7 @@ impl App {
         }
 
         // 5. Drawer Line Overlay (extends row over right border if name exceeds drawer width)
-        if self.show_drawer && !self.show_help && !self.show_worktrees && !self.show_history && !self.show_details_popup && self.confirm_action.is_none() {
+        if self.show_drawer && !self.show_settings && !self.show_help && !self.show_worktrees && !self.show_history && !self.show_details_popup && self.confirm_action.is_none() {
             render_drawer_line_overlay(
                 frame,
                 file_tree_area,

@@ -15,9 +15,14 @@ const VERSION: &str = match option_env!("DIFFV_VERSION") {
     long_about = "diffv is a high-performance terminal diff viewer featuring dual-column side-by-side view, \
     intra-line word/character highlighting, live file watching for AI coding agents, \
     seamless Neovim and Tmux integration, interactive hunk/file staging and discarding, \
-    and support for arbitrary file/dir comparison and stdin pipes."
+    and support for arbitrary file/dir comparison and stdin pipes.",
+    disable_version_flag = true
 )]
 pub struct Cli {
+    /// Print version information
+    #[arg(short = 'v', short_alias = 'V', long = "version", action = clap::ArgAction::Version)]
+    pub version: Option<bool>,
+
     /// Skip the automatic update check on startup
     #[arg(short = 'n', long = "no-update", visible_aliases = ["no-auto-update", "no-up"])]
     pub no_update: bool,

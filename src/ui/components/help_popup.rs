@@ -75,6 +75,8 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                 ("󰒅  Integrations & System", vec![
                     ("e", "Open in Neovim / $EDITOR at cursor line (+line)"),
                     ("c", "Copy hunk to system clipboard as Markdown"),
+                    ("C", "Open Settings (Auto-update, Beta channel, Theme...)"),
+                    ("B", "Toggle Update Channel (Stable ↔ Beta)"),
                     ("L / F2", "Toggle Language (English ↔ Português)"),
                     ("? ", "Show / hide this shortcuts cheat-sheet"),
                     ("Esc", "Return / close modal / cancel (never quits)"),
@@ -129,6 +131,8 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                 ("󰒅  Integrações & Sistema", vec![
                     ("e", "Abrir arquivo no Neovim / $EDITOR na linha (+line)"),
                     ("c", "Copiar hunk em Markdown para clipboard"),
+                    ("C", "Configurações (Auto-update, Canal Beta, Tema...)"),
+                    ("B", "Alternar Canal de Update (Stable ↔ Beta)"),
                     ("L / F2", "Alternar Idioma (English ↔ Português)"),
                     ("? ", "Exibir / ocultar esta ajuda de atalhos"),
                     ("Esc", "Retornar / fechar modal / cancelar (nunca sai)"),

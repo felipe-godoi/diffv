@@ -10,3 +10,4 @@ pub mod unified;
 pub mod worktree_popup;
 pub mod horizontal;
 pub mod style;
+pub mod settings_popup;

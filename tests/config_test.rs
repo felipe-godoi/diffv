@@ -92,3 +92,26 @@ channel = "beta"
     assert!(!cfg_alias.update.auto_update);
     assert_eq!(cfg_alias.update.channel, UpdateChannel::Beta);
 }
+
+#[test]
+fn test_config_save_persistence() {
+    use diffv::config::UpdateChannel;
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.toml");
+
+    let mut cfg = Config::default();
+    cfg.update.auto_update = false;
+    cfg.update.channel = UpdateChannel::Beta;
+    cfg.ui.theme = "tokyonight".to_string();
+    cfg.ui.default_view = "unified".to_string();
+
+    cfg.save_to_path(&config_path).unwrap();
+    assert!(config_path.exists());
+
+    let loaded = Config::load_from_path(&config_path).unwrap();
+    assert!(!loaded.update.auto_update);
+    assert_eq!(loaded.update.channel, UpdateChannel::Beta);
+    assert_eq!(loaded.ui.theme, "tokyonight");
+    assert_eq!(loaded.ui.default_view, "unified");
+}
+

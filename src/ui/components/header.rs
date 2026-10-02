@@ -178,9 +178,16 @@ pub fn render_header(
         Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD),
     ));
 
-    // Right-aligned help hint (only if screen has plenty of width)
-    if width >= 110 {
+    // Right-aligned settings and help hints
+    if width >= 105 {
         spans.push(Span::styled("│ ", Style::default().fg(theme.border)));
+        spans.push(Span::styled("󰒓 ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(
+            match language { Language::En => "Config [C]  ", Language::Pt => "Config [C]  " },
+            Style::default().fg(theme.line_num_fg),
+        ));
+    }
+    if width >= 125 {
         spans.push(Span::styled("󰋖 ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
         spans.push(Span::styled(
             match language { Language::En => "Help [?]  ", Language::Pt => "Ajuda [?]  " },

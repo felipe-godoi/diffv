@@ -33,6 +33,17 @@ enum AppEvent {
 
 fn main() {
     let args = Cli::parse();
+    let is_version = args.targets.len() == 1
+        && (args.targets[0] == "version")
+        && !Path::new(&args.targets[0]).exists();
+
+    if is_version {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        println!("diffv {}", cmd.get_version().unwrap_or(""));
+        std::process::exit(0);
+    }
+
     let is_uninstall = args.uninstall
         || (args.targets.len() == 1
             && (args.targets[0] == "uninstall" || args.targets[0] == "remove")
@@ -89,10 +100,10 @@ fn run(args: Cli) -> Result<()> {
         config.update.channel
     };
 
-    // Explicit update request (e.g. diffv --update, diffv update, dv upgrade)
+    // Explicit update request (e.g. diffv --update, diffv update, dv upgrade, dv up)
     let is_explicit_update = args.update
         || (args.targets.len() == 1
-            && (args.targets[0] == "update" || args.targets[0] == "upgrade")
+            && (args.targets[0] == "update" || args.targets[0] == "upgrade" || args.targets[0] == "up")
             && !Path::new(&args.targets[0]).exists());
 
     if is_explicit_update {
