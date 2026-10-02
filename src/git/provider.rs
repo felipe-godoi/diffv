@@ -1,11 +1,11 @@
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use anyhow::{Context, Result};
 
 use crate::core::aligner::align_hunks_side_by_side;
-use crate::core::models::{DiffSection, 
-    ChangeStats, CommitEntry, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, RepoStats, StageStatus,
-    StashEntry, WorktreeEntry,
+use crate::core::models::{
+    ChangeStats, CommitEntry, DiffKind, DiffLine, DiffSection, FileDiff, FileStatus, Hunk,
+    RepoStats, StageStatus, StashEntry, WorktreeEntry,
 };
 use crate::git::patch::parse_unified_diff;
 
@@ -18,7 +18,8 @@ pub struct GitProvider {
 /// `.git/index` trigger can't loop on diffv's own `git status`.
 fn git_command() -> Command {
     let mut cmd = Command::new("git");
-    cmd.args(["-c", "core.quotePath=false"]).env("GIT_OPTIONAL_LOCKS", "0");
+    cmd.args(["-c", "core.quotePath=false"])
+        .env("GIT_OPTIONAL_LOCKS", "0");
     cmd
 }
 
@@ -92,6 +93,15 @@ impl GitProvider {
             .unwrap_or(false)
     }
 
+    pub fn is_ref(&self, r: &str) -> bool {
+        git_command()
+            .args(["rev-parse", "--verify", &format!("{}^{{commit}}", r)])
+            .current_dir(&self.repo_root)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
     pub fn load_diffs(
         &self,
         target_ref: Option<&str>,
@@ -112,7 +122,10 @@ impl GitProvider {
         } else {
             let mut args = Vec::new();
             match target_ref {
-                Some(r) if self.repo_root.join(r).exists() || Path::new(r).exists() => {
+                Some(r)
+                    if !self.is_ref(r)
+                        && (self.repo_root.join(r).exists() || Path::new(r).exists()) =>
+                {
                     if staged_only {
                         args.push("--cached".to_string());
                     } else if self.has_head() {
@@ -186,8 +199,9 @@ impl GitProvider {
             }
         }
 
-        // Add untracked files if requested and we are in default mode (not comparing commits)
-        if include_untracked && target_ref.is_none() && !staged_only {
+        // Add untracked files if requested and we are in working tree mode (not comparing commit ranges)
+        let is_commit_range = target_ref.is_some_and(|r| r.contains(".."));
+        if include_untracked && !is_commit_range && !staged_only {
             for untracked_path in untracked_paths {
                 // If not already in files
                 if !files.iter().any(|f| f.new_path == untracked_path) {
@@ -217,7 +231,11 @@ impl GitProvider {
             root_dir: self.repo_root.clone(),
             total_additions,
             total_deletions,
-            file_count: files.iter().map(|f| &f.new_path).collect::<std::collections::HashSet<_>>().len(),
+            file_count: files
+                .iter()
+                .map(|f| &f.new_path)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
         };
 
         Ok((files, repo_stats))
@@ -225,7 +243,9 @@ impl GitProvider {
 
     fn run_git_diff(&self, args: &[String], ignore_whitespace: bool) -> Result<Vec<FileDiff>> {
         let mut cmd = git_command();
-        cmd.current_dir(&self.repo_root).arg("diff").arg(self.unified_arg());
+        cmd.current_dir(&self.repo_root)
+            .arg("diff")
+            .arg(self.unified_arg());
         if ignore_whitespace {
             cmd.arg("--ignore-all-space");
         }
@@ -347,9 +367,20 @@ impl GitProvider {
         Ok(entries)
     }
 
-    pub fn load_commit_diff_for_file(&self, commit_hash: &str, file_path: &Path) -> Result<Option<FileDiff>> {
+    pub fn load_commit_diff_for_file(
+        &self,
+        commit_hash: &str,
+        file_path: &Path,
+    ) -> Result<Option<FileDiff>> {
         let output = git_command()
-            .args(["show", "--format=", "-p", &self.unified_arg(), commit_hash, "--"])
+            .args([
+                "show",
+                "--format=",
+                "-p",
+                &self.unified_arg(),
+                commit_hash,
+                "--",
+            ])
             .arg(file_path)
             .current_dir(&self.repo_root)
             .output()?;
@@ -504,7 +535,11 @@ impl GitProvider {
             } else if let Some(h) = line.strip_prefix("HEAD ") {
                 curr_head = h.trim().to_string();
             } else if let Some(b) = line.strip_prefix("branch ") {
-                let b_clean = b.trim().strip_prefix("refs/heads/").unwrap_or(b.trim()).to_string();
+                let b_clean = b
+                    .trim()
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(b.trim())
+                    .to_string();
                 curr_branch = Some(b_clean);
             } else if line == "bare" {
                 is_bare = true;
@@ -548,12 +583,25 @@ impl GitProvider {
                 .unwrap_or(false);
 
             let remote_exists = git_command()
-                .args(["show-ref", "--verify", &format!("refs/remotes/{}", trimmed_branch)])
-                .current_dir(&self.repo_root).output()
-                .map(|o| o.status.success()).unwrap_or(false);
+                .args([
+                    "show-ref",
+                    "--verify",
+                    &format!("refs/remotes/{}", trimmed_branch),
+                ])
+                .current_dir(&self.repo_root)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
             if remote_exists {
-                let local_name = trimmed_branch.split_once('/').map(|(_, name)| name).unwrap_or(trimmed_branch);
-                cmd.arg("--track").arg("-b").arg(local_name).arg(trimmed_path).arg(trimmed_branch);
+                let local_name = trimmed_branch
+                    .split_once('/')
+                    .map(|(_, name)| name)
+                    .unwrap_or(trimmed_branch);
+                cmd.arg("--track")
+                    .arg("-b")
+                    .arg(local_name)
+                    .arg(trimmed_path)
+                    .arg(trimmed_branch);
             } else if branch_exists {
                 cmd.arg(trimmed_path).arg(trimmed_branch);
             } else {
@@ -616,4 +664,3 @@ impl GitProvider {
         branches
     }
 }
-

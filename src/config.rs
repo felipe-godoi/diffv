@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub ui: UiConfig,
@@ -88,7 +87,10 @@ impl std::str::FromStr for UpdateChannel {
             "stable" | "release" => Ok(UpdateChannel::Stable),
             "beta" | "rc" | "preview" => Ok(UpdateChannel::Beta),
             "nightly" | "dev" | "canary" | "main" | "rolling" => Ok(UpdateChannel::Nightly),
-            other => anyhow::bail!("Unknown update channel '{}'. Expected 'stable', 'beta', or 'nightly'.", other),
+            other => anyhow::bail!(
+                "Unknown update channel '{}'. Expected 'stable', 'beta', or 'nightly'.",
+                other
+            ),
         }
     }
 }
@@ -195,7 +197,6 @@ impl Default for UpdateConfig {
     }
 }
 
-
 impl Config {
     pub fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|p| p.join("diffv").join("config.toml"))
@@ -208,7 +209,11 @@ impl Config {
             return Config::default();
         };
         Self::load_from_path(&path).unwrap_or_else(|err| {
-            eprintln!("diffv: ignoring invalid config {}: {:#}", path.display(), err);
+            eprintln!(
+                "diffv: ignoring invalid config {}: {:#}",
+                path.display(),
+                err
+            );
             Config::default()
         })
     }
@@ -221,7 +226,8 @@ impl Config {
 
     /// Persists the configuration into the user's config file (~/.config/diffv/config.toml).
     pub fn save(&self) -> anyhow::Result<PathBuf> {
-        let path = Self::config_path().ok_or_else(|| anyhow::anyhow!("Could not determine user config directory"))?;
+        let path = Self::config_path()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine user config directory"))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

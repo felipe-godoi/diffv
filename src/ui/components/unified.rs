@@ -1,9 +1,9 @@
-use std::path::Path;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+use std::path::Path;
 
 use crate::core::models::{DiffKind, FileDiff};
 use crate::core::syntax::SyntaxHighlighter;
@@ -27,10 +27,36 @@ pub fn render_unified(
     theme: &Theme,
 ) {
     row_map.clear();
-    let help: &[(&str, &str)] = if visual_range.is_some() {
-        &[("s", "stage"), ("u", "unstage"), ("d", "discard"), ("esc", "exit")]
+    let help_items: Vec<(&str, &str)> = if visual_range.is_some() {
+        vec![
+            ("s", "stage"),
+            ("u", "unstage"),
+            ("d", "discard"),
+            ("esc", "exit"),
+        ]
     } else {
-        &[("x", if full_context { "collapse" } else { "full file" }), ("h/l", "scroll"), ("0/$", "start/end"), ("r", "wrap")]
+        let mut items = vec![
+            ("v", "visual"),
+            (
+                "x",
+                if full_context {
+                    "collapse"
+                } else {
+                    "full file"
+                },
+            ),
+        ];
+        if !wrap {
+            items.push(("h/l", "scroll"));
+            items.push(("0/$", "start/end"));
+        }
+        items.push(("r", "wrap"));
+        items
+    };
+    let position = if wrap {
+        String::new()
+    } else {
+        format!("x:{}", scroll_x)
     };
     let block = diff_pane_block(
         file_diff,
@@ -39,8 +65,8 @@ pub fn render_unified(
         is_focused,
         wrap,
         full_context,
-        help,
-        format!("x:{}", scroll_x),
+        &help_items,
+        position,
         area.width,
         theme,
     );
@@ -78,12 +104,13 @@ pub fn render_unified(
     'outer: for hunk in &file.hunks {
         if current_idx >= start_idx && current_idx < end_idx {
             row_map.push(current_idx);
-            rendered_lines.push(Line::from(vec![
-                Span::styled(
-                    format!(" 󰦨 @@ {} @@ ", hunk.header),
-                    Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD),
-                )
-            ]));
+            rendered_lines.push(Line::from(vec![Span::styled(
+                format!(" 󰦨 @@ {} @@ ", hunk.header),
+                Style::default()
+                    .fg(theme.key_fg)
+                    .bg(theme.selected_bg)
+                    .add_modifier(Modifier::BOLD),
+            )]));
         }
         current_idx += 1;
         if current_idx >= end_idx {
@@ -93,7 +120,9 @@ pub fn render_unified(
         for line in &hunk.lines {
             if current_idx >= start_idx && current_idx < end_idx {
                 let is_cursor = current_idx == selected_row;
-                let is_in_visual = visual_range.map(|(s, e)| current_idx >= s && current_idx <= e).unwrap_or(false);
+                let is_in_visual = visual_range
+                    .map(|(s, e)| current_idx >= s && current_idx <= e)
+                    .unwrap_or(false);
 
                 row_map.push(current_idx);
                 rendered_lines.push(render_unified_line(
@@ -119,12 +148,23 @@ pub fn render_unified(
     let mut output = Vec::new();
     for (line, idx) in rendered_lines.into_iter().zip(logical_rows) {
         let gutter = if line.spans.len() >= 3 { 3 } else { 0 };
-        let lines = if wrap { crate::ui::components::horizontal::wrap_line(line, gutter, inner_area.width as usize) }
-            else { vec![crate::ui::components::horizontal::scroll_line(line, 3, scroll_x)] };
-        let skip = if wrap && idx == start_idx { wrap_skip.min(lines.len().saturating_sub(1)) } else { 0 };
+        let lines = if wrap {
+            crate::ui::components::horizontal::wrap_line(line, gutter, inner_area.width as usize)
+        } else {
+            vec![crate::ui::components::horizontal::scroll_line(
+                line, 3, scroll_x,
+            )]
+        };
+        let skip = if wrap && idx == start_idx {
+            wrap_skip.min(lines.len().saturating_sub(1))
+        } else {
+            0
+        };
         row_map.extend(std::iter::repeat_n(idx, lines.len() - skip));
         output.extend(lines.into_iter().skip(skip));
-        if output.len() >= max_lines { break; }
+        if output.len() >= max_lines {
+            break;
+        }
     }
     let paragraph = Paragraph::new(output);
     frame.render_widget(paragraph, inner_area);
@@ -151,19 +191,40 @@ fn render_unified_line<'a>(
     };
 
     let indicator = if is_cursor && is_in_visual {
-        Span::styled("█", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "█",
+            Style::default()
+                .fg(theme.selected_fg)
+                .add_modifier(Modifier::BOLD),
+        )
     } else if is_cursor {
-        Span::styled("▎", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "▎",
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
+        )
     } else if is_in_visual {
-        Span::styled("▌", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "▌",
+            Style::default()
+                .fg(theme.selected_fg)
+                .add_modifier(Modifier::BOLD),
+        )
     } else {
         Span::styled(" ", Style::default().fg(theme.line_num_fg))
     };
 
     let num_style = if is_in_visual {
-        Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.selected_fg)
+            .bg(theme.selected_bg)
+            .add_modifier(Modifier::BOLD)
     } else if is_cursor {
-        Style::default().fg(theme.key_fg).bg(theme.line_num_bg).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.key_fg)
+            .bg(theme.line_num_bg)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.line_num_fg).bg(theme.line_num_bg)
     };
@@ -179,7 +240,10 @@ fn render_unified_line<'a>(
             };
 
             let mut spans = vec![indicator, num_span];
-            spans.push(Span::styled("  ", Style::default().fg(theme.fg).bg(line_bg)));
+            spans.push(Span::styled(
+                "  ",
+                Style::default().fg(theme.fg).bg(line_bg),
+            ));
 
             if syntax_enabled {
                 let tokens = SyntaxHighlighter::highlight_line(path, content);
@@ -187,13 +251,22 @@ fn render_unified_line<'a>(
                     for token in tokens {
                         let text = &content[token.start..token.end.min(content.len())];
                         let fg = Color::Rgb(token.fg_color.0, token.fg_color.1, token.fg_color.2);
-                        spans.push(Span::styled(text.to_string(), Style::default().fg(fg).bg(line_bg)));
+                        spans.push(Span::styled(
+                            text.to_string(),
+                            Style::default().fg(fg).bg(line_bg),
+                        ));
                     }
                 } else {
-                    spans.push(Span::styled(content, Style::default().fg(theme.fg).bg(line_bg)));
+                    spans.push(Span::styled(
+                        content,
+                        Style::default().fg(theme.fg).bg(line_bg),
+                    ));
                 }
             } else {
-                spans.push(Span::styled(content, Style::default().fg(theme.fg).bg(line_bg)));
+                spans.push(Span::styled(
+                    content,
+                    Style::default().fg(theme.fg).bg(line_bg),
+                ));
             }
 
             Line::from(spans)
@@ -207,7 +280,10 @@ fn render_unified_line<'a>(
             let num_span_del = Span::styled(
                 format!("{} {} │ ", old_str, new_str),
                 if is_in_visual {
-                    Style::default().fg(theme.selected_fg).bg(num_bg).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(theme.selected_fg)
+                        .bg(num_bg)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     num_style
                 },
@@ -215,7 +291,13 @@ fn render_unified_line<'a>(
             let spans = vec![
                 indicator,
                 num_span_del,
-                Span::styled("- ", Style::default().fg(theme.del_fg).bg(bg_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "- ",
+                    Style::default()
+                        .fg(theme.del_fg)
+                        .bg(bg_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(content, Style::default().fg(theme.del_fg).bg(bg_color)),
             ];
             Line::from(spans)
@@ -229,7 +311,10 @@ fn render_unified_line<'a>(
             let num_span_add = Span::styled(
                 format!("{} {} │ ", old_str, new_str),
                 if is_in_visual {
-                    Style::default().fg(theme.selected_fg).bg(num_bg).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(theme.selected_fg)
+                        .bg(num_bg)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     num_style
                 },
@@ -237,7 +322,13 @@ fn render_unified_line<'a>(
             let spans = vec![
                 indicator,
                 num_span_add,
-                Span::styled("+ ", Style::default().fg(theme.add_fg).bg(bg_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "+ ",
+                    Style::default()
+                        .fg(theme.add_fg)
+                        .bg(bg_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(content, Style::default().fg(theme.add_fg).bg(bg_color)),
             ];
             Line::from(spans)

@@ -1,6 +1,6 @@
-use std::fs;
 use diffv::core::engine::DiffEngine;
 use diffv::core::models::FileStatus;
+use std::fs;
 
 #[test]
 fn test_compare_files() {

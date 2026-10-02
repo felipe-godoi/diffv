@@ -1,9 +1,9 @@
+use once_cell::sync::Lazy;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Color as SynColor, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
@@ -37,10 +37,7 @@ fn compute_cache_key(path: &Path, line: &str) -> (u64, u64) {
 }
 
 impl SyntaxHighlighter {
-    pub fn highlight_line(
-        path: &Path,
-        line: &str,
-    ) -> Vec<SyntaxToken> {
+    pub fn highlight_line(path: &Path, line: &str) -> Vec<SyntaxToken> {
         if line.is_empty() {
             return Vec::new();
         }
@@ -67,8 +64,15 @@ impl SyntaxHighlighter {
             .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
 
         let is_dark = crate::ui::theme::detect_dark_mode();
-        let theme_key = if is_dark { "base16-ocean.dark" } else { "base16-ocean.light" };
-        let theme = THEME_SET.themes.get(theme_key).unwrap_or(&THEME_SET.themes["base16-ocean.dark"]);
+        let theme_key = if is_dark {
+            "base16-ocean.dark"
+        } else {
+            "base16-ocean.light"
+        };
+        let theme = THEME_SET
+            .themes
+            .get(theme_key)
+            .unwrap_or(&THEME_SET.themes["base16-ocean.dark"]);
         let mut highlighter = HighlightLines::new(syntax, theme);
 
         let mut tokens = Vec::new();

@@ -20,15 +20,16 @@ pub fn render_ruler(
     }
 
     let ruler_height = area.height as usize;
-    let total_rows = file_diff
-        .map(|f| f.aligned_rows.len())
-        .unwrap_or(0);
+    let total_rows = file_diff.map(|f| f.aligned_rows.len()).unwrap_or(0);
 
     let mut lines = Vec::with_capacity(ruler_height);
 
     if total_rows == 0 {
         for _ in 0..ruler_height {
-            lines.push(Line::from(Span::styled(" ", Style::default().bg(theme.ruler_bg))));
+            lines.push(Line::from(Span::styled(
+                " ",
+                Style::default().bg(theme.ruler_bg),
+            )));
         }
         frame.render_widget(Paragraph::new(lines), area);
         return;
@@ -64,7 +65,13 @@ pub fn render_ruler(
             }
         }
 
-        let symbol = if is_in_viewport { "█" } else if has_add || has_del { "■" } else { " " };
+        let symbol = if is_in_viewport {
+            "█"
+        } else if has_add || has_del {
+            "■"
+        } else {
+            " "
+        };
         let char_style = match (has_add, has_del) {
             (true, true) => Style::default().fg(theme.key_fg).bg(theme.ruler_bg),
             (true, false) => Style::default().fg(theme.add_fg).bg(theme.ruler_bg),

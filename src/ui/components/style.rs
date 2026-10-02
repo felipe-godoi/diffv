@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Clear, Padding};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -37,7 +37,10 @@ pub fn pill_title(icon: &str, title: &str, accent: Color, theme: &Theme) -> Line
         Span::raw(" "),
         Span::styled(
             format!(" {} {} ", icon, title),
-            Style::default().fg(theme.text_on(accent)).bg(accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.text_on(accent))
+                .bg(accent)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
     ])
@@ -55,7 +58,14 @@ pub fn card_block(title: Line<'static>, accent: Color, theme: &Theme) -> Block<'
 
 /// Modal card: dims the backdrop, casts a drop shadow and draws a rounded,
 /// padded block with a pill title. Returns the inner content area.
-pub fn render_card(frame: &mut Frame, area: Rect, icon: &str, title: &str, accent: Color, theme: &Theme) -> Rect {
+pub fn render_card(
+    frame: &mut Frame,
+    area: Rect,
+    icon: &str,
+    title: &str,
+    accent: Color,
+    theme: &Theme,
+) -> Rect {
     let full = frame.area();
     dim_backdrop(frame.buffer_mut(), full, area);
     render_shadow(frame.buffer_mut(), full, area, theme);
@@ -78,11 +88,20 @@ fn dim_backdrop(buf: &mut Buffer, full: Rect, popup: Rect) {
 }
 
 pub fn shadow_color(theme: &Theme) -> Color {
-    if theme.is_light() { Color::Rgb(188, 192, 202) } else { Color::Rgb(8, 8, 12) }
+    if theme.is_light() {
+        Color::Rgb(188, 192, 202)
+    } else {
+        Color::Rgb(8, 8, 12)
+    }
 }
 
 pub fn render_shadow(buf: &mut Buffer, full: Rect, popup: Rect, theme: &Theme) {
-    let shadow = Rect { x: popup.x.saturating_add(2), y: popup.y.saturating_add(1), ..popup }.intersection(full);
+    let shadow = Rect {
+        x: popup.x.saturating_add(2),
+        y: popup.y.saturating_add(1),
+        ..popup
+    }
+    .intersection(full);
     let color = shadow_color(theme);
     for y in shadow.top()..shadow.bottom() {
         for x in shadow.left()..shadow.right() {
@@ -96,7 +115,9 @@ pub fn render_shadow(buf: &mut Buffer, full: Rect, popup: Rect, theme: &Theme) {
 /// `bubbles/help`-style short help: `key desc • key desc`, truncated with `…`
 /// when the line would overflow `width`.
 pub fn help_line(items: &[(&str, &str)], width: u16, theme: &Theme) -> Line<'static> {
-    let key = Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD);
+    let key = Style::default()
+        .fg(theme.key_fg)
+        .add_modifier(Modifier::BOLD);
     let desc = Style::default().fg(theme.line_num_fg);
     let sep = Style::default().fg(theme.border);
     let budget = width as usize;
@@ -147,11 +168,24 @@ pub fn diff_pane_block(
             let mut line = if focused {
                 pill_title("󰈚", &diff.display_path(), accent, theme)
             } else {
-                Line::from(Span::styled(format!(" 󰈚 {} ", diff.display_path()), muted.add_modifier(Modifier::BOLD)))
+                Line::from(Span::styled(
+                    format!(" 󰈚 {} ", diff.display_path()),
+                    muted.add_modifier(Modifier::BOLD),
+                ))
             };
-            line.spans.push(Span::styled(format!("+{}", diff.stats.additions), Style::default().fg(theme.status_a).add_modifier(Modifier::BOLD)));
+            line.spans.push(Span::styled(
+                format!("+{}", diff.stats.additions),
+                Style::default()
+                    .fg(theme.status_a)
+                    .add_modifier(Modifier::BOLD),
+            ));
             line.spans.push(Span::raw(" "));
-            line.spans.push(Span::styled(format!("-{} ", diff.stats.deletions), Style::default().fg(theme.status_d).add_modifier(Modifier::BOLD)));
+            line.spans.push(Span::styled(
+                format!("-{} ", diff.stats.deletions),
+                Style::default()
+                    .fg(theme.status_d)
+                    .add_modifier(Modifier::BOLD),
+            ));
             line
         }
         (None, None) => Line::from(Span::styled(" Diff View ", muted)),
@@ -162,7 +196,12 @@ pub fn diff_pane_block(
         Span::styled("wrap off", muted)
     };
     let context_span = if full_context {
-        Span::styled("full file", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
+        Span::styled(
+            "full file",
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
+        )
     } else {
         Span::styled("hunks", muted)
     };
@@ -174,16 +213,23 @@ pub fn diff_pane_block(
         Span::styled(" • ", Style::default().fg(theme.border)),
         wrap_span,
         Span::raw(" "),
-    ]).right_aligned();
-    let position_width = position.width() as u16 + 2;
+    ])
+    .right_aligned();
+    let position_width = if position.is_empty() {
+        0
+    } else {
+        position.width() as u16 + 2
+    };
     let mut help = help_line(help, width.saturating_sub(position_width + 6), theme);
     help.spans.insert(0, Span::raw(" "));
     help.spans.push(Span::raw(" "));
-    Block::default()
-        .title(title)
-        .title(tag)
-        .title_bottom(help)
-        .title_bottom(Line::from(Span::styled(format!(" {} ", position), muted)).right_aligned())
+    let mut block = Block::default().title(title).title(tag).title_bottom(help);
+    if !position.is_empty() {
+        block = block.title_bottom(
+            Line::from(Span::styled(format!(" {} ", position), muted)).right_aligned(),
+        );
+    }
+    block
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(border)
@@ -198,9 +244,17 @@ mod tests {
     fn help_line_truncates_with_ellipsis() {
         let theme = Theme::catppuccin();
         let items = [("enter", "open"), ("j/k", "navigate"), ("esc", "close")];
-        let full: String = help_line(&items, 80, &theme).spans.iter().map(|s| s.content.to_string()).collect();
+        let full: String = help_line(&items, 80, &theme)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert_eq!(full, "enter open • j/k navigate • esc close");
-        let short: String = help_line(&items, 20, &theme).spans.iter().map(|s| s.content.to_string()).collect();
+        let short: String = help_line(&items, 20, &theme)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert_eq!(short, "enter open …");
     }
 
@@ -210,7 +264,11 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         let theme = Theme::tokyonight();
         let popup = Rect::new(5, 2, 20, 6);
-        terminal.draw(|frame| { render_card(frame, popup, "*", "Title", theme.header_fg, &theme); }).unwrap();
+        terminal
+            .draw(|frame| {
+                render_card(frame, popup, "*", "Title", theme.header_fg, &theme);
+            })
+            .unwrap();
         let buf = terminal.backend().buffer();
         assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
         assert_eq!(buf[(26, 5)].bg, shadow_color(&theme));

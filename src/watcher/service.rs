@@ -126,7 +126,9 @@ fn setup_watches(watch_path: &Path, watcher: &mut dyn Watcher, tx: &Sender<Watch
             let _ = watcher.watch(result.path(), RecursiveMode::NonRecursive);
             dir_count += 1;
             if dir_count % 35 == 0 {
-                let _ = tx.send(WatchEvent::Scanning { scanned_dirs: dir_count });
+                let _ = tx.send(WatchEvent::Scanning {
+                    scanned_dirs: dir_count,
+                });
             }
         }
     }
@@ -158,7 +160,9 @@ fn setup_watches(watch_path: &Path, watcher: &mut dyn Watcher, tx: &Sender<Watch
         }
     }
 
-    let _ = tx.send(WatchEvent::Ready { total_dirs: dir_count });
+    let _ = tx.send(WatchEvent::Ready {
+        total_dirs: dir_count,
+    });
 }
 
 /// Index/HEAD/ref updates (staging or committing elsewhere) count; other
@@ -168,7 +172,10 @@ fn is_relevant<'a>(repo_root: &Path, paths: impl Iterator<Item = &'a Path>) -> b
     for path in paths {
         let in_git_dir = path.components().any(|c| c.as_os_str() == ".git");
         if in_git_dir {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
             let path_str = path.to_string_lossy();
             if name == "index" || name == "HEAD" || path_str.contains("/.git/refs/") {
                 return true;
@@ -201,8 +208,14 @@ fn all_ignored(repo_root: &Path, paths: &[PathBuf]) -> bool {
             let _ = stdin.write_all(b"\0");
         }
     }
-    let Ok(output) = child.wait_with_output() else { return false; };
-    let ignored = output.stdout.split(|&b| b == 0).filter(|s| !s.is_empty()).count();
+    let Ok(output) = child.wait_with_output() else {
+        return false;
+    };
+    let ignored = output
+        .stdout
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .count();
     ignored == paths.len()
 }
 
@@ -214,15 +227,32 @@ mod tests {
     fn ignores_build_output_and_git_internals_but_not_index() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let git = |args: &[&str]| assert!(Command::new("git").args(args).current_dir(root).output().unwrap().status.success());
+        let git = |args: &[&str]| {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap()
+                .status
+                .success())
+        };
         git(&["init"]);
         std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
         let target = root.join("target/debug/x");
         let source = root.join("src.rs");
         assert!(!is_relevant(root, [target.as_path()].into_iter()));
-        assert!(!is_relevant(root, [root.join(".git/objects/ab").as_path()].into_iter()));
-        assert!(is_relevant(root, [root.join(".git/index").as_path()].into_iter()));
-        assert!(is_relevant(root, [target.as_path(), source.as_path()].into_iter()));
+        assert!(!is_relevant(
+            root,
+            [root.join(".git/objects/ab").as_path()].into_iter()
+        ));
+        assert!(is_relevant(
+            root,
+            [root.join(".git/index").as_path()].into_iter()
+        ));
+        assert!(is_relevant(
+            root,
+            [target.as_path(), source.as_path()].into_iter()
+        ));
     }
 
     #[test]
@@ -243,7 +273,10 @@ mod tests {
         let _service = WatchService::start(dir.path(), 100, tx).unwrap();
 
         let first = rx.recv_timeout(Duration::from_secs(2));
-        assert!(matches!(first, Ok(WatchEvent::Scanning { scanned_dirs: 0 })));
+        assert!(matches!(
+            first,
+            Ok(WatchEvent::Scanning { scanned_dirs: 0 })
+        ));
 
         let second = rx.recv_timeout(Duration::from_secs(2));
         assert!(matches!(second, Ok(WatchEvent::Ready { .. })));

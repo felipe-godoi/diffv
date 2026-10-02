@@ -1,8 +1,8 @@
+use anyhow::{Context, Result};
+use similar::{Algorithm, ChangeTag, TextDiff};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
-use similar::{Algorithm, ChangeTag, TextDiff};
 use walkdir::WalkDir;
 
 use crate::core::aligner::align_hunks_side_by_side;
@@ -90,15 +90,14 @@ impl DiffEngine {
                 let content_b = fs::read_to_string(&file_b);
 
                 match (content_a, content_b) {
-                    (Ok(ca), Ok(cb))
-                        if ca != cb => {
-                            let mut diff = self.diff_texts(&ca, &cb, Some(&file_a), &file_b);
-                            diff.new_path = rel.clone();
-                            diff.old_path = Some(rel.clone());
-                            diff.status = FileStatus::Modified;
-                            diff.aligned_rows = align_hunks_side_by_side(&diff.hunks);
-                            results.push(diff);
-                        }
+                    (Ok(ca), Ok(cb)) if ca != cb => {
+                        let mut diff = self.diff_texts(&ca, &cb, Some(&file_a), &file_b);
+                        diff.new_path = rel.clone();
+                        diff.old_path = Some(rel.clone());
+                        diff.status = FileStatus::Modified;
+                        diff.aligned_rows = align_hunks_side_by_side(&diff.hunks);
+                        results.push(diff);
+                    }
                     _ => {
                         // Binary or read error
                     }
@@ -187,7 +186,10 @@ impl DiffEngine {
 
             for op in &group {
                 for change in text_diff.iter_changes(op) {
-                    let text = change.value().trim_end_matches(&['\r', '\n'][..]).to_string();
+                    let text = change
+                        .value()
+                        .trim_end_matches(&['\r', '\n'][..])
+                        .to_string();
                     match change.tag() {
                         ChangeTag::Equal => {
                             hunk_lines.push(DiffLine {

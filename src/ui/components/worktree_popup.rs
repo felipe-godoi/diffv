@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::core::models::{Language, WorktreeEntry};
@@ -22,13 +22,24 @@ pub struct WorktreeCreationState {
 
 impl WorktreeCreationState {
     pub fn new(base: String, branches: Vec<String>) -> Self {
-        Self { path_input: base.clone(), branch_input: String::new(), active_field: 1,
-            error_msg: None, base, branches, selected_candidate: 0, path_manual: false }
+        Self {
+            path_input: base.clone(),
+            branch_input: String::new(),
+            active_field: 1,
+            error_msg: None,
+            base,
+            branches,
+            selected_candidate: 0,
+            path_manual: false,
+        }
     }
 
     pub fn candidates(&self) -> Vec<&str> {
-        self.branches.iter().filter(|b| b.to_lowercase().contains(&self.branch_input.to_lowercase()))
-            .map(String::as_str).collect()
+        self.branches
+            .iter()
+            .filter(|b| b.to_lowercase().contains(&self.branch_input.to_lowercase()))
+            .map(String::as_str)
+            .collect()
     }
 
     pub fn update_branch(&mut self) {
@@ -48,142 +59,315 @@ impl WorktreeCreationState {
 }
 
 impl Default for WorktreeCreationState {
-    fn default() -> Self { Self::new(String::new(), Vec::new()) }
+    fn default() -> Self {
+        Self::new(String::new(), Vec::new())
+    }
+}
+
+pub fn filtered_worktrees<'a>(
+    worktrees: &'a [WorktreeEntry],
+    filter: &str,
+) -> Vec<(usize, &'a WorktreeEntry)> {
+    let q = filter.trim().to_lowercase();
+    worktrees
+        .iter()
+        .enumerate()
+        .filter(|(_, wt)| {
+            if q.is_empty() {
+                return true;
+            }
+            let branch_matches = wt
+                .branch
+                .as_deref()
+                .map(|b| b.to_lowercase().contains(&q))
+                .unwrap_or(false);
+            let path_matches = wt.path.to_string_lossy().to_lowercase().contains(&q);
+            branch_matches || path_matches
+        })
+        .collect()
 }
 
 pub fn render_worktree_popup(
     frame: &mut Frame,
     area: Rect,
     worktrees: &[WorktreeEntry],
+    filter: &str,
     selected_idx: usize,
     scroll_offset: usize,
     creation: Option<&WorktreeCreationState>,
     language: Language,
     theme: &Theme,
 ) {
-    let popup_area = centered_rect(82, 68, area);
+    let popup_area = centered_rect(82, 74, area);
 
     if let Some(create_state) = creation {
         render_creation_form(frame, popup_area, create_state, language, theme);
         return;
     }
 
+    let filtered = filtered_worktrees(worktrees, filter);
+
     let title = match language {
-        Language::En => format!("Git Worktrees · {}", worktrees.len()),
-        Language::Pt => format!("Worktrees Git · {}", worktrees.len()),
+        Language::En => {
+            if filter.is_empty() {
+                format!("Git Worktrees · {}", worktrees.len())
+            } else {
+                format!("Git Worktrees · {} / {}", filtered.len(), worktrees.len())
+            }
+        }
+        Language::Pt => {
+            if filter.is_empty() {
+                format!("Worktrees Git · {}", worktrees.len())
+            } else {
+                format!("Worktrees Git · {} / {}", filtered.len(), worktrees.len())
+            }
+        }
     };
 
     let inner = render_card(frame, popup_area, "󰹹", &title, theme.header_fg, theme);
-
-    if worktrees.is_empty() {
-        let msg = match language {
-            Language::En => "  No git worktrees found. Press 'a' or 'n' to create one.",
-            Language::Pt => "  Nenhuma worktree git encontrada. Pressione 'a' ou 'n' para criar uma.",
-        };
-        let p = Paragraph::new(msg).style(Style::default().fg(theme.line_num_fg));
-        frame.render_widget(p, inner);
+    if inner.height < 6 {
         return;
     }
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(3), // Search box
             Constraint::Min(4),    // Worktree list
             Constraint::Length(3), // Full path detail overlay box
             Constraint::Length(1), // Footer shortcuts
         ])
         .split(inner);
 
-    let list_area = chunks[0];
-    let max_rows = list_area.height as usize;
-    let start_idx = scroll_offset;
-    let end_idx = (scroll_offset + max_rows).min(worktrees.len());
+    let search_area = chunks[0];
+    let list_area = chunks[1];
+    let detail_area = chunks[2];
+    let footer_area = chunks[3];
 
-    let mut lines = Vec::new();
+    // 1. Search Box
+    let search_title = match language {
+        Language::En => "  Search / Filter Branch ",
+        Language::Pt => "  Buscar / Filtrar Branch ",
+    };
+    let placeholder = match language {
+        Language::En => "Type to filter by branch name or path...",
+        Language::Pt => "Digite para filtrar por nome da branch ou pasta...",
+    };
 
-    for idx in start_idx..end_idx {
-        let wt = &worktrees[idx];
-        let is_selected = idx == selected_idx;
+    let search_block = Block::default()
+        .title(Span::styled(
+            search_title,
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.header_fg));
 
-        let base_style = if is_selected {
-            Style::default().bg(theme.selected_bg).fg(theme.selected_fg)
-        } else {
-            Style::default().bg(theme.bg).fg(theme.fg)
-        };
+    let search_text = if filter.is_empty() {
+        Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(
+                placeholder,
+                Style::default()
+                    .fg(theme.line_num_fg)
+                    .add_modifier(Modifier::DIM),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(
+                filter,
+                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("█", Style::default().fg(theme.key_fg)),
+        ])
+    };
 
-        let cursor_span = if is_selected {
-            Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD))
-        } else {
-            Span::styled(" ", base_style)
-        };
+    frame.render_widget(Paragraph::new(search_text).block(search_block), search_area);
 
-        let current_pill = if wt.is_current {
-            match language {
-                Language::En => Span::styled(" [ACTIVE] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
-                Language::Pt => Span::styled(" [ATIVO] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
+    // 2. Worktree list
+    if filtered.is_empty() {
+        let msg = match language {
+            Language::En => {
+                if filter.is_empty() {
+                    "  No git worktrees found. Press Ctrl+n to create one.".to_string()
+                } else {
+                    format!(
+                        "  No worktrees match \"{}\". Press Ctrl+n to create a new one.",
+                        filter
+                    )
+                }
             }
-        } else {
-            Span::styled("          ", base_style)
+            Language::Pt => {
+                if filter.is_empty() {
+                    "  Nenhuma worktree git encontrada. Pressione Ctrl+n para criar uma."
+                        .to_string()
+                } else {
+                    format!("  Nenhuma worktree corresponde a \"{}\". Pressione Ctrl+n para criar uma nova.", filter)
+                }
+            }
         };
+        let p = Paragraph::new(msg).style(Style::default().fg(theme.line_num_fg));
+        frame.render_widget(p, list_area);
+    } else {
+        let max_rows = list_area.height as usize;
+        let start_idx = scroll_offset;
+        let end_idx = (scroll_offset + max_rows).min(filtered.len());
 
-        let branch_name = wt.branch.as_deref().unwrap_or("detached");
-        let path_str = wt.path.display().to_string();
+        let mut lines = Vec::new();
 
-        let branch_pad = if list_area.width < 55 { 12 } else { 20 };
-        let branch_truncated = if branch_name.len() > branch_pad {
-            format!("{}…", branch_name.chars().take(branch_pad.saturating_sub(1)).collect::<String>())
-        } else {
-            branch_name.to_string()
-        };
+        for idx in start_idx..end_idx {
+            let (_, wt) = filtered[idx];
+            let is_selected = idx == selected_idx;
 
-        let line = Line::from(vec![
-            cursor_span,
-            Span::raw(" "),
-            current_pill,
-            Span::raw(" "),
-            Span::styled("󰊢 ", Style::default().fg(theme.key_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })),
-            Span::styled(
-                format!("{:<width$} ", branch_truncated, width = branch_pad),
-                if is_selected { base_style.add_modifier(Modifier::BOLD) } else { base_style },
-            ),
-            Span::styled(
-                path_str,
-                Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }),
-            ),
-        ]);
+            let base_style = if is_selected {
+                Style::default().bg(theme.selected_bg).fg(theme.selected_fg)
+            } else {
+                Style::default().bg(theme.bg).fg(theme.fg)
+            };
 
-        lines.push(line);
+            let cursor_span = if is_selected {
+                Span::styled(
+                    "▎",
+                    Style::default()
+                        .fg(theme.key_fg)
+                        .bg(theme.selected_bg)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled(" ", base_style)
+            };
+
+            let current_pill = if wt.is_current {
+                match language {
+                    Language::En => Span::styled(
+                        " [ACTIVE] ",
+                        Style::default()
+                            .fg(theme.text_on(theme.status_a))
+                            .bg(theme.status_a)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Language::Pt => Span::styled(
+                        " [ATIVO] ",
+                        Style::default()
+                            .fg(theme.text_on(theme.status_a))
+                            .bg(theme.status_a)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                }
+            } else {
+                Span::styled("          ", base_style)
+            };
+
+            let branch_name = wt.branch.as_deref().unwrap_or("detached");
+            let path_str = wt.path.display().to_string();
+
+            let branch_pad = if list_area.width < 55 { 12 } else { 20 };
+            let branch_truncated = if branch_name.len() > branch_pad {
+                format!(
+                    "{}…",
+                    branch_name
+                        .chars()
+                        .take(branch_pad.saturating_sub(1))
+                        .collect::<String>()
+                )
+            } else {
+                branch_name.to_string()
+            };
+
+            let line = Line::from(vec![
+                cursor_span,
+                Span::raw(" "),
+                current_pill,
+                Span::raw(" "),
+                Span::styled(
+                    "󰊢 ",
+                    Style::default().fg(theme.key_fg).bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    }),
+                ),
+                Span::styled(
+                    format!("{:<width$} ", branch_truncated, width = branch_pad),
+                    if is_selected {
+                        base_style.add_modifier(Modifier::BOLD)
+                    } else {
+                        base_style
+                    },
+                ),
+                Span::styled(
+                    path_str,
+                    Style::default().fg(theme.line_num_fg).bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    }),
+                ),
+            ]);
+
+            lines.push(line);
+        }
+
+        frame.render_widget(Paragraph::new(lines), list_area);
     }
 
-    frame.render_widget(Paragraph::new(lines), list_area);
-
-    // Full detail box of selected worktree (never truncated)
-    if let Some(selected_wt) = worktrees.get(selected_idx) {
+    // 3. Full detail box of selected worktree (never truncated)
+    if let Some((_, selected_wt)) = filtered.get(selected_idx) {
         let detail_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.bg));
 
-        let detail_inner = detail_block.inner(chunks[1]);
-        frame.render_widget(detail_block, chunks[1]);
+        let detail_inner = detail_block.inner(detail_area);
+        frame.render_widget(detail_block, detail_area);
 
         let branch_label = selected_wt.branch.as_deref().unwrap_or("detached");
-        let head_short = if selected_wt.head.len() >= 7 { &selected_wt.head[..7] } else { &selected_wt.head };
+        let head_short = if selected_wt.head.len() >= 7 {
+            &selected_wt.head[..7]
+        } else {
+            &selected_wt.head
+        };
         let full_path_line = Line::from(vec![
-            Span::styled(" 󰉖 Path: ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(selected_wt.path.display().to_string(), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  ·  󰊢 {}  ·   {}", branch_label, head_short), Style::default().fg(theme.line_num_fg)),
+            Span::styled(
+                " 󰉖 Path: ",
+                Style::default()
+                    .fg(theme.key_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                selected_wt.path.display().to_string(),
+                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  ·  󰊢 {}  ·   {}", branch_label, head_short),
+                Style::default().fg(theme.line_num_fg),
+            ),
         ]);
         frame.render_widget(Paragraph::new(full_path_line), detail_inner);
     }
 
+    // 4. Footer shortcuts
     let footer_items: &[(&str, &str)] = match language {
-        Language::En => &[("enter", "switch"), ("a / n", "new worktree"), ("esc / W", "close"), ("j/k", "navigate")],
-        Language::Pt => &[("enter", "alternar"), ("a / n", "nova worktree"), ("esc / W", "fechar"), ("j/k", "navegar")],
+        Language::En => &[
+            ("enter", "switch"),
+            ("ctrl+n / ctrl+a", "new worktree"),
+            ("esc", "close"),
+            ("↑/↓ · ctrl+j/k", "navigate"),
+        ],
+        Language::Pt => &[
+            ("enter", "alternar"),
+            ("ctrl+n / ctrl+a", "nova worktree"),
+            ("esc", "fechar"),
+            ("↑/↓ · ctrl+j/k", "navegar"),
+        ],
     };
-    let footer_line = help_line(footer_items, chunks[2].width, theme);
-    frame.render_widget(Paragraph::new(footer_line), chunks[2]);
+    let footer_line = help_line(footer_items, footer_area.width, theme);
+    frame.render_widget(Paragraph::new(footer_line), footer_area);
 }
 
 fn render_creation_form(
@@ -206,7 +390,7 @@ fn render_creation_form(
             Constraint::Length(2), // Help text
             Constraint::Length(3), // Path Input box
             Constraint::Length(3), // Branch Input box
-            Constraint::Min(1), // Branch suggestions
+            Constraint::Min(1),    // Branch suggestions
             Constraint::Length(2), // Error message if any
             Constraint::Length(1), // Footer shortcuts
         ])
@@ -216,11 +400,16 @@ fn render_creation_form(
         Language::En => "Choose an existing branch or type a new name.",
         Language::Pt => "Escolha uma branch existente ou digite um novo nome.",
     };
-    frame.render_widget(Paragraph::new(desc).style(Style::default().fg(theme.line_num_fg)), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(desc).style(Style::default().fg(theme.line_num_fg)),
+        chunks[0],
+    );
 
     // Path Box
     let path_border_style = if state.active_field == 0 {
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.key_fg)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.border)
     };
@@ -238,14 +427,19 @@ fn render_creation_form(
     frame.render_widget(path_block, chunks[1]);
     let path_cursor = if state.active_field == 0 { "█" } else { "" };
     let path_line = Line::from(vec![
-        Span::styled(&state.path_input, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            &state.path_input,
+            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(path_cursor, Style::default().fg(theme.key_fg)),
     ]);
     frame.render_widget(Paragraph::new(path_line), path_inner);
 
     // Branch Box
     let branch_border_style = if state.active_field == 1 {
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.key_fg)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.border)
     };
@@ -263,39 +457,82 @@ fn render_creation_form(
     frame.render_widget(branch_block, chunks[2]);
     let branch_cursor = if state.active_field == 1 { "█" } else { "" };
     let branch_line = Line::from(vec![
-        Span::styled(&state.branch_input, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            &state.branch_input,
+            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(branch_cursor, Style::default().fg(theme.key_fg)),
     ]);
     frame.render_widget(Paragraph::new(branch_line), branch_inner);
 
     let candidates = state.candidates();
     let height = chunks[3].height as usize;
-    let start = state.selected_candidate.saturating_sub(height.saturating_sub(1));
-    let mut suggestions: Vec<Line> = candidates.iter().enumerate().skip(start).take(height)
-        .map(|(idx, branch)| Line::styled(format!(" {} {}", if idx == state.selected_candidate { "›" } else { " " }, branch),
-            if idx == state.selected_candidate && state.active_field == 1 {
-                Style::default().fg(theme.selected_fg).bg(theme.selected_bg)
-            } else { Style::default().fg(theme.line_num_fg) })).collect();
-    if !state.branch_input.is_empty() && !state.branches.contains(&state.branch_input) && suggestions.len() < height {
-        suggestions.push(Line::styled(match language {
-            Language::En => format!(" + New branch: {}", state.branch_input),
-            Language::Pt => format!(" + Nova branch: {}", state.branch_input),
-        }, Style::default().fg(theme.status_a)));
+    let start = state
+        .selected_candidate
+        .saturating_sub(height.saturating_sub(1));
+    let mut suggestions: Vec<Line> = candidates
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(height)
+        .map(|(idx, branch)| {
+            Line::styled(
+                format!(
+                    " {} {}",
+                    if idx == state.selected_candidate {
+                        "›"
+                    } else {
+                        " "
+                    },
+                    branch
+                ),
+                if idx == state.selected_candidate && state.active_field == 1 {
+                    Style::default().fg(theme.selected_fg).bg(theme.selected_bg)
+                } else {
+                    Style::default().fg(theme.line_num_fg)
+                },
+            )
+        })
+        .collect();
+    if !state.branch_input.is_empty()
+        && !state.branches.contains(&state.branch_input)
+        && suggestions.len() < height
+    {
+        suggestions.push(Line::styled(
+            match language {
+                Language::En => format!(" + New branch: {}", state.branch_input),
+                Language::Pt => format!(" + Nova branch: {}", state.branch_input),
+            },
+            Style::default().fg(theme.status_a),
+        ));
     }
     frame.render_widget(Paragraph::new(suggestions), chunks[3]);
 
     // Error display
     if let Some(err) = &state.error_msg {
-        let err_line = Line::from(vec![
-            Span::styled(format!(" ✖ {}", err), Style::default().fg(theme.del_fg).add_modifier(Modifier::BOLD)),
-        ]);
+        let err_line = Line::from(vec![Span::styled(
+            format!(" ✖ {}", err),
+            Style::default()
+                .fg(theme.del_fg)
+                .add_modifier(Modifier::BOLD),
+        )]);
 
         frame.render_widget(Paragraph::new(err_line), chunks[4]);
     }
 
     let footer_items: &[(&str, &str)] = match language {
-        Language::En => &[("enter", "create & switch"), ("esc", "cancel"), ("tab", "complete / field"), ("↑↓", "select")],
-        Language::Pt => &[("enter", "criar e alternar"), ("esc", "cancelar"), ("tab", "completar / campo"), ("↑↓", "seleção")],
+        Language::En => &[
+            ("enter", "create & switch"),
+            ("esc", "cancel"),
+            ("tab", "complete / field"),
+            ("↑↓", "select"),
+        ],
+        Language::Pt => &[
+            ("enter", "criar e alternar"),
+            ("esc", "cancelar"),
+            ("tab", "completar / campo"),
+            ("↑↓", "seleção"),
+        ],
     };
     let footer_line = help_line(footer_items, chunks[5].width, theme);
     frame.render_widget(Paragraph::new(footer_line), chunks[5]);
@@ -307,7 +544,10 @@ mod tests {
 
     #[test]
     fn autocomplete_preserves_manual_path() {
-        let mut state = WorktreeCreationState::new(".worktree/".into(), vec!["main".into(), "feature/ui".into()]);
+        let mut state = WorktreeCreationState::new(
+            ".worktree/".into(),
+            vec!["main".into(), "feature/ui".into()],
+        );
         state.branch_input = "ui".into();
         state.update_branch();
         assert_eq!(state.candidates(), vec!["feature/ui"]);
@@ -327,10 +567,78 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         let state = WorktreeCreationState::new(".worktree/".into(), vec!["main".into()]);
         let theme = crate::ui::theme::Theme::vscode_dark();
-        terminal.draw(|frame| render_worktree_popup(frame, frame.area(), &[], 0, 0, Some(&state), Language::Pt, &theme)).unwrap();
-        let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+        terminal
+            .draw(|frame| {
+                render_worktree_popup(
+                    frame,
+                    frame.area(),
+                    &[],
+                    "",
+                    0,
+                    0,
+                    Some(&state),
+                    Language::Pt,
+                    &theme,
+                )
+            })
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
         assert!(content.contains("main"));
         assert!(content.contains(".worktree/"));
         assert!(content.contains("cancelar"));
+    }
+
+    #[test]
+    fn test_filtered_worktrees_by_branch() {
+        use std::path::PathBuf;
+        let wts = vec![
+            WorktreeEntry {
+                path: PathBuf::from("/repo"),
+                head: "1111111".into(),
+                branch: Some("main".into()),
+                is_bare: false,
+                is_current: true,
+            },
+            WorktreeEntry {
+                path: PathBuf::from("/repo-feat"),
+                head: "2222222".into(),
+                branch: Some("feature/awesome-ui".into()),
+                is_bare: false,
+                is_current: false,
+            },
+            WorktreeEntry {
+                path: PathBuf::from("/repo-bugfix"),
+                head: "3333333".into(),
+                branch: Some("bugfix/issue-42".into()),
+                is_bare: false,
+                is_current: false,
+            },
+        ];
+
+        // Empty filter returns all
+        assert_eq!(filtered_worktrees(&wts, "").len(), 3);
+
+        // Filter by branch name
+        let feat = filtered_worktrees(&wts, "awesome");
+        assert_eq!(feat.len(), 1);
+        assert_eq!(feat[0].1.branch.as_deref(), Some("feature/awesome-ui"));
+
+        // Case-insensitive filter
+        let ui = filtered_worktrees(&wts, "UI");
+        assert_eq!(ui.len(), 1);
+
+        // Filter by path
+        let bug = filtered_worktrees(&wts, "repo-bugfix");
+        assert_eq!(bug.len(), 1);
+        assert_eq!(bug[0].1.branch.as_deref(), Some("bugfix/issue-42"));
+
+        // Non-matching filter returns empty
+        assert!(filtered_worktrees(&wts, "nonexistent").is_empty());
     }
 }

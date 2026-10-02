@@ -1,6 +1,8 @@
-use std::path::{Path, PathBuf};
 use crate::core::models::DiffSection;
-use crate::core::models::{ChangeStats, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, StageStatus};
+use crate::core::models::{
+    ChangeStats, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, StageStatus,
+};
+use std::path::{Path, PathBuf};
 
 /// Parses unified diff text into a vector of FileDiff structs.
 pub fn parse_unified_diff(diff_text: &str) -> Vec<FileDiff> {
@@ -12,7 +14,9 @@ pub fn parse_unified_diff(diff_text: &str) -> Vec<FileDiff> {
         let line = lines[i];
 
         let starts_file = line.starts_with("diff --git ")
-            || (line.starts_with("--- ") && i + 1 < lines.len() && lines[i + 1].starts_with("+++ "));
+            || (line.starts_with("--- ")
+                && i + 1 < lines.len()
+                && lines[i + 1].starts_with("+++ "));
         if starts_file {
             let (file_diff, next_idx) = parse_file_diff(&lines, i);
             files.push(file_diff);
@@ -32,7 +36,10 @@ fn split_git_header(rest: &str) -> Option<(String, String)> {
         let end = quoted.find("\" ").map(|i| i + 2)?;
         let a = unquote_path(&rest[..end]);
         let b = unquote_path(rest[end..].trim_start());
-        return Some((a.strip_prefix("a/")?.to_string(), b.strip_prefix("b/")?.to_string()));
+        return Some((
+            a.strip_prefix("a/")?.to_string(),
+            b.strip_prefix("b/")?.to_string(),
+        ));
     }
     let half = rest.len().checked_sub(1)? / 2;
     if rest.is_char_boundary(half) && rest.is_char_boundary(half + 1) {
@@ -44,7 +51,10 @@ fn split_git_header(rest: &str) -> Option<(String, String)> {
         }
     }
     let idx = rest.find(" b/")?;
-    Some((rest[..idx].strip_prefix("a/")?.to_string(), rest[idx + 3..].to_string()))
+    Some((
+        rest[..idx].strip_prefix("a/")?.to_string(),
+        rest[idx + 3..].to_string(),
+    ))
 }
 
 /// Undoes git's C-style quoting (`"dir/caf\303\251.txt"`) for unusual paths.
@@ -126,7 +136,9 @@ fn parse_file_diff(lines: &[&str], start_idx: usize) -> (FileDiff, usize) {
                 old_path = None;
             } else {
                 let unquoted = unquote_path(raw_path);
-                old_path = Some(PathBuf::from(unquoted.strip_prefix("a/").unwrap_or(&unquoted)));
+                old_path = Some(PathBuf::from(
+                    unquoted.strip_prefix("a/").unwrap_or(&unquoted),
+                ));
             }
             i += 1;
         } else if let Some(raw_path) = line.strip_prefix("+++ ") {
@@ -429,9 +441,18 @@ mod tests {
 
     #[test]
     fn splits_and_unquotes_git_paths() {
-        assert_eq!(split_git_header("a/my file.txt b/my file.txt"), Some(("my file.txt".into(), "my file.txt".into())));
-        assert_eq!(split_git_header("a/old.txt b/new.txt"), Some(("old.txt".into(), "new.txt".into())));
-        assert_eq!(split_git_header("\"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\""), Some(("café.txt".into(), "café.txt".into())));
+        assert_eq!(
+            split_git_header("a/my file.txt b/my file.txt"),
+            Some(("my file.txt".into(), "my file.txt".into()))
+        );
+        assert_eq!(
+            split_git_header("a/old.txt b/new.txt"),
+            Some(("old.txt".into(), "new.txt".into()))
+        );
+        assert_eq!(
+            split_git_header("\"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\""),
+            Some(("café.txt".into(), "café.txt".into()))
+        );
         assert_eq!(unquote_path("\"tab\\there\""), "tab\there");
     }
 

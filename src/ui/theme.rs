@@ -92,12 +92,29 @@ impl Theme {
     /// Choose a concrete text color from the theme for a colored badge.
     /// Reset is deliberately excluded: the terminal foreground may be very light.
     pub fn text_on(&self, background: Color) -> Color {
-        let Some(background_luminance) = luminance(background) else { return self.selected_fg; };
-        [self.bg, self.fg, self.status_bg, self.status_fg, self.selected_bg, self.selected_fg, self.header_bg]
-            .into_iter().filter_map(|color| luminance(color).map(|value| {
-                let contrast = (value.max(background_luminance) + 0.05) / (value.min(background_luminance) + 0.05);
+        let Some(background_luminance) = luminance(background) else {
+            return self.selected_fg;
+        };
+        [
+            self.bg,
+            self.fg,
+            self.status_bg,
+            self.status_fg,
+            self.selected_bg,
+            self.selected_fg,
+            self.header_bg,
+        ]
+        .into_iter()
+        .filter_map(|color| {
+            luminance(color).map(|value| {
+                let contrast = (value.max(background_luminance) + 0.05)
+                    / (value.min(background_luminance) + 0.05);
                 (color, contrast)
-            })).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(color, _)| color).unwrap_or(self.selected_fg)
+            })
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(color, _)| color)
+        .unwrap_or(self.selected_fg)
     }
 
     pub fn is_light(&self) -> bool {
@@ -313,10 +330,16 @@ impl Theme {
 }
 
 fn luminance(color: Color) -> Option<f64> {
-    let Color::Rgb(r, g, b) = color else { return None; };
+    let Color::Rgb(r, g, b) = color else {
+        return None;
+    };
     let linear = |channel: u8| {
         let value = f64::from(channel) / 255.0;
-        if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
     };
     Some(0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b))
 }
@@ -326,9 +349,22 @@ mod contrast_tests {
     use super::*;
     #[test]
     fn accent_labels_have_concrete_high_contrast_text() {
-        for theme in [Theme::terminal_variant(true), Theme::terminal_variant(false), Theme::vscode_dark(), Theme::tokyonight(), Theme::catppuccin(), Theme::gruvbox()] {
-            for background in [theme.key_fg, theme.header_fg, theme.status_m, theme.status_a] {
-                let text = luminance(theme.text_on(background)).expect("badge text must not use Reset");
+        for theme in [
+            Theme::terminal_variant(true),
+            Theme::terminal_variant(false),
+            Theme::vscode_dark(),
+            Theme::tokyonight(),
+            Theme::catppuccin(),
+            Theme::gruvbox(),
+        ] {
+            for background in [
+                theme.key_fg,
+                theme.header_fg,
+                theme.status_m,
+                theme.status_a,
+            ] {
+                let text =
+                    luminance(theme.text_on(background)).expect("badge text must not use Reset");
                 let bg = luminance(background).unwrap();
                 let contrast = (text.max(bg) + 0.05) / (text.min(bg) + 0.05);
                 assert!(contrast >= 4.5, "{}: contrast {}", theme.name, contrast);

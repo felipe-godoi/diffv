@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::core::models::{CommitEntry, Language, StashEntry};
@@ -16,8 +16,14 @@ pub fn render_commit_overview(
     theme: &Theme,
 ) {
     let title = match language {
-        Language::En => format!("Commit Details · {}", &commit.hash[..7.min(commit.hash.len())]),
-        Language::Pt => format!("Detalhes do Commit · {}", &commit.hash[..7.min(commit.hash.len())]),
+        Language::En => format!(
+            "Commit Details · {}",
+            &commit.hash[..7.min(commit.hash.len())]
+        ),
+        Language::Pt => format!(
+            "Detalhes do Commit · {}",
+            &commit.hash[..7.min(commit.hash.len())]
+        ),
     };
 
     let block = Block::default()
@@ -37,17 +43,25 @@ pub fn render_commit_overview(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),  // Metadata
-            Constraint::Length(1),  // Separator
-            Constraint::Min(4),     // Commit message
-            Constraint::Length(3),  // Action buttons footer
+            Constraint::Length(5), // Metadata
+            Constraint::Length(1), // Separator
+            Constraint::Min(4),    // Commit message
+            Constraint::Length(3), // Action buttons footer
         ])
         .split(inner);
 
     // 1. Metadata lines
     let mut meta_lines = vec![Line::from(vec![
-        Span::styled(" Commit:  ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-        Span::styled(&commit.hash, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Commit:  ",
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            &commit.hash,
+            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+        ),
     ])];
     meta_lines.push(Line::from(vec![
         Span::styled(" Author:  ", Style::default().fg(theme.line_num_fg)),
@@ -62,13 +76,19 @@ pub fn render_commit_overview(
 
     // 2. Separator
     let sep = "─".repeat(chunks[1].width as usize);
-    frame.render_widget(Paragraph::new(Span::styled(sep, Style::default().fg(theme.border))), chunks[1]);
+    frame.render_widget(
+        Paragraph::new(Span::styled(sep, Style::default().fg(theme.border))),
+        chunks[1],
+    );
 
     // 3. Commit Message
     let mut msg_lines = Vec::new();
-    msg_lines.push(Line::from(vec![
-        Span::styled(" Message:", Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)),
-    ]));
+    msg_lines.push(Line::from(vec![Span::styled(
+        " Message:",
+        Style::default()
+            .fg(theme.header_fg)
+            .add_modifier(Modifier::BOLD),
+    )]));
     msg_lines.push(Line::from(""));
 
     for (i, line) in commit.message.lines().enumerate() {
@@ -109,11 +129,29 @@ pub fn render_commit_overview(
     let actions = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled(inspect_btn, Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {}   ", inspect_label), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-            Span::styled(details_label, Style::default().fg(theme.text_on(theme.key_fg)).bg(theme.key_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                inspect_btn,
+                Style::default()
+                    .fg(theme.text_on(theme.header_fg))
+                    .bg(theme.header_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {}   ", inspect_label),
+                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                details_label,
+                Style::default()
+                    .fg(theme.text_on(theme.key_fg))
+                    .bg(theme.key_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("   ", Style::default()),
-            Span::styled(format!("{}   ", nav_label), Style::default().fg(theme.line_num_fg)),
+            Span::styled(
+                format!("{}   ", nav_label),
+                Style::default().fg(theme.line_num_fg),
+            ),
             Span::styled(back_label, Style::default().fg(theme.line_num_fg)),
         ]),
     ];
@@ -150,17 +188,25 @@ pub fn render_stash_overview(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),  // Metadata
-            Constraint::Length(1),  // Separator
-            Constraint::Min(4),     // Stash message
-            Constraint::Length(3),  // Action buttons footer
+            Constraint::Length(4), // Metadata
+            Constraint::Length(1), // Separator
+            Constraint::Min(4),    // Stash message
+            Constraint::Length(3), // Action buttons footer
         ])
         .split(inner);
 
     // 1. Metadata
     let mut meta_lines = vec![Line::from(vec![
-        Span::styled(" Stash:   ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-        Span::styled(&stash.selector, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Stash:   ",
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            &stash.selector,
+            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+        ),
     ])];
     meta_lines.push(Line::from(vec![
         Span::styled(" Date:    ", Style::default().fg(theme.line_num_fg)),
@@ -171,13 +217,19 @@ pub fn render_stash_overview(
 
     // 2. Separator
     let sep = "─".repeat(chunks[1].width as usize);
-    frame.render_widget(Paragraph::new(Span::styled(sep, Style::default().fg(theme.border))), chunks[1]);
+    frame.render_widget(
+        Paragraph::new(Span::styled(sep, Style::default().fg(theme.border))),
+        chunks[1],
+    );
 
     // 3. Stash Message
     let mut msg_lines = Vec::new();
-    msg_lines.push(Line::from(vec![
-        Span::styled(" Description:", Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)),
-    ]));
+    msg_lines.push(Line::from(vec![Span::styled(
+        " Description:",
+        Style::default()
+            .fg(theme.header_fg)
+            .add_modifier(Modifier::BOLD),
+    )]));
     msg_lines.push(Line::from(""));
     msg_lines.push(Line::from(Span::styled(
         format!("   {}", stash.message),
@@ -206,9 +258,21 @@ pub fn render_stash_overview(
     let actions = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled(inspect_btn, Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {}    ", inspect_label), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{}    ", nav_label), Style::default().fg(theme.line_num_fg)),
+            Span::styled(
+                inspect_btn,
+                Style::default()
+                    .fg(theme.text_on(theme.header_fg))
+                    .bg(theme.header_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {}    ", inspect_label),
+                Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{}    ", nav_label),
+                Style::default().fg(theme.line_num_fg),
+            ),
             Span::styled(back_label, Style::default().fg(theme.line_num_fg)),
         ]),
     ];

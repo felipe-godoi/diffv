@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use diffv::core::models::{DiffKind, FileStatus};
 use diffv::git::patch::{generate_hunk_patch, parse_unified_diff};
+use std::path::PathBuf;
 
 #[test]
 fn test_parse_multi_hunk_patch() {
@@ -91,11 +91,8 @@ fn test_generate_partial_hunk_patch() {
     let hunk = &diffs[0].hunks[0];
 
     // Select only 'del 1' (index 1) and 'add 1' (index 3)
-    let partial_patch = diffv::git::patch::generate_partial_hunk_patch(
-        &diffs[0].new_path,
-        hunk,
-        &[1, 3],
-    );
+    let partial_patch =
+        diffv::git::patch::generate_partial_hunk_patch(&diffs[0].new_path, hunk, &[1, 3]);
 
     assert!(partial_patch.contains("-del 1"));
     assert!(partial_patch.contains(" del 2")); // Unselected deletion turned into context

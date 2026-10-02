@@ -10,7 +10,13 @@ pub fn popup_session_name(path: &Path) -> String {
     let slug: String = path
         .to_string_lossy()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("{}{}", POPUP_SESSION_PREFIX, slug.trim_matches('_'))
 }
@@ -33,22 +39,50 @@ pub fn toggle_popup(client: &str, session: &str, path: &Path) -> Result<()> {
         .success();
     if !exists {
         let exe = std::env::current_exe().context("Cannot locate the diffv executable")?;
-        let command = format!("{} --watch --wait-on-error", shell_quote(&exe.to_string_lossy()));
+        let command = format!(
+            "{} --watch --wait-on-error",
+            shell_quote(&exe.to_string_lossy())
+        );
         let dir = path.to_string_lossy();
         tmux(&["new-session", "-d", "-s", &name, "-c", &dir, &command])?;
         tmux(&["set-option", "-t", &name, "status", "off"])?;
     }
 
-    let socket = std::env::var("TMUX").ok().and_then(|v| v.split(',').next().map(str::to_string));
-    let socket_arg = socket.map(|s| format!(" -S {}", shell_quote(&s))).unwrap_or_default();
-    let attach = format!("TMUX= tmux{} attach-session -t {}", socket_arg, shell_quote(&target));
-    tmux(&["display-popup", "-c", client, "-w", "92%", "-h", "90%", "-E", &attach])
+    let socket = std::env::var("TMUX")
+        .ok()
+        .and_then(|v| v.split(',').next().map(str::to_string));
+    let socket_arg = socket
+        .map(|s| format!(" -S {}", shell_quote(&s)))
+        .unwrap_or_default();
+    let attach = format!(
+        "TMUX= tmux{} attach-session -t {}",
+        socket_arg,
+        shell_quote(&target)
+    );
+    tmux(&[
+        "display-popup",
+        "-c",
+        client,
+        "-w",
+        "92%",
+        "-h",
+        "90%",
+        "-E",
+        &attach,
+    ])
 }
 
 fn tmux(args: &[&str]) -> Result<()> {
-    let output = Command::new("tmux").args(args).output().context("Failed to run tmux")?;
+    let output = Command::new("tmux")
+        .args(args)
+        .output()
+        .context("Failed to run tmux")?;
     if !output.status.success() {
-        bail!("tmux {} failed: {}", args[0], String::from_utf8_lossy(&output.stderr).trim());
+        bail!(
+            "tmux {} failed: {}",
+            args[0],
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     Ok(())
 }
@@ -63,7 +97,10 @@ mod tests {
 
     #[test]
     fn session_names_are_tmux_safe() {
-        assert_eq!(popup_session_name(Path::new("/Users/me/repo.rs:x")), "diffv-popup-Users_me_repo_rs_x");
+        assert_eq!(
+            popup_session_name(Path::new("/Users/me/repo.rs:x")),
+            "diffv-popup-Users_me_repo_rs_x"
+        );
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
     }
 }
