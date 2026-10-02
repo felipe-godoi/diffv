@@ -1,7 +1,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, BorderType, Paragraph};
 use ratatui::Frame;
 
 use crate::core::models::{DiffKind, FileDiff};
@@ -18,14 +18,22 @@ pub fn render_unified(
     syntax_enabled: bool,
     theme: &Theme,
 ) {
+    let title = if let Some(diff) = file_diff {
+        format!(" 󰈚 {} (+{}, -{}) [Unified] ", diff.display_path(), diff.stats.additions, diff.stats.deletions)
+    } else {
+        " Diff View [Unified] ".to_string()
+    };
+
     let border_style = if is_focused {
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.border)
     };
 
     let block = Block::default()
-        .borders(Borders::BOTTOM)
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(border_style)
         .style(Style::default().bg(theme.bg));
 
@@ -35,12 +43,12 @@ pub fn render_unified(
     if file_diff.is_none() || file_diff.unwrap().hunks.is_empty() {
         let msg = if let Some(diff) = file_diff {
             if diff.is_binary {
-                " Binary file difference not shown in text viewer."
+                "  Binary file difference not shown in text viewer."
             } else {
-                " File has no differences."
+                "  File has no differences."
             }
         } else {
-            " No file selected."
+            "  No file selected."
         };
         let p = Paragraph::new(msg).style(Style::default().fg(theme.line_num_fg));
         frame.render_widget(p, inner_area);
@@ -75,8 +83,8 @@ pub fn render_unified(
         if *is_header {
             rendered_lines.push(Line::from(vec![
                 Span::styled(
-                    format!("@@ {} @@", content),
-                    Style::default().fg(theme.key_fg).bg(theme.header_bg).add_modifier(Modifier::BOLD),
+                    format!(" 󰦨 @@ {} @@ ", content),
+                    Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD),
                 )
             ]));
             continue;
@@ -91,34 +99,24 @@ pub fn render_unified(
             None => "    ".to_string(),
         };
 
+        let indicator = if is_cursor {
+            Span::styled("▎", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(" ", Style::default().fg(theme.line_num_fg))
+        };
+
         let num_style = if is_cursor {
             Style::default().fg(theme.key_fg).bg(theme.line_num_bg).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.line_num_fg).bg(theme.line_num_bg)
         };
 
-        let num_span = Span::styled(format!("{} {} ", old_str, new_str), num_style);
+        let num_span = Span::styled(format!("{} {} │ ", old_str, new_str), num_style);
 
         match kind {
-            DiffKind::Addition => {
-                rendered_lines.push(Line::from(vec![
-                    num_span,
-                    Span::styled("+ ", Style::default().fg(theme.add_fg).bg(theme.add_bg)),
-                    Span::styled(content, Style::default().fg(theme.add_fg).bg(theme.add_bg)),
-                ]));
-            }
-            DiffKind::Deletion => {
-                rendered_lines.push(Line::from(vec![
-                    num_span,
-                    Span::styled("- ", Style::default().fg(theme.del_fg).bg(theme.del_bg)),
-                    Span::styled(content, Style::default().fg(theme.del_fg).bg(theme.del_bg)),
-                ]));
-            }
             DiffKind::Context | DiffKind::Virtual => {
-                let mut spans = vec![
-                    num_span,
-                    Span::styled("  ", Style::default().fg(theme.fg).bg(theme.bg)),
-                ];
+                let mut spans = vec![indicator, num_span];
+                spans.push(Span::styled("  ", Style::default().fg(theme.fg).bg(theme.bg)));
 
                 if syntax_enabled {
                     let tokens = SyntaxHighlighter::highlight_line(&file.new_path, content);
@@ -137,8 +135,27 @@ pub fn render_unified(
 
                 rendered_lines.push(Line::from(spans));
             }
+            DiffKind::Deletion => {
+                let spans = vec![
+                    indicator,
+                    num_span,
+                    Span::styled("- ", Style::default().fg(theme.del_fg).bg(theme.del_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(content, Style::default().fg(theme.del_fg).bg(theme.del_bg)),
+                ];
+                rendered_lines.push(Line::from(spans));
+            }
+            DiffKind::Addition => {
+                let spans = vec![
+                    indicator,
+                    num_span,
+                    Span::styled("+ ", Style::default().fg(theme.add_fg).bg(theme.add_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(content, Style::default().fg(theme.add_fg).bg(theme.add_bg)),
+                ];
+                rendered_lines.push(Line::from(spans));
+            }
         }
     }
 
-    frame.render_widget(Paragraph::new(rendered_lines), inner_area);
+    let paragraph = Paragraph::new(rendered_lines);
+    frame.render_widget(paragraph, inner_area);
 }

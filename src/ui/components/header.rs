@@ -1,5 +1,5 @@
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -15,45 +15,98 @@ pub fn render_header(
     watch_mode: bool,
     theme: &Theme,
 ) {
-    let mode_str = if is_unified { "UNIFIED [m]" } else { "SIDE-BY-SIDE [m]" };
-    let watch_str = if watch_mode { "⚡ LIVE [w]" } else { "WATCH: OFF [w]" };
+    let mode_str = if is_unified { " Unified " } else { " Side-by-Side " };
 
-    let header_line = Line::from(vec![
+    let mut spans = vec![
+        // App brand pill
         Span::styled(
-            format!(" [REPO: {}] ", repo_stats.repo_name),
-            Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD),
+            " ⚡ diffv ",
+            Style::default()
+                .fg(Color::Rgb(15, 20, 25))
+                .bg(theme.header_fg)
+                .add_modifier(Modifier::BOLD),
         ),
+        Span::raw(" "),
+        // Repo and branch
         Span::styled(
-            format!("branch: {}  ", repo_stats.branch),
-            Style::default().fg(theme.header_fg),
+            format!(" ⎇ {} ", repo_stats.repo_name),
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
         ),
+        Span::styled("on ", Style::default().fg(theme.line_num_fg)),
         Span::styled(
-            format!("Files: {} ", repo_stats.file_count),
+            format!("{} ", repo_stats.branch),
+            Style::default().fg(theme.status_u).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("│ ", Style::default().fg(theme.border)),
+        // Files count
+        Span::styled(
+            format!("{} files ", repo_stats.file_count),
             Style::default().fg(theme.fg),
         ),
+        // Additions pill
         Span::styled(
-            format!("(+{}, -{})  ", repo_stats.total_additions, repo_stats.total_deletions),
-            Style::default().fg(theme.add_fg),
+            format!(" +{} ", repo_stats.total_additions),
+            Style::default()
+                .fg(theme.add_fg)
+                .bg(theme.add_bg)
+                .add_modifier(Modifier::BOLD),
         ),
+        Span::raw(" "),
+        // Deletions pill
         Span::styled(
-            format!("Mode: {}  ", mode_str),
-            Style::default().fg(theme.status_u),
+            format!(" -{} ", repo_stats.total_deletions),
+            Style::default()
+                .fg(theme.del_fg)
+                .bg(theme.del_bg)
+                .add_modifier(Modifier::BOLD),
         ),
+        Span::raw("  "),
+        Span::styled("│ ", Style::default().fg(theme.border)),
+        // Mode badge
+        Span::styled("Mode: ", Style::default().fg(theme.line_num_fg)),
         Span::styled(
-            format!("{}  ", watch_str),
-            Style::default().fg(if watch_mode { theme.status_a } else { theme.line_num_fg }),
+            mode_str,
+            Style::default()
+                .fg(theme.header_fg)
+                .bg(theme.selected_bg)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            "[Tab] Focus  [?] Help ",
-            Style::default().fg(theme.line_num_fg),
-        ),
-    ]);
+        Span::styled(" [m]  ", Style::default().fg(theme.line_num_fg)),
+        // Watch indicator pill
+    ];
+
+    if watch_mode {
+        spans.push(Span::styled(
+            " ● LIVE ",
+            Style::default()
+                .fg(Color::Rgb(20, 200, 100))
+                .bg(Color::Rgb(15, 45, 25))
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else {
+        spans.push(Span::styled(
+            " ○ PAUSED ",
+            Style::default()
+                .fg(theme.line_num_fg)
+                .add_modifier(Modifier::DIM),
+        ));
+    }
+    spans.push(Span::styled(" [w]  ", Style::default().fg(theme.line_num_fg)));
+
+    // Right-aligned / trailing help hint
+    spans.push(Span::styled("│ ", Style::default().fg(theme.border)));
+    spans.push(Span::styled("? ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
+    spans.push(Span::styled("Help  ", Style::default().fg(theme.line_num_fg)));
+    spans.push(Span::styled("Tab ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
+    spans.push(Span::styled("Switch", Style::default().fg(theme.line_num_fg)));
 
     let block = Block::default()
         .borders(Borders::BOTTOM)
         .border_style(Style::default().fg(theme.border))
         .style(Style::default().bg(theme.header_bg));
 
-    let paragraph = Paragraph::new(header_line).block(block);
+    let paragraph = Paragraph::new(Line::from(spans)).block(block);
     frame.render_widget(paragraph, area);
 }

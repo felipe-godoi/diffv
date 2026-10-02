@@ -1,7 +1,7 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, BorderType, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::core::models::CommitEntry;
@@ -16,22 +16,23 @@ pub fn render_history_popup(
     scroll_offset: usize,
     theme: &Theme,
 ) {
-    let popup_area = centered_rect(80, 75, area);
+    let popup_area = centered_rect(85, 80, area);
     frame.render_widget(Clear, popup_area);
 
-    let title = format!(" File History: {} ({} commits) ", file_path, commits.len());
+    let title = format!(" 󰜉 File History: {} ({} commits) ", file_path, commits.len());
     let block = Block::default()
         .title(title)
         .title_alignment(Alignment::Left)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
-        .style(Style::default().bg(theme.bg));
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(theme.header_bg));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
     if commits.is_empty() {
-        let msg = Paragraph::new(" No git history found for this file.")
+        let msg = Paragraph::new("  No git commit history found for this file.")
             .style(Style::default().fg(theme.line_num_fg));
         frame.render_widget(msg, inner);
         return;
@@ -62,25 +63,30 @@ pub fn render_history_popup(
             Style::default().bg(theme.bg).fg(theme.fg)
         };
 
-        let prefix = if is_selected { "▶ " } else { "  " };
+        let cursor_span = if is_selected {
+            Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(" ", base_style)
+        };
 
         let line = Line::from(vec![
-            Span::styled(prefix, base_style),
+            cursor_span,
             Span::styled(
-                format!("{:<8} ", commit.hash),
+                format!(" 󰜉 {:<7} ", commit.hash),
                 Style::default().fg(theme.key_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }).add_modifier(Modifier::BOLD),
             ),
+            Span::styled("● ", Style::default().fg(theme.status_a).bg(if is_selected { theme.selected_bg } else { theme.bg })),
             Span::styled(
-                format!("{:<15} ", commit.date),
+                format!("{:<38} ", commit.message),
+                if is_selected { base_style.add_modifier(Modifier::BOLD) } else { base_style },
+            ),
+            Span::styled(
+                format!("· {:<14} ", commit.date),
                 Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }),
             ),
             Span::styled(
-                format!("{:<16} ", commit.author),
+                format!("· {}", commit.author),
                 Style::default().fg(theme.status_u).bg(if is_selected { theme.selected_bg } else { theme.bg }),
-            ),
-            Span::styled(
-                &commit.message,
-                base_style,
             ),
         ]);
 
@@ -91,12 +97,12 @@ pub fn render_history_popup(
 
     // Footer shortcuts
     let footer_line = Line::from(vec![
-        Span::styled(" [j/k]", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-        Span::styled(" Navigate  ", Style::default().fg(theme.line_num_fg)),
-        Span::styled("[Enter]", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-        Span::styled(" View Commit Diff  ", Style::default().fg(theme.line_num_fg)),
-        Span::styled("[Esc/H]", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-        Span::styled(" Return to Live Diff", Style::default().fg(theme.line_num_fg)),
+        Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+        Span::styled(" View Commit Diff    ", Style::default().fg(theme.fg)),
+        Span::styled(" [j/k] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+        Span::styled(" Navigate    ", Style::default().fg(theme.line_num_fg)),
+        Span::styled(" [Esc / H] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+        Span::styled(" Close History", Style::default().fg(theme.line_num_fg)),
     ]);
     frame.render_widget(Paragraph::new(footer_line), chunks[1]);
 }

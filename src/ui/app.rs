@@ -1059,13 +1059,22 @@ impl App {
 
         // 3. Render Status Bar
         let notif_text = if self.visual_mode {
-            Some("-- VISUAL MODE (Select lines with j/k, press 's' to stage, Esc to exit) --")
+            Some("VISUAL MODE: Select lines with j/k, press 's' to stage selected lines, Esc to exit")
         } else if self.active_commit_view.is_some() {
-            Some("[COMMIT VIEW] Viewing commit diff  [Esc/H] Return to Live Diff")
+            Some("COMMIT VIEW: Viewing historical commit diff · Press [Esc] or [H] to return to Live Diff")
         } else {
             self.notification.as_ref().map(|(msg, _)| msg.as_str())
         };
-        render_status_bar(frame, chunks[2], notif_text, &self.theme);
+
+        let mode_label = if self.visual_mode {
+            "VISUAL"
+        } else if self.focus == Focus::FileTree {
+            "TREE"
+        } else {
+            "DIFF"
+        };
+
+        render_status_bar(frame, chunks[2], notif_text, mode_label, &self.theme);
 
         // 4. Overlays
         if self.show_help {

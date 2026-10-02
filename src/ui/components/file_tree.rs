@@ -158,6 +158,30 @@ pub fn build_tree_items(
     items
 }
 
+fn file_icon(name: &str) -> (&'static str, ratatui::style::Color) {
+    use ratatui::style::Color;
+    let lower = name.to_lowercase();
+    if lower.ends_with(".rs") {
+        ("🦀 ", Color::Rgb(230, 110, 60))
+    } else if lower.ends_with(".md") {
+        ("📝 ", Color::Rgb(90, 180, 245))
+    } else if lower.ends_with(".toml") || lower.ends_with(".yaml") || lower.ends_with(".yml") || lower.ends_with(".json") {
+        ("⚙ ", Color::Rgb(240, 190, 75))
+    } else if lower.ends_with(".ts") || lower.ends_with(".js") || lower.ends_with(".jsx") || lower.ends_with(".tsx") {
+        ("⚡ ", Color::Rgb(245, 220, 75))
+    } else if lower.ends_with(".py") {
+        ("🐍 ", Color::Rgb(70, 160, 235))
+    } else if lower.ends_with(".sh") || lower.ends_with(".bash") || lower.ends_with(".zsh") {
+        ("🐚 ", Color::Rgb(120, 220, 130))
+    } else if lower.ends_with(".css") || lower.ends_with(".scss") || lower.ends_with(".html") {
+        ("🎨 ", Color::Rgb(235, 100, 140))
+    } else if lower.ends_with(".lock") {
+        ("🔒 ", Color::Rgb(160, 165, 175))
+    } else {
+        ("📄 ", Color::Rgb(175, 185, 200))
+    }
+}
+
 pub fn render_file_tree(
     frame: &mut Frame,
     area: Rect,
@@ -170,24 +194,27 @@ pub fn render_file_tree(
     view_mode: FileViewMode,
     theme: &Theme,
 ) {
-    let mode_indicator = if view_mode == FileViewMode::Tree { "[Tree: t]" } else { "[Flat: t]" };
+    let mode_indicator = if view_mode == FileViewMode::Tree { "Tree [t]" } else { "Flat [t]" };
     let title = if filter_mode {
-        format!(" FILTER: {}_ ", filter_query)
+        format!(" 󰍉 Filter: {}_ ", filter_query)
     } else if !filter_query.is_empty() {
-        format!(" FILES ({}) {} ", items.len(), mode_indicator)
+        format!(" 󰈚 Files ({}) [{}] · Filter: \"{}\" ", items.len(), mode_indicator, filter_query)
     } else {
-        format!(" FILES ({}) {} ", items.len(), mode_indicator)
+        format!(" 󰈚 Files ({}) [{}] ", items.len(), mode_indicator)
     };
 
-    let border_style = if is_focused {
+    let border_style = if filter_mode {
         Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)
+    } else if is_focused {
+        Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.border)
     };
 
     let block = Block::default()
         .title(title)
-        .borders(Borders::RIGHT | Borders::BOTTOM)
+        .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .border_style(border_style)
         .style(Style::default().bg(theme.bg));
 
@@ -197,7 +224,7 @@ pub fn render_file_tree(
     let max_rows = inner_area.height as usize;
     if max_rows == 0 || items.is_empty() {
         if items.is_empty() {
-            let empty_msg = Paragraph::new(" No matching files")
+            let empty_msg = Paragraph::new("  No matching files")
                 .style(Style::default().fg(theme.line_num_fg));
             frame.render_widget(empty_msg, inner_area);
         }
@@ -218,49 +245,75 @@ pub fn render_file_tree(
             Style::default().bg(theme.bg).fg(theme.fg)
         };
 
-        let prefix = if is_selected { "> " } else { "  " };
+        let cursor_span = if is_selected {
+            Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(" ", base_style)
+        };
+
         let indent = "  ".repeat(item.depth);
 
         if item.is_dir {
-            let dir_icon = if item.is_collapsed { "▸ " } else { "▾ " };
+            let (dir_icon, dir_color) = if item.is_collapsed {
+                ("▸ 📁 ", theme.key_fg)
+            } else {
+                ("▾ 📂 ", theme.key_fg)
+            };
             let stats_str = format!(" +{} -{}", item.additions, item.deletions);
 
             let line = Line::from(vec![
-                Span::styled(prefix, base_style),
+                cursor_span,
                 Span::styled(indent, base_style),
-                Span::styled(dir_icon, Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{}/", item.name), Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)),
-                Span::styled(stats_str, Style::default().fg(theme.line_num_fg)),
+                Span::styled(dir_icon, Style::default().fg(dir_color).bg(if is_selected { theme.selected_bg } else { theme.bg })),
+                Span::styled(
+                    format!("{}/", item.name),
+                    base_style.add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(stats_str, Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })),
             ]);
             lines.push(line);
         } else {
-            let status_color = match item.status.unwrap_or(FileStatus::Modified) {
-                FileStatus::Modified => theme.status_m,
-                FileStatus::Added => theme.status_a,
-                FileStatus::Deleted => theme.status_d,
-                FileStatus::Untracked => theme.status_u,
-                FileStatus::Renamed => theme.key_fg,
-                FileStatus::Copied => theme.status_a,
+            let (status_badge, status_color) = match item.status.unwrap_or(FileStatus::Modified) {
+                FileStatus::Modified => ("● ", theme.status_m),
+                FileStatus::Added => ("✚ ", theme.status_a),
+                FileStatus::Deleted => ("✖ ", theme.status_d),
+                FileStatus::Untracked => ("? ", theme.status_u),
+                FileStatus::Renamed => ("➜ ", theme.key_fg),
+                FileStatus::Copied => ("✚ ", theme.status_a),
             };
 
-            let stage_str = match item.stage_status.unwrap_or(StageStatus::Unstaged) {
-                StageStatus::Staged => "S",
-                StageStatus::Unstaged => "U",
-                StageStatus::PartiallyStaged => "±",
-                StageStatus::Untracked => "?",
+            let stage_span = match item.stage_status.unwrap_or(StageStatus::Unstaged) {
+                StageStatus::Staged => Span::styled(
+                    "✓ ",
+                    Style::default().fg(theme.status_a).bg(if is_selected { theme.selected_bg } else { theme.bg }).add_modifier(Modifier::BOLD),
+                ),
+                StageStatus::PartiallyStaged => Span::styled(
+                    "± ",
+                    Style::default().fg(theme.status_m).bg(if is_selected { theme.selected_bg } else { theme.bg }),
+                ),
+                StageStatus::Unstaged | StageStatus::Untracked => Span::styled(
+                    "  ",
+                    base_style,
+                ),
             };
 
-            let status_badge = format!("{} ", item.status.unwrap_or(FileStatus::Modified).code());
-            let stage_badge = format!("[{}] ", stage_str);
+            let (icon_str, icon_color) = file_icon(&item.name);
             let stats_str = format!(" +{} -{}", item.additions, item.deletions);
 
+            let name_style = if is_selected {
+                base_style.add_modifier(Modifier::BOLD)
+            } else {
+                base_style
+            };
+
             let line = Line::from(vec![
-                Span::styled(prefix, base_style),
+                cursor_span,
                 Span::styled(indent, base_style),
-                Span::styled(status_badge, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-                Span::styled(stage_badge, Style::default().fg(theme.line_num_fg)),
-                Span::styled(&item.name, base_style),
-                Span::styled(stats_str, Style::default().fg(theme.line_num_fg)),
+                Span::styled(status_badge, Style::default().fg(status_color).bg(if is_selected { theme.selected_bg } else { theme.bg })),
+                stage_span,
+                Span::styled(icon_str, Style::default().fg(icon_color).bg(if is_selected { theme.selected_bg } else { theme.bg })),
+                Span::styled(&item.name, name_style),
+                Span::styled(stats_str, Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })),
             ]);
             lines.push(line);
         }
