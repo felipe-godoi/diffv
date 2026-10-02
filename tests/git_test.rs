@@ -258,5 +258,103 @@ fn test_details_popup_and_neovim_navigation() {
     assert_eq!(max_r - min_r + 1, 8);
 }
 
+#[test]
+fn test_tab_esc_worktree_fzf_features() {
+    let temp_dir = std::env::temp_dir().join("diffv_test_tab_esc");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&temp_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "Git command failed: {:?}", args);
+    };
+
+    run(&["init"]);
+    run(&["config", "user.name", "FeatureTester"]);
+    run(&["config", "user.email", "feature@example.com"]);
+
+    let f1 = temp_dir.join("main.rs");
+    fs::write(&f1, "fn main() { println!(\"hello\"); }\n").unwrap();
+    run(&["add", "."]);
+    run(&["commit", "-m", "Initial commit"]);
+
+    let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
+
+    // 1. Test Worktree Creation
+    let wt_path = temp_dir.join("wt_feature");
+    let res = provider.add_worktree(wt_path.to_str().unwrap(), "feat-branch");
+    assert!(res.is_ok(), "Worktree creation should succeed");
+    let wts = provider.get_worktrees(&temp_dir).unwrap();
+    assert_eq!(wts.len(), 2);
+    assert!(wts.iter().any(|w| w.branch.as_deref() == Some("feat-branch")));
+
+    // 2. Modify file in main repo to test diffs and fzf search collection
+    fs::write(&f1, "fn main() { println!(\"world\"); }\n").unwrap();
+    let mut config = diffv::config::Config::load();
+    config.ui.theme = "catppuccin-mocha".into();
+
+    let mut app = diffv::ui::app::App::new(
+        diffv::ui::app::AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        config,
+        false,
+        false,
+        true,
+        None,
+        false,
+        false,
+    ).unwrap();
+
+    assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Changes);
+
+    // 3. Test Tab cycles tabs: Changes -> Commits -> Stashes -> Changes
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Commits);
+
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Stashes);
+
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Changes);
+
+    // 4. Test Esc NEVER quits app
+    app.should_quit = false;
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.should_quit, "Esc must never quit the program!");
+
+    // Switch focus to DiffView and verify Esc returns to FileTree
+    app.focus = diffv::ui::app::Focus::DiffView;
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.focus, diffv::ui::app::Focus::FileTree, "Esc should return focus to FileTree");
+    assert!(!app.should_quit);
+
+    // 5. Test Ctrl+e and Ctrl+y scrolling
+    app.focus = diffv::ui::app::Focus::DiffView;
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_y, 1);
+    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_y, 0);
 
 
+    // 6. Test fzf search line collection
+    let files = app.collect_diff_files();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0], "main.rs");
+
+    let text_lines = app.collect_diff_text_lines();
+    assert!(!text_lines.is_empty());
+    assert!(text_lines.iter().any(|l| l.contains("main.rs") && (l.contains('+') || l.contains('-'))));
+
+    // 7. Test jumping to file and line
+    assert!(app.jump_to_file("main.rs"));
+    app.jump_to_line(1);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

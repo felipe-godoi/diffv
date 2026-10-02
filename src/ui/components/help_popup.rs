@@ -34,6 +34,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
             vec![
                 ("󰌌  Neovim Motions & Diff Navigation", vec![
                     ("j / k or ↓ / ↑", "Move down / up line by line"),
+                    ("Ctrl+e / Ctrl+y", "Scroll viewport down / up 1 line (Vim)"),
                     ("Ctrl+d / Ctrl+u", "Move half page down / up"),
                     ("Ctrl+f / Ctrl+b", "Move full page down / up (PageDown/Up)"),
                     ("gg / G", "Jump to top / bottom of diff or tree"),
@@ -41,8 +42,9 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("n / N (or p)", "Next / previous hunk"),
                     ("zz / zt / zb", "Center cursor / top / bottom of screen"),
                     ("H / M / L", "Jump cursor to High / Middle / Low of screen"),
-                    ("Tab", "Switch focus: File Tree ↔ Diff View"),
-                    ("Mouse Wheel / Click", "Smooth scroll and select files / rows"),
+                    ("Tab / 1,2,3", "Cycle drawer tabs: Changes ↔ Commits ↔ Stashes"),
+                    ("Enter / Esc", "Focus Diff View / Return to Drawer"),
+                    ("Mouse Drag", "Resize panes divider / click to select"),
                 ]),
                 ("󰦨  Staging & Git Operations", vec![
                     ("s", "Stage hunk (or selected lines in Visual mode)"),
@@ -51,26 +53,28 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("S / U / D", "Stage / Unstage / Discard entire file"),
                     ("v", "Toggle Visual Mode (line-by-line selection)"),
                     ("H / gh", "View commit History for active file"),
-                    ("W", "Open Git Worktrees Switcher modal"),
+                    ("W", "Worktrees modal (switch or 'a'/'n' to create)"),
                 ]),
             ],
             vec![
-                ("󰈚  View, Drawer & Details", vec![
-                    ("1 / 2 / 3", "Switch Drawer Tab: [1] Changes [2] Commits [3] Stashes"),
+                ("󰈚  View, Drawer & Fuzzy Search", vec![
+                    ("Ctrl+p", "Fuzzy search files with fzf (interactive jump)"),
+                    ("Ctrl+s", "Fuzzy search text across diffs with fzf"),
                     ("b", "Toggle File Drawer sidebar visible ↔ hidden"),
-                    ("o", "Toggle Folders (Tree) ↔ Flat List view"),
+                    ("t", "Toggle Folders (Tree) ↔ Flat List view"),
                     ("< / > or , / .", "Resize File Drawer sidebar width"),
-                    ("/", "Filter files by path or extension (fuzzy search)"),
+                    ("/", "Inline filter files by path"),
                     ("i", "Open verbose Details Popup (Commit / File / Stash)"),
                     ("m", "Toggle Side-by-Side ↔ Unified diff mode"),
                     ("w", "Toggle AI live file watching (auto-reload)"),
                 ]),
                 ("󰒅  Integrations & System", vec![
-                    ("Enter / e", "Open in Neovim / $EDITOR at cursor line (+line)"),
+                    ("e", "Open in Neovim / $EDITOR at cursor line (+line)"),
                     ("c", "Copy hunk to system clipboard as Markdown"),
-                    ("L", "Toggle Language (English ↔ Português)"),
+                    ("L / F2", "Toggle Language (English ↔ Português)"),
                     ("? ", "Show / hide this shortcuts cheat-sheet"),
-                    ("q / Esc", "Quit diffv (or dismiss modal / visual mode)"),
+                    ("Esc", "Return / close modal / cancel (never quits)"),
+                    ("q", "Quit diffv (when no modal is open)"),
                 ]),
             ],
         ),
@@ -78,6 +82,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
             vec![
                 ("󰌌  Movimentação Neovim & Navegação", vec![
                     ("j / k ou ↓ / ↑", "Mover linha por linha para baixo / cima"),
+                    ("Ctrl+e / Ctrl+y", "Rolar viewport 1 linha abaixo / acima (Vim)"),
                     ("Ctrl+d / Ctrl+u", "Meia página para baixo / cima"),
                     ("Ctrl+f / Ctrl+b", "Página inteira para baixo / cima (PageDown/Up)"),
                     ("gg / G", "Saltar para início / fim do diff ou lista"),
@@ -85,8 +90,9 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("n / N (ou p)", "Próximo / anterior hunk"),
                     ("zz / zt / zb", "Centralizar cursor / topo / base da tela"),
                     ("H / M / L", "Mover cursor para Topo / Meio / Base da tela"),
-                    ("Tab", "Alternar foco: Árvore de Arquivos ↔ Diff"),
-                    ("Roda do Mouse / Clique", "Rolagem suave e seleção de arquivos / linhas"),
+                    ("Tab / 1,2,3", "Ciclar abas: Mudanças ↔ Commits ↔ Stashes"),
+                    ("Enter / Esc", "Focar Diff / Retornar ao painel lateral"),
+                    ("Arrastar Mouse", "Redimensionar divisor / clique para selecionar"),
                 ]),
                 ("󰦨  Staging & Operações Git", vec![
                     ("s", "Preparar (stage) hunk ou linhas no modo Visual"),
@@ -95,29 +101,32 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("S / U / D", "Preparar / Despreparar / Descartar arquivo inteiro"),
                     ("v", "Alternar Modo Visual para seleção linha a linha"),
                     ("H / gh", "Ver Histórico de commits do arquivo ativo"),
-                    ("W", "Abrir Alternador de Worktrees Git"),
+                    ("W", "Modal de Worktrees (alternar ou 'a'/'n' para criar)"),
                 ]),
             ],
             vec![
-                ("󰈚  Visualização, Painel & Detalhes", vec![
-                    ("1 / 2 / 3", "Alternar Abas: [1] Mudanças [2] Commits [3] Stashes"),
+                ("󰈚  Visualização, Painel & Busca Fuzzy", vec![
+                    ("Ctrl+p", "Busca fuzzy de arquivos com fzf (salto direto)"),
+                    ("Ctrl+s", "Busca fuzzy de texto nos diffs com fzf"),
                     ("b", "Exibir ↔ ocultar painel lateral (sidebar)"),
-                    ("o", "Alternar entre Pastas (Tree) ↔ Lista Plana"),
+                    ("t", "Alternar entre Pastas (Tree) ↔ Lista Plana"),
                     ("< / > ou , / .", "Redimensionar largura do painel lateral"),
-                    ("/", "Filtrar arquivos por caminho ou extensão"),
+                    ("/", "Filtro rápido de arquivos por caminho"),
                     ("i", "Abrir Popup de Detalhes (Commit / Arquivo / Stash)"),
                     ("m", "Alternar modo Side-by-Side ↔ Unificado"),
                     ("w", "Alternar modo Watch ao vivo para agentes IA"),
                 ]),
                 ("󰒅  Integrações & Sistema", vec![
-                    ("Enter / e", "Abrir arquivo no Neovim / $EDITOR na linha (+line)"),
+                    ("e", "Abrir arquivo no Neovim / $EDITOR na linha (+line)"),
                     ("c", "Copiar hunk em Markdown para clipboard"),
-                    ("L", "Alternar Idioma (English ↔ Português)"),
+                    ("L / F2", "Alternar Idioma (English ↔ Português)"),
                     ("? ", "Exibir / ocultar esta ajuda de atalhos"),
-                    ("q / Esc", "Sair do diffv (ou fechar modal / modo visual)"),
+                    ("Esc", "Retornar / fechar modal / cancelar (nunca sai)"),
+                    ("q", "Sair do diffv (quando nenhum modal estiver aberto)"),
                 ]),
             ],
         ),
+
     };
 
     if inner.width >= 86 {

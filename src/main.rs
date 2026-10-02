@@ -21,7 +21,8 @@ use diffv::cli::Cli;
 use diffv::config::Config;
 use diffv::git::provider::GitProvider;
 use diffv::integration::editor::open_editor;
-use diffv::ui::app::{App, AppMode};
+use diffv::integration::fzf::{is_fzf_available, search_diff_text_fzf, search_files_fzf};
+use diffv::ui::app::{App, AppMode, FzfRequest};
 use diffv::watcher::service::{WatchEvent, WatchService};
 
 enum AppEvent {
@@ -243,6 +244,69 @@ fn run_app(
             needs_redraw = true;
             continue;
         }
+
+        // Check if an interactive fzf search request is pending
+        if let Some(fzf_req) = app.fzf_request.take() {
+            if !is_fzf_available() {
+                let msg = match app.language {
+                    diffv::core::models::Language::En => "fzf is not installed or not found on PATH",
+                    diffv::core::models::Language::Pt => "fzf não está instalado ou não foi encontrado no PATH",
+                };
+                app.set_notification(msg);
+                needs_redraw = true;
+                continue;
+            }
+
+            is_editor_active.store(true, Ordering::SeqCst);
+            while rx.try_recv().is_ok() {}
+
+            disable_raw_mode()?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen, event::DisableMouseCapture)?;
+            terminal.show_cursor()?;
+
+            let res = match fzf_req {
+                FzfRequest::Files => {
+                    let files = app.collect_diff_files();
+                    if files.is_empty() {
+                        Ok(None)
+                    } else {
+                        search_files_fzf(&files)
+                    }
+                }
+                FzfRequest::Text => {
+                    let lines = app.collect_diff_text_lines();
+                    if lines.is_empty() {
+                        Ok(None)
+                    } else {
+                        search_diff_text_fzf(&lines)
+                    }
+                }
+            };
+
+            enable_raw_mode()?;
+            execute!(terminal.backend_mut(), EnterAlternateScreen, event::EnableMouseCapture)?;
+            terminal.clear()?;
+
+            while event::poll(Duration::from_millis(40)).unwrap_or(false) {
+                let _ = event::read();
+            }
+            while rx.try_recv().is_ok() {}
+
+            is_editor_active.store(false, Ordering::SeqCst);
+
+            match res {
+                Ok(Some(selected)) => match fzf_req {
+                    FzfRequest::Files => app.handle_fzf_file_result(selected),
+                    FzfRequest::Text => app.handle_fzf_text_result(selected),
+                },
+                Ok(None) => {}
+                Err(e) => app.set_notification(format!("fzf error: {}", e)),
+            }
+
+            needs_redraw = true;
+            continue;
+        }
+
 
         match rx.recv()? {
             AppEvent::Input(Event::Key(key)) => {

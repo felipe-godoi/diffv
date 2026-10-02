@@ -494,4 +494,49 @@ impl GitProvider {
 
         Ok(entries)
     }
+
+    pub fn add_worktree(&self, path: &str, branch: &str) -> Result<PathBuf> {
+        let trimmed_path = path.trim();
+        let trimmed_branch = branch.trim();
+        if trimmed_path.is_empty() {
+            anyhow::bail!("Worktree path cannot be empty");
+        }
+
+        let mut cmd = Command::new("git");
+        cmd.current_dir(&self.repo_root);
+        cmd.arg("worktree").arg("add");
+
+        if trimmed_branch.is_empty() {
+            cmd.arg(trimmed_path);
+        } else {
+            // Check if branch exists
+            let branch_exists = Command::new("git")
+                .args(["rev-parse", "--verify", trimmed_branch])
+                .current_dir(&self.repo_root)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if branch_exists {
+                cmd.arg(trimmed_path).arg(trimmed_branch);
+            } else {
+                cmd.arg("-b").arg(trimmed_branch).arg(trimmed_path);
+            }
+        }
+
+        let output = cmd.output().context("Failed to run git worktree add")?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("{}", err.trim());
+        }
+
+        let resolved = if Path::new(trimmed_path).is_absolute() {
+            PathBuf::from(trimmed_path)
+        } else {
+            self.repo_root.join(trimmed_path)
+        };
+
+        Ok(resolved)
+    }
 }
+

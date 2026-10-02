@@ -8,8 +8,10 @@ use ratatui::Frame;
 use crate::config::Config;
 use crate::core::engine::DiffEngine;
 use crate::core::models::{
-    CommitEntry, DrawerTab, FileDiff, Language, RepoStats, StashEntry, WorktreeEntry,
+    CommitEntry, DiffKind, DrawerTab, FileDiff, Language, RepoStats, StashEntry, WorktreeEntry,
 };
+
+
 use crate::git::actions::{
     discard_file, discard_hunk, stage_file, stage_hunk, stage_partial_hunk, unstage_file,
     unstage_hunk,
@@ -28,7 +30,8 @@ use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
 use crate::ui::components::status_bar::render_status_bar;
 use crate::ui::components::toast::render_toast;
 use crate::ui::components::unified::render_unified;
-use crate::ui::components::worktree_popup::render_worktree_popup;
+use crate::ui::components::worktree_popup::{render_worktree_popup, WorktreeCreationState};
+use crate::ui::components::item_overlay::render_item_overlay;
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,11 +40,18 @@ pub enum Focus {
     DiffView,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FzfRequest {
+    Files,
+    Text,
+}
+
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
     DiscardHunk(usize),
     DiscardFile,
 }
+
 
 pub enum AppMode {
     Git {
@@ -130,6 +140,16 @@ pub struct App {
     // Details popup (commit details, stash details, or verbose file details)
     pub show_details_popup: bool,
     pub details_popup_scroll: usize,
+
+    // Worktree creation state
+    pub worktree_creation: Option<WorktreeCreationState>,
+
+    // External fzf requests
+    pub fzf_request: Option<FzfRequest>,
+
+    // Terminal geometry for responsive drag resizing
+    pub term_width: u16,
+    pub term_height: u16,
 }
 
 impl App {
@@ -224,6 +244,10 @@ impl App {
             pending_key_time: None,
             show_details_popup: false,
             details_popup_scroll: 0,
+            worktree_creation: None,
+            fzf_request: None,
+            term_width: 80,
+            term_height: 25,
         };
 
         app.reload_diffs_internal(false)?;
@@ -272,6 +296,192 @@ impl App {
         };
         self.set_notification(msg);
     }
+
+    pub fn switch_drawer_tab(&mut self, new_tab: DrawerTab) {
+        self.show_drawer = true;
+        if (self.active_commit_info.is_some() || self.active_stash_info.is_some() || self.active_commit_view.is_some())
+            && new_tab == DrawerTab::Changes
+        {
+            self.active_commit_info = None;
+            self.active_stash_info = None;
+            self.active_commit_view = None;
+            if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                self.files = saved_files;
+                self.repo_stats = saved_stats;
+                self.update_filter();
+            }
+        } else if new_tab == DrawerTab::Commits {
+            if self.active_commit_info.is_some() {
+                self.active_commit_info = None;
+                if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                    self.files = saved_files;
+                    self.repo_stats = saved_stats;
+                    self.update_filter();
+                }
+            }
+            self.active_stash_info = None;
+        } else if new_tab == DrawerTab::Stashes {
+            if self.active_stash_info.is_some() {
+                self.active_stash_info = None;
+                if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                    self.files = saved_files;
+                    self.repo_stats = saved_stats;
+                    self.update_filter();
+                }
+            }
+            self.active_commit_info = None;
+        }
+
+        self.drawer_tab = new_tab;
+        self.focus = Focus::FileTree;
+
+        let msg = match (new_tab, self.language) {
+            (DrawerTab::Changes, Language::En) => "Tab: Changes (Live Diff)",
+            (DrawerTab::Changes, Language::Pt) => "Aba: Mudanças (Diff ao vivo)",
+            (DrawerTab::Commits, Language::En) => "Tab: Commits (j/k select, Enter view)",
+            (DrawerTab::Commits, Language::Pt) => "Aba: Commits (j/k seleciona, Enter visualiza)",
+            (DrawerTab::Stashes, Language::En) => "Tab: Stashes (j/k select, Enter view)",
+            (DrawerTab::Stashes, Language::Pt) => "Aba: Stashes (j/k seleciona, Enter visualiza)",
+        };
+        self.set_notification(msg);
+    }
+
+    pub fn scroll_viewport_down(&mut self, amount: usize) {
+        let total = self.total_diff_rows();
+        if total > 0 {
+            let max_scroll = total.saturating_sub(1);
+            self.scroll_y = (self.scroll_y + amount).min(max_scroll);
+            if self.selected_row < self.scroll_y {
+                self.selected_row = self.scroll_y;
+            }
+        }
+    }
+
+
+    pub fn scroll_viewport_up(&mut self, amount: usize) {
+        let vp = self.viewport_height.saturating_sub(3).max(1);
+        self.scroll_y = self.scroll_y.saturating_sub(amount);
+        if self.selected_row >= self.scroll_y + vp {
+            self.selected_row = (self.scroll_y + vp).saturating_sub(1);
+        }
+    }
+
+    pub fn jump_to_file(&mut self, path: &str) -> bool {
+        let clean_path = path.trim();
+        let found_idx = self.files.iter().position(|f| {
+            f.new_path.to_string_lossy() == clean_path
+                || f.display_path() == clean_path
+                || (f.old_path.as_ref().map(|p| p.to_string_lossy() == clean_path).unwrap_or(false))
+        });
+
+        if let Some(idx) = found_idx {
+            if self.file_view_mode == FileViewMode::Tree {
+                if let Some(tree_idx) = self.tree_items.iter().position(|t| t.file_index == Some(idx)) {
+                    self.selected_tree_idx = tree_idx;
+                }
+            } else if let Some(filt_idx) = self.filtered_indices.iter().position(|&i| i == idx) {
+                self.selected_filtered_idx = filt_idx;
+            }
+            self.selected_row = 0;
+            self.scroll_y = 0;
+            self.focus = Focus::DiffView;
+            return true;
+        }
+        false
+    }
+
+    pub fn jump_to_line(&mut self, target_line_no: usize) {
+        if let Some(file) = self.current_file() {
+            if self.is_unified {
+                let mut current_row = 0;
+                let mut found = None;
+                for hunk in &file.hunks {
+                    current_row += 1;
+                    for line in &hunk.lines {
+                        if line.new_line_no == Some(target_line_no) || line.old_line_no == Some(target_line_no) {
+                            found = Some(current_row);
+                            break;
+                        }
+                        current_row += 1;
+                    }
+                    if found.is_some() {
+                        break;
+                    }
+                }
+                if let Some(r) = found {
+                    self.selected_row = r;
+                    let vp = self.viewport_height.saturating_sub(3).max(1);
+                    self.scroll_y = r.saturating_sub(vp / 2);
+                }
+            } else {
+                let row_idx = file.aligned_rows.iter().position(|r| {
+                    r.right.as_ref().and_then(|l| l.new_line_no) == Some(target_line_no)
+                        || r.left.as_ref().and_then(|l| l.old_line_no) == Some(target_line_no)
+                });
+
+                if let Some(row) = row_idx {
+                    self.selected_row = row;
+                    let vp = self.viewport_height.saturating_sub(3).max(1);
+                    self.scroll_y = row.saturating_sub(vp / 2);
+                }
+            }
+        }
+    }
+
+    pub fn collect_diff_files(&self) -> Vec<String> {
+        self.files.iter().map(|f| f.display_path()).collect()
+    }
+
+    pub fn collect_diff_text_lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for f in &self.files {
+            let path = f.display_path();
+            for hunk in &f.hunks {
+                for line in &hunk.lines {
+                    let line_no = line.new_line_no.or(line.old_line_no).unwrap_or(0);
+                    let prefix = match line.kind {
+                        DiffKind::Addition => "+",
+                        DiffKind::Deletion => "-",
+                        _ => " ",
+                    };
+
+                    let clean_content = line.content.trim_end_matches(['\r', '\n']);
+                    out.push(format!("{}:{}: {} {}", path, line_no, prefix, clean_content));
+                }
+            }
+        }
+        out
+    }
+
+
+    pub fn handle_fzf_file_result(&mut self, selected_file: String) {
+        if self.jump_to_file(&selected_file) {
+            let msg = match self.language {
+                Language::En => format!("Jumped to file: {}", selected_file),
+                Language::Pt => format!("Saltou para o arquivo: {}", selected_file),
+            };
+            self.set_notification(msg);
+        }
+    }
+
+    pub fn handle_fzf_text_result(&mut self, selected_line: String) {
+        let parts: Vec<&str> = selected_line.splitn(3, ':').collect();
+        if parts.len() >= 2 {
+            let path = parts[0];
+            let line_no: usize = parts[1].parse().unwrap_or(0);
+            if self.jump_to_file(path) {
+                if line_no > 0 {
+                    self.jump_to_line(line_no);
+                }
+                let msg = match self.language {
+                    Language::En => format!("Jumped to {}:{}", path, line_no),
+                    Language::Pt => format!("Saltou para {}:{}", path, line_no),
+                };
+                self.set_notification(msg);
+            }
+        }
+    }
+
 
     pub fn get_underlying_file(&self) -> Option<&FileDiff> {
         if self.file_view_mode == FileViewMode::Tree {
@@ -548,9 +758,69 @@ impl App {
 
         // 1. Worktrees Modal Active
         if self.show_worktrees {
+            if let Some(creation) = &mut self.worktree_creation {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.worktree_creation = None;
+                    }
+                    KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up => {
+                        creation.active_field = 1 - creation.active_field;
+                    }
+                    KeyCode::Backspace => {
+                        if creation.active_field == 0 {
+                            creation.path_input.pop();
+                        } else {
+                            creation.branch_input.pop();
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        if creation.active_field == 0 {
+                            creation.path_input.push(c);
+                        } else {
+                            creation.branch_input.push(c);
+                        }
+                    }
+                    KeyCode::Enter => {
+                        let path = creation.path_input.clone();
+                        let branch = creation.branch_input.clone();
+                        if let AppMode::Git { git_provider, .. } = &mut self.mode {
+                            match git_provider.add_worktree(&path, &branch) {
+                                Ok(new_path) => {
+                                    let cwd = std::env::current_dir().unwrap_or_else(|_| git_provider.repo_root.clone());
+                                    if let Ok(wts) = git_provider.get_worktrees(&cwd) {
+                                        self.worktrees = wts;
+                                    }
+                                    if let Some(pos) = self.worktrees.iter().position(|w| w.path == new_path) {
+                                        self.selected_worktree_idx = pos;
+                                        self.switch_to_selected_worktree();
+                                    }
+                                    self.worktree_creation = None;
+                                    self.show_worktrees = false;
+                                    let msg = match self.language {
+                                        Language::En => format!("Created & switched to worktree: {}", new_path.display()),
+                                        Language::Pt => format!("Criado e alternado para worktree: {}", new_path.display()),
+                                    };
+                                    self.set_notification(msg);
+                                }
+                                Err(e) => {
+                                    if let Some(c) = &mut self.worktree_creation {
+                                        c.error_msg = Some(e.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+
             match key.code {
                 KeyCode::Esc | KeyCode::Char('W') | KeyCode::Char('q') => {
                     self.show_worktrees = false;
+                }
+                KeyCode::Char('a') | KeyCode::Char('n') | KeyCode::Char('c') => {
+                    self.worktree_creation = Some(WorktreeCreationState::default());
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     if self.selected_worktree_idx + 1 < self.worktrees.len() {
@@ -575,6 +845,7 @@ impl App {
             }
             return;
         }
+
 
         // 2. Help Modal Active
         if self.show_help {
@@ -706,10 +977,22 @@ impl App {
                         Language::Pt => "Saiu do modo visual",
                     };
                     self.set_notification(msg);
+                } else if self.focus == Focus::DiffView {
+                    self.focus = Focus::FileTree;
+                    let msg = match self.language {
+                        Language::En => "Returned to File Drawer",
+                        Language::Pt => "Retornou ao painel lateral",
+                    };
+                    self.set_notification(msg);
                 } else {
-                    self.should_quit = true;
+                    let msg = match self.language {
+                        Language::En => "Press 'q' to quit diffv",
+                        Language::Pt => "Pressione 'q' para sair do diffv",
+                    };
+                    self.set_notification(msg);
                 }
             }
+
             KeyCode::Char('H') => {
                 if self.focus == Focus::DiffView {
                     self.selected_row = self.scroll_y;
@@ -813,60 +1096,52 @@ impl App {
                 }
             }
             KeyCode::Char('1') => {
-                self.show_drawer = true;
-                self.active_commit_info = None;
-                self.active_stash_info = None;
-                self.active_commit_view = None;
-                self.drawer_tab = DrawerTab::Changes;
-                if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
-                    self.files = saved_files;
-                    self.repo_stats = saved_stats;
-                    self.update_filter();
-                }
-                self.focus = Focus::FileTree;
-                let msg = match self.language {
-                    Language::En => "Tab: Changes (Live Diff)",
-                    Language::Pt => "Aba: Mudanças (Diff ao vivo)",
-                };
-                self.set_notification(msg);
+                self.switch_drawer_tab(DrawerTab::Changes);
             }
             KeyCode::Char('2') => {
-                self.show_drawer = true;
-                if self.active_commit_info.is_some() {
-                    self.active_commit_info = None;
-                    if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
-                        self.files = saved_files;
-                        self.repo_stats = saved_stats;
-                        self.update_filter();
-                    }
-                }
-                self.active_stash_info = None;
-                self.drawer_tab = DrawerTab::Commits;
-                self.focus = Focus::FileTree;
-                let msg = match self.language {
-                    Language::En => "Tab: Commits (j/k select, Enter view)",
-                    Language::Pt => "Aba: Commits (j/k seleciona, Enter visualiza)",
-                };
-                self.set_notification(msg);
+                self.switch_drawer_tab(DrawerTab::Commits);
             }
             KeyCode::Char('3') => {
-                self.show_drawer = true;
-                if self.active_stash_info.is_some() {
-                    self.active_stash_info = None;
-                    if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
-                        self.files = saved_files;
-                        self.repo_stats = saved_stats;
-                        self.update_filter();
-                    }
-                }
-                self.active_commit_info = None;
-                self.drawer_tab = DrawerTab::Stashes;
-                self.focus = Focus::FileTree;
-                let msg = match self.language {
-                    Language::En => "Tab: Stashes (j/k select, Enter view)",
-                    Language::Pt => "Aba: Stashes (j/k seleciona, Enter visualiza)",
+                self.switch_drawer_tab(DrawerTab::Stashes);
+            }
+            KeyCode::Tab => {
+                let next = match self.drawer_tab {
+                    DrawerTab::Changes => DrawerTab::Commits,
+                    DrawerTab::Commits => DrawerTab::Stashes,
+                    DrawerTab::Stashes => DrawerTab::Changes,
                 };
-                self.set_notification(msg);
+                self.switch_drawer_tab(next);
+            }
+            KeyCode::BackTab => {
+                let prev = match self.drawer_tab {
+                    DrawerTab::Changes => DrawerTab::Stashes,
+                    DrawerTab::Commits => DrawerTab::Changes,
+                    DrawerTab::Stashes => DrawerTab::Commits,
+                };
+                self.switch_drawer_tab(prev);
+            }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.fzf_request = Some(FzfRequest::Files);
+            }
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.fzf_request = Some(FzfRequest::Text);
+            }
+            KeyCode::Char('\\') => {
+                self.fzf_request = Some(FzfRequest::Text);
+            }
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.focus == Focus::FileTree {
+                    self.file_tree_down(1);
+                } else {
+                    self.scroll_viewport_down(1);
+                }
+            }
+            KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.focus == Focus::FileTree {
+                    self.file_tree_up(1);
+                } else {
+                    self.scroll_viewport_up(1);
+                }
             }
             KeyCode::Char('q') => {
                 self.should_quit = true;
@@ -874,17 +1149,7 @@ impl App {
             KeyCode::Char('?') => {
                 self.show_help = true;
             }
-            KeyCode::Tab => {
-                if !self.show_drawer {
-                    self.show_drawer = true;
-                    self.focus = Focus::FileTree;
-                } else {
-                    self.focus = match self.focus {
-                        Focus::FileTree => Focus::DiffView,
-                        Focus::DiffView => Focus::FileTree,
-                    };
-                }
-            }
+
             KeyCode::Char('m') => {
                 self.is_unified = !self.is_unified;
                 let mode = if self.is_unified { "Unified" } else { "Side-by-Side" };
@@ -1419,7 +1684,15 @@ impl App {
             return;
         }
 
-        let effective_tree_width = if self.show_drawer { self.file_tree_width } else { 0 };
+        let effective_tree_width = if !self.show_drawer {
+            0
+        } else if self.term_width > 0 && self.term_width < 85 {
+            self.file_tree_width.min((self.term_width * 32 / 100).max(18)).min(self.term_width.saturating_sub(25))
+        } else if self.term_width > 0 {
+            self.file_tree_width.min(self.term_width.saturating_sub(25))
+        } else {
+            self.file_tree_width
+        };
 
         match mouse.kind {
             MouseEventKind::ScrollDown => {
@@ -1439,10 +1712,11 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.show_drawer {
                     let divider_col = effective_tree_width;
-                    if mouse.column >= divider_col.saturating_sub(1) && mouse.column <= divider_col + 1 {
+                    if mouse.column >= divider_col.saturating_sub(2) && mouse.column <= divider_col + 2 {
                         self.is_dragging_divider = true;
                         return;
                     }
+
 
                     if mouse.column < effective_tree_width {
                         self.focus = Focus::FileTree;
@@ -1620,14 +1894,18 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if self.show_drawer && (self.is_dragging_divider || (mouse.column >= self.file_tree_width.saturating_sub(2) && mouse.column <= self.file_tree_width + 2)) {
-                    self.file_tree_width = mouse.column.clamp(16, 80);
+                if self.show_drawer && (self.is_dragging_divider || (mouse.column >= effective_tree_width.saturating_sub(2) && mouse.column <= effective_tree_width + 2)) {
+                    self.is_dragging_divider = true;
+                    let max_w = if self.term_width > 0 { self.term_width.saturating_sub(25).max(18) } else { 80 };
+                    let min_w = 16.min(max_w);
+                    self.file_tree_width = mouse.column.clamp(min_w, max_w);
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => {
+            MouseEventKind::Up(_) => {
                 self.is_dragging_divider = false;
             }
             _ => {}
+
         }
     }
 
@@ -1971,6 +2249,8 @@ impl App {
 
     pub fn render(&mut self, frame: &mut Frame) {
         let size = frame.area();
+        self.term_width = size.width;
+        self.term_height = size.height;
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -2033,14 +2313,15 @@ impl App {
         self.viewport_height = diff_area.height as usize;
         self.file_tree_height = file_tree_area.height as usize;
 
-        if effective_tree_width > 0 {
-            let selected_file_idx = if self.file_view_mode == FileViewMode::Tree {
-                self.selected_tree_idx
-            } else {
-                self.selected_filtered_idx
-            };
+        let selected_file_idx = if self.file_view_mode == FileViewMode::Tree {
+            self.selected_tree_idx
+        } else {
+            self.selected_filtered_idx
+        };
 
+        if effective_tree_width > 0 {
             render_drawer(
+
                 frame,
                 file_tree_area,
                 self.drawer_tab,
@@ -2174,6 +2455,7 @@ impl App {
                 &self.worktrees,
                 self.selected_worktree_idx,
                 self.worktree_scroll,
+                self.worktree_creation.as_ref(),
                 self.language,
                 &self.theme,
             );
@@ -2195,9 +2477,31 @@ impl App {
             render_confirm_popup(frame, size, msg, self.language, &self.theme);
         }
 
-        // 5. Floating Toast Notification (does not overwrite status bar shortcuts)
+        // 5. Floating Item Overlay (displays full untruncated name over the interface)
+        if self.focus == Focus::FileTree && self.show_drawer && !self.show_help && !self.show_worktrees && !self.show_history && !self.show_details_popup && self.confirm_action.is_none() {
+            render_item_overlay(
+                frame,
+                diff_area,
+                self.drawer_tab,
+                &self.tree_items,
+                selected_file_idx,
+                &self.files,
+                &self.filtered_indices,
+                self.file_view_mode,
+                &self.repo_commits,
+                self.selected_repo_commit_idx,
+                &self.stashes,
+                self.selected_stash_idx,
+                self.active_commit_info.is_some() || self.active_stash_info.is_some(),
+                self.language,
+                &self.theme,
+            );
+        }
+
+        // 6. Floating Toast Notification (does not overwrite status bar shortcuts)
         if let Some((msg, _)) = &self.notification {
             render_toast(frame, size, msg, &self.theme);
         }
     }
 }
+

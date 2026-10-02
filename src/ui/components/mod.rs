@@ -4,6 +4,7 @@ pub mod file_tree;
 pub mod header;
 pub mod help_popup;
 pub mod history_popup;
+pub mod item_overlay;
 pub mod ruler;
 pub mod side_by_side;
 pub mod status_bar;
