@@ -1,8 +1,8 @@
 name: Release
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    branches: [main, beta]
+    tags: ['v*', 'diffv-v*']
   workflow_dispatch:
 permissions:
   contents: write
@@ -43,13 +43,13 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
-          test "v$version" = "$RELEASE_TAG"
-      # Caches are scoped to the ref that saved them; only main's cache is
-      # visible to release tags, so main is the only ref that saves.
+          tag_clean="${RELEASE_TAG#diffv-}"
+          test "v$version" = "$tag_clean"
+      # Caches are scoped to the ref that saved them; only main and beta save.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' }}
       - name: Embed commit in version
         run: |
           version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
@@ -61,7 +61,7 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: rustup component add clippy && cargo clippy --all-targets --locked -- -D warnings
       - name: Package binary
-        if: github.ref_type == 'tag' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        if: github.ref_type == 'tag' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' || github.event_name == 'workflow_dispatch'
         env:
           TARGET: ${{ matrix.target }}
         run: |
@@ -70,13 +70,13 @@ jobs:
           cd dist
           shasum -a 256 "diffv-$TARGET" > "diffv-$TARGET.sha256"
       - uses: actions/upload-artifact@v7.0.1
-        if: github.ref_type == 'tag' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        if: github.ref_type == 'tag' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' || github.event_name == 'workflow_dispatch'
         with:
           name: diffv-${{ matrix.target }}
           path: dist/*
   publish:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/diffv-v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -86,7 +86,7 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Publish stable release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref_name != 'main')
+        if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/diffv-v') || (github.event_name == 'workflow_dispatch' && github.ref_name != 'main' && github.ref_name != 'beta')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -94,7 +94,7 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" dist/* --clobber || \
           gh release create "$RELEASE_TAG" dist/* --verify-tag --title "diffv $RELEASE_TAG" --generate-notes
-      - name: Publish rolling nightly and beta release from main
+      - name: Publish rolling nightly release from main
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -104,7 +104,13 @@ jobs:
           git tag -d nightly 2>/dev/null || true
           git push origin :refs/tags/nightly 2>/dev/null || true
           gh release create nightly dist/* --target main --prerelease --title "diffv nightly (latest main)" --notes "Automated rolling nightly build from the latest commit on main (${GITHUB_SHA::7})."
+      - name: Publish rolling beta release from beta
+        if: github.ref == 'refs/heads/beta'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
           gh release delete beta --yes || true
           git tag -d beta 2>/dev/null || true
           git push origin :refs/tags/beta 2>/dev/null || true
-          gh release create beta dist/* --target main --prerelease --title "diffv beta (latest main)" --notes "Automated rolling pre-release from the latest commit on main (${GITHUB_SHA::7})."
+          gh release create beta dist/* --target beta --prerelease --title "diffv beta (latest RC)" --notes "Automated rolling pre-release from the latest commit on beta (${GITHUB_SHA::7})."
