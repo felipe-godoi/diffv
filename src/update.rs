@@ -81,44 +81,7 @@ fn install_verified(download: &Path, executable: &Path, digest: &str) -> Result<
     Ok(())
 }
 
-const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
-
-fn stamp_path() -> Option<PathBuf> {
-    dirs::cache_dir().map(|dir| dir.join("diffv").join("last-update-check"))
-}
-
-/// True when the last successful check is older than `interval` (or unknown).
-fn check_due(stamp: &Path, interval: Duration) -> bool {
-    fs::metadata(stamp)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_none_or(|age| age >= interval)
-}
-
-fn touch(stamp: &Path) {
-    if let Some(parent) = stamp.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let _ = File::create(stamp);
-}
-
-/// Checks GitHub at most once a day so startup stays instant.
 pub fn check_and_install() -> Result<Option<PathBuf>> {
-    let stamp = stamp_path();
-    if stamp.as_deref().is_some_and(|s| !check_due(s, CHECK_INTERVAL)) {
-        return Ok(None);
-    }
-    let result = check_and_install_now();
-    if result.is_ok() {
-        if let Some(stamp) = &stamp {
-            touch(stamp);
-        }
-    }
-    result
-}
-
-fn check_and_install_now() -> Result<Option<PathBuf>> {
     let Some(name) = platform_asset() else { return Ok(None); };
     let metadata = tempfile::tempdir()?;
     let json = metadata.path().join("release.json");
@@ -156,15 +119,6 @@ mod tests {
         assert!(!newer_release(&release("v1.0.0-beta.1"), "0.2.0").unwrap());
         let mut draft = release("v1.0.0"); draft.draft = true;
         assert!(!newer_release(&draft, "0.2.0").unwrap());
-    }
-    #[test]
-    fn update_checks_are_throttled() {
-        let dir = tempfile::tempdir().unwrap();
-        let stamp = dir.path().join("nested/last-update-check");
-        assert!(check_due(&stamp, CHECK_INTERVAL));
-        touch(&stamp);
-        assert!(!check_due(&stamp, CHECK_INTERVAL));
-        assert!(check_due(&stamp, Duration::ZERO));
     }
     #[test]
     fn bad_checksum_preserves_installed_binary() {
