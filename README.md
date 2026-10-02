@@ -38,6 +38,9 @@ The installer detects your OS and architecture, downloads the latest release bin
 
 To uninstall:
 ```bash
+diffv --uninstall
+
+# Or via the installer script:
 ./install.sh --uninstall
 ```
 

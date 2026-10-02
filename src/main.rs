@@ -32,6 +32,13 @@ enum AppEvent {
 
 fn main() {
     let args = Cli::parse();
+    if args.uninstall {
+        if let Err(err) = diffv::uninstall::run() {
+            eprintln!("Error: {:#}", err);
+            std::process::exit(1);
+        }
+        std::process::exit(0);
+    }
     let wait_on_error = args.wait_on_error;
     let result = match &args.tmux_toggle {
         Some(toggle) => diffv::integration::tmux::toggle_popup(&toggle[0], &toggle[1], Path::new(&toggle[2])),
@@ -216,10 +223,14 @@ fn run_app(
 
     // 3. Filesystem watcher service
     let (watch_tx, watch_rx) = mpsc::channel();
-    let _watcher = if let AppMode::Git { git_provider, .. } = &app.mode {
-        WatchService::start(&git_provider.repo_root, app.config.watcher.debounce_ms, watch_tx).ok()
+    let _watcher = if watch_enabled {
+        if let AppMode::Git { git_provider, .. } = &app.mode {
+            WatchService::start(&git_provider.repo_root, app.config.watcher.debounce_ms, watch_tx).ok()
+        } else {
+            WatchService::start(cwd, app.config.watcher.debounce_ms, watch_tx).ok()
+        }
     } else {
-        WatchService::start(cwd, app.config.watcher.debounce_ms, watch_tx).ok()
+        None
     };
 
     let reload_tx = tx.clone();

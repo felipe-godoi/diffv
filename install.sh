@@ -53,6 +53,10 @@ if [[ "$1" == "--uninstall" ]]; then
             REMOVED=1
         fi
     done
+    if [ -d "$HOME/.config/diffv" ]; then
+        rm -rf "$HOME/.config/diffv"
+        success "Removed $HOME/.config/diffv"
+    fi
     if [ "$REMOVED" -eq 1 ]; then
         success "diffv successfully uninstalled."
     else

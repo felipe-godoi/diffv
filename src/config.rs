@@ -42,7 +42,7 @@ pub struct DiffConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatcherConfig {
-    #[serde(default = "default_true")]
+    #[serde(default = "default_false")]
     pub enabled: bool,
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u64,
@@ -68,6 +68,9 @@ fn default_view() -> String {
 }
 fn default_true() -> bool {
     true
+}
+fn default_false() -> bool {
+    false
 }
 fn default_tab_width() -> usize {
     4
@@ -119,7 +122,7 @@ impl Default for DiffConfig {
 impl Default for WatcherConfig {
     fn default() -> Self {
         Self {
-            enabled: default_true(),
+            enabled: false,
             debounce_ms: default_debounce_ms(),
             watch_untracked: default_true(),
         }

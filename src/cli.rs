@@ -22,6 +22,10 @@ pub struct Cli {
     #[arg(long)]
     pub no_update: bool,
 
+    /// Uninstall diffv and remove installed binaries and configurations
+    #[arg(long)]
+    pub uninstall: bool,
+
     /// Positional targets: can be a git ref (HEAD~1, branch), two files, two directories, or '-' for stdin
     #[arg(value_name = "TARGET")]
     pub targets: Vec<String>,
