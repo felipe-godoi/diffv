@@ -212,11 +212,11 @@ else
     fi
 fi
 
-# Verify binary and create alias
+# Verify binary
 if [ -x "$INSTALL_DIR/diffv" ]; then
-    ln -sf "$INSTALL_DIR/diffv" "$INSTALL_DIR/dv"
+    rm -f "$INSTALL_DIR/dv"
     VERSION="$("$INSTALL_DIR/diffv" --version 2>/dev/null || echo "diffv")"
-    success "Successfully installed $VERSION to $INSTALL_DIR/diffv (alias: $INSTALL_DIR/dv)"
+    success "Successfully installed $VERSION to $INSTALL_DIR/diffv"
 else
     error "Installation failed: executable not found at $INSTALL_DIR/diffv"
 fi

@@ -100,7 +100,7 @@ fn run(args: Cli) -> Result<()> {
         config.update.channel
     };
 
-    // Explicit update request (e.g. diffv --update, diffv update, dv upgrade, dv up)
+    // Explicit update request (e.g. diffv --update, diffv update, diffv upgrade, diffv up)
     let is_explicit_update = args.update
         || (args.targets.len() == 1
             && (args.targets[0] == "update" || args.targets[0] == "upgrade" || args.targets[0] == "up")
