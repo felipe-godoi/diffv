@@ -194,13 +194,13 @@ pub fn render_file_tree(
     view_mode: FileViewMode,
     theme: &Theme,
 ) {
-    let mode_indicator = if view_mode == FileViewMode::Tree { "Tree [t]" } else { "Flat [t]" };
+    let mode_indicator = if view_mode == FileViewMode::Tree { "📁 Pastas [t]" } else { "📄 Lista [t]" };
     let title = if filter_mode {
-        format!(" 󰍉 Filter: {}_ ", filter_query)
+        format!(" 󰍉 Filtro: {}_ ", filter_query)
     } else if !filter_query.is_empty() {
-        format!(" 󰈚 Files ({}) [{}] · Filter: \"{}\" ", items.len(), mode_indicator, filter_query)
+        format!(" {} ({}) · Filtro: \"{}\" · [</> redim] ", mode_indicator, items.len(), filter_query)
     } else {
-        format!(" 󰈚 Files ({}) [{}] ", items.len(), mode_indicator)
+        format!(" {} ({}) · [</> redim] ", mode_indicator, items.len())
     };
 
     let border_style = if filter_mode {

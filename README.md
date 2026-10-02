@@ -95,7 +95,12 @@ diffv --theme tokyonight
 | `[` or `p` | Diff | Jump to **Previous Hunk** |
 | `Tab` | General | Switch focus between **File Tree** and **Diff View** |
 | `h` / `l` or `←` / `→` | General | Tree: collapse/expand folder. Diff: switch Old/New column |
-| `t` | File Tree | Toggle **Flat List** ↔ **Collapsible Directory Tree** |
+| `Space` | File Tree | Toggle collapse/expand on current folder |
+| `<` / `>` or `,` / `.` | General | **Resize Panes**: shrink / expand File Tree width |
+| `Mouse Wheel` | General | **Scroll** hovered pane smoothly (File Tree or Diff) |
+| `Mouse Click` | General | **Select** file / line, collapse/expand folders, switch focus |
+| `Mouse Drag` | General | **Drag vertical divider** to resize File Tree width |
+| `t` | File Tree | Toggle **📁 Pastas (Tree)** ↔ **📄 Lista (Flat)** |
 | `v` | Diff | Toggle **Visual Mode** for line-level partial staging |
 | `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in Neovim |
 | `e` | Diff | Open file in Neovim / `$EDITOR` at cursor line (`+line`) |

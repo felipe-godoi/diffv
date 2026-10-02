@@ -89,6 +89,12 @@ pub struct App {
     pub selected_history_idx: usize,
     pub history_scroll: usize,
     pub active_commit_view: Option<(String, FileDiff)>,
+
+    // Layout resizing & viewport geometry
+    pub file_tree_width: u16,
+    pub is_dragging_divider: bool,
+    pub viewport_height: usize,
+    pub file_tree_height: usize,
 }
 
 impl App {
@@ -140,6 +146,10 @@ impl App {
             selected_history_idx: 0,
             history_scroll: 0,
             active_commit_view: None,
+            file_tree_width: 32,
+            is_dragging_divider: false,
+            viewport_height: 25,
+            file_tree_height: 25,
         };
 
         app.reload_diffs_internal(false)?;
@@ -490,51 +500,61 @@ impl App {
                     self.set_notification("Focus: NEW version (right)");
                 }
             }
+            KeyCode::Char('<') | KeyCode::Char(',') => {
+                self.file_tree_width = self.file_tree_width.saturating_sub(3).max(16);
+                self.set_notification(format!("Largura do painel: {} colunas", self.file_tree_width));
+            }
+            KeyCode::Char('>') | KeyCode::Char('.') => {
+                self.file_tree_width = (self.file_tree_width + 3).min(80);
+                self.set_notification(format!("Largura do painel: {} colunas", self.file_tree_width));
+            }
+            KeyCode::Char(' ') => {
+                if self.focus == Focus::FileTree && self.file_view_mode == FileViewMode::Tree {
+                    if let Some(item) = self.tree_items.get(self.selected_tree_idx) {
+                        if item.is_dir {
+                            if item.is_collapsed {
+                                self.collapsed_dirs.remove(&item.path);
+                            } else {
+                                self.collapsed_dirs.insert(item.path.clone());
+                            }
+                            self.update_filter();
+                        }
+                    }
+                }
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 if self.focus == Focus::FileTree {
-                    if self.file_view_mode == FileViewMode::Tree {
-                        if self.selected_tree_idx + 1 < self.tree_items.len() {
-                            self.selected_tree_idx += 1;
-                            self.scroll_y = 0;
-                            self.selected_row = 0;
-                        }
-                    } else if self.selected_filtered_idx + 1 < self.filtered_indices.len() {
-                        self.selected_filtered_idx += 1;
-                        self.scroll_y = 0;
-                        self.selected_row = 0;
-                    }
+                    self.file_tree_down(1);
                 } else {
                     self.scroll_down(1);
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 if self.focus == Focus::FileTree {
-                    if self.file_view_mode == FileViewMode::Tree {
-                        if self.selected_tree_idx > 0 {
-                            self.selected_tree_idx -= 1;
-                            self.scroll_y = 0;
-                            self.selected_row = 0;
-                        }
-                    } else if self.selected_filtered_idx > 0 {
-                        self.selected_filtered_idx -= 1;
-                        self.scroll_y = 0;
-                        self.selected_row = 0;
-                    }
+                    self.file_tree_up(1);
                 } else {
                     self.scroll_up(1);
                 }
             }
             KeyCode::Char('J') | KeyCode::PageDown => {
-                self.scroll_down(15);
+                if self.focus == Focus::FileTree {
+                    self.file_tree_down(10);
+                } else {
+                    self.scroll_down(10);
+                }
             }
             KeyCode::Char('K') | KeyCode::PageUp => {
-                self.scroll_up(15);
+                if self.focus == Focus::FileTree {
+                    self.file_tree_up(10);
+                } else {
+                    self.scroll_up(10);
+                }
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll_down(15);
+                self.scroll_down(10);
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll_up(15);
+                self.scroll_up(10);
             }
             KeyCode::Char(']') | KeyCode::Char('n') => {
                 self.jump_next_hunk();
@@ -596,7 +616,46 @@ impl App {
         }
     }
 
-    fn scroll_down(&mut self, amount: usize) {
+    pub fn file_tree_down(&mut self, amount: usize) {
+        let tree_vp = self.file_tree_height.saturating_sub(2).max(1);
+        if self.file_view_mode == FileViewMode::Tree {
+            if !self.tree_items.is_empty() {
+                self.selected_tree_idx = (self.selected_tree_idx + amount).min(self.tree_items.len() - 1);
+                if self.selected_tree_idx >= self.file_tree_scroll + tree_vp {
+                    self.file_tree_scroll = self.selected_tree_idx.saturating_sub(tree_vp - 1);
+                }
+                self.scroll_y = 0;
+                self.selected_row = 0;
+            }
+        } else if !self.filtered_indices.is_empty() {
+            self.selected_filtered_idx = (self.selected_filtered_idx + amount).min(self.filtered_indices.len() - 1);
+            if self.selected_filtered_idx >= self.file_tree_scroll + tree_vp {
+                self.file_tree_scroll = self.selected_filtered_idx.saturating_sub(tree_vp - 1);
+            }
+            self.scroll_y = 0;
+            self.selected_row = 0;
+        }
+    }
+
+    pub fn file_tree_up(&mut self, amount: usize) {
+        if self.file_view_mode == FileViewMode::Tree {
+            self.selected_tree_idx = self.selected_tree_idx.saturating_sub(amount);
+            if self.selected_tree_idx < self.file_tree_scroll {
+                self.file_tree_scroll = self.selected_tree_idx;
+            }
+            self.scroll_y = 0;
+            self.selected_row = 0;
+        } else {
+            self.selected_filtered_idx = self.selected_filtered_idx.saturating_sub(amount);
+            if self.selected_filtered_idx < self.file_tree_scroll {
+                self.file_tree_scroll = self.selected_filtered_idx;
+            }
+            self.scroll_y = 0;
+            self.selected_row = 0;
+        }
+    }
+
+    pub fn scroll_down(&mut self, amount: usize) {
         if let Some(file) = self.current_file() {
             let total = if self.is_unified {
                 file.hunks.iter().map(|h| h.lines.len() + 1).sum()
@@ -605,17 +664,120 @@ impl App {
             };
             if total > 0 {
                 self.selected_row = (self.selected_row + amount).min(total - 1);
-                if self.selected_row >= self.scroll_y + 30 {
-                    self.scroll_y = self.selected_row.saturating_sub(29);
+                let vp = self.viewport_height.saturating_sub(3).max(1);
+                if self.selected_row >= self.scroll_y + vp {
+                    self.scroll_y = self.selected_row.saturating_sub(vp - 1);
                 }
             }
         }
     }
 
-    fn scroll_up(&mut self, amount: usize) {
+    pub fn scroll_up(&mut self, amount: usize) {
         self.selected_row = self.selected_row.saturating_sub(amount);
         if self.selected_row < self.scroll_y {
             self.scroll_y = self.selected_row;
+        }
+    }
+
+    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        match mouse.kind {
+            MouseEventKind::ScrollDown => {
+                if mouse.column < self.file_tree_width {
+                    self.file_tree_down(3);
+                } else {
+                    self.scroll_down(3);
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if mouse.column < self.file_tree_width {
+                    self.file_tree_up(3);
+                } else {
+                    self.scroll_up(3);
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let divider_col = self.file_tree_width;
+                if mouse.column >= divider_col.saturating_sub(1) && mouse.column <= divider_col + 1 {
+                    self.is_dragging_divider = true;
+                    return;
+                }
+
+                if mouse.column < self.file_tree_width {
+                    self.focus = Focus::FileTree;
+                    if mouse.row <= 1 {
+                        self.file_view_mode = match self.file_view_mode {
+                            FileViewMode::Flat => FileViewMode::Tree,
+                            FileViewMode::Tree => FileViewMode::Flat,
+                        };
+                        self.update_filter();
+                        let mode_str = match self.file_view_mode {
+                            FileViewMode::Flat => "Lista",
+                            FileViewMode::Tree => "Pastas",
+                        };
+                        self.set_notification(format!("Modo: {}", mode_str));
+                        return;
+                    }
+
+                    let item_row = (mouse.row.saturating_sub(2)) as usize;
+                    let target_idx = self.file_tree_scroll + item_row;
+
+                    if self.file_view_mode == FileViewMode::Tree {
+                        if target_idx < self.tree_items.len() {
+                            self.selected_tree_idx = target_idx;
+                            self.scroll_y = 0;
+                            self.selected_row = 0;
+                            let item = &self.tree_items[target_idx];
+                            if item.is_dir {
+                                if item.is_collapsed {
+                                    self.collapsed_dirs.remove(&item.path);
+                                } else {
+                                    self.collapsed_dirs.insert(item.path.clone());
+                                }
+                                self.update_filter();
+                            }
+                        }
+                    } else if target_idx < self.filtered_indices.len() {
+                        self.selected_filtered_idx = target_idx;
+                        self.scroll_y = 0;
+                        self.selected_row = 0;
+                    }
+                    return;
+                }
+
+                if mouse.column > self.file_tree_width && mouse.row >= 1 {
+                    self.focus = Focus::DiffView;
+                    let diff_inner_x = mouse.column.saturating_sub(self.file_tree_width + 1);
+                    if diff_inner_x < (self.viewport_height.max(30) as u16) {
+                        self.column_side = ColumnSide::Left;
+                    } else {
+                        self.column_side = ColumnSide::Right;
+                    }
+
+                    let line_row = (mouse.row.saturating_sub(2)) as usize;
+                    let target_row = self.scroll_y + line_row;
+                    if let Some(file) = self.current_file() {
+                        let total = if self.is_unified {
+                            file.hunks.iter().map(|h| h.lines.len() + 1).sum()
+                        } else {
+                            file.aligned_rows.len()
+                        };
+                        if target_row < total {
+                            self.selected_row = target_row;
+                        }
+                    }
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.is_dragging_divider || (mouse.column >= self.file_tree_width.saturating_sub(2) && mouse.column <= self.file_tree_width + 2) {
+                    self.file_tree_width = mouse.column.clamp(16, 80);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.is_dragging_divider = false;
+            }
+            _ => {}
         }
     }
 
@@ -988,7 +1150,7 @@ impl App {
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(32), // File Tree
+                Constraint::Length(self.file_tree_width), // File Tree
                 Constraint::Min(20),   // Diff View
                 Constraint::Length(if self.config.ui.overview_ruler { 1 } else { 0 }), // Ruler
             ])
@@ -997,6 +1159,9 @@ impl App {
         let file_tree_area = main_chunks[0];
         let diff_area = main_chunks[1];
         let ruler_area = main_chunks[2];
+
+        self.viewport_height = diff_area.height as usize;
+        self.file_tree_height = file_tree_area.height as usize;
 
         let selected_file_idx = if self.file_view_mode == FileViewMode::Tree {
             self.selected_tree_idx

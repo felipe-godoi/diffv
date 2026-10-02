@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = disable_raw_mode();
-        let _ = execute!(stdout(), LeaveAlternateScreen);
+        let _ = execute!(stdout(), LeaveAlternateScreen, event::DisableMouseCapture);
         default_panic(panic_info);
     }));
 
@@ -50,7 +50,7 @@ fn main() -> Result<()> {
     // Start TUI
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, event::EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -58,7 +58,7 @@ fn main() -> Result<()> {
 
     // Teardown TUI
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, event::DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     if let Err(err) = app_result {
@@ -195,13 +195,13 @@ fn run_app(
         // Check if an external editor request is pending
         if let Some((file_path, line_no)) = app.editor_request.take() {
             disable_raw_mode()?;
-            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen, event::DisableMouseCapture)?;
             terminal.show_cursor()?;
 
             let edit_res = open_editor(&file_path, line_no, &app.config.editor);
 
             enable_raw_mode()?;
-            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+            execute!(terminal.backend_mut(), EnterAlternateScreen, event::EnableMouseCapture)?;
             terminal.clear()?;
 
             if let Err(e) = edit_res {
@@ -218,6 +218,9 @@ fn run_app(
                 if key.kind == KeyEventKind::Press {
                     app.handle_key(key);
                 }
+            }
+            AppEvent::Input(Event::Mouse(mouse)) => {
+                app.handle_mouse(mouse);
             }
             AppEvent::Input(Event::Resize(_, _)) => {
                 terminal.autoresize()?;
