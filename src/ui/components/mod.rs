@@ -6,3 +6,4 @@ pub mod ruler;
 pub mod side_by_side;
 pub mod status_bar;
 pub mod unified;
+pub mod worktree_popup;

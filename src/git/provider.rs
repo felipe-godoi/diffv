@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use crate::core::aligner::align_hunks_side_by_side;
 use crate::core::models::{
     ChangeStats, CommitEntry, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, RepoStats, StageStatus,
+    StashEntry, WorktreeEntry,
 };
 use crate::git::patch::parse_unified_diff;
 
@@ -335,5 +336,162 @@ impl GitProvider {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn get_repo_commits(&self, max_count: usize) -> Result<Vec<CommitEntry>> {
+        let output = Command::new("git")
+            .args([
+                "log",
+                &format!("--format=%h\t%an\t%ar\t%s"),
+                &format!("-n{}", max_count),
+            ])
+            .current_dir(&self.repo_root)
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut entries = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 4 {
+                entries.push(CommitEntry {
+                    hash: parts[0].to_string(),
+                    author: parts[1].to_string(),
+                    date: parts[2].to_string(),
+                    message: parts[3].to_string(),
+                });
+            }
+        }
+
+        Ok(entries)
+    }
+
+    pub fn load_commit_full_diff(&self, commit_hash: &str) -> Result<Vec<FileDiff>> {
+        let output = Command::new("git")
+            .args(["show", "--format=", "-p", commit_hash])
+            .current_dir(&self.repo_root)
+            .output()?;
+
+        if !output.status.success() {
+            anyhow::bail!("Failed to get commit diff for {}", commit_hash);
+        }
+
+        let diff_text = String::from_utf8_lossy(&output.stdout);
+        let mut files = parse_unified_diff(&diff_text);
+        for file in &mut files {
+            file.aligned_rows = align_hunks_side_by_side(&file.hunks);
+        }
+        Ok(files)
+    }
+
+    pub fn get_stashes(&self) -> Result<Vec<StashEntry>> {
+        let output = Command::new("git")
+            .args(["stash", "list", "--format=%gd\t%cr\t%gs"])
+            .current_dir(&self.repo_root)
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut entries = Vec::new();
+
+        for (idx, line) in stdout.lines().enumerate() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 3 {
+                entries.push(StashEntry {
+                    index: idx,
+                    selector: parts[0].to_string(),
+                    date: parts[1].to_string(),
+                    message: parts[2].to_string(),
+                });
+            }
+        }
+
+        Ok(entries)
+    }
+
+    pub fn load_stash_diff(&self, stash_selector: &str) -> Result<Vec<FileDiff>> {
+        let output = Command::new("git")
+            .args(["stash", "show", "-p", stash_selector])
+            .current_dir(&self.repo_root)
+            .output()?;
+
+        if !output.status.success() {
+            anyhow::bail!("Failed to get stash diff for {}", stash_selector);
+        }
+
+        let diff_text = String::from_utf8_lossy(&output.stdout);
+        let mut files = parse_unified_diff(&diff_text);
+        for file in &mut files {
+            file.aligned_rows = align_hunks_side_by_side(&file.hunks);
+        }
+        Ok(files)
+    }
+
+    pub fn get_worktrees(&self, current_pwd: &Path) -> Result<Vec<WorktreeEntry>> {
+        let output = Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(&self.repo_root)
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut entries = Vec::new();
+
+        let mut curr_path: Option<PathBuf> = None;
+        let mut curr_head = String::new();
+        let mut curr_branch: Option<String> = None;
+        let mut is_bare = false;
+
+        for line in stdout.lines() {
+            if line.is_empty() {
+                if let Some(path) = curr_path.take() {
+                    let is_current = current_pwd.starts_with(&path) || self.repo_root == path;
+                    entries.push(WorktreeEntry {
+                        path,
+                        head: curr_head.clone(),
+                        branch: curr_branch.take(),
+                        is_bare,
+                        is_current,
+                    });
+                }
+                curr_head.clear();
+                is_bare = false;
+                continue;
+            }
+
+            if let Some(p) = line.strip_prefix("worktree ") {
+                curr_path = Some(PathBuf::from(p.trim()));
+            } else if let Some(h) = line.strip_prefix("HEAD ") {
+                curr_head = h.trim().to_string();
+            } else if let Some(b) = line.strip_prefix("branch ") {
+                let b_clean = b.trim().strip_prefix("refs/heads/").unwrap_or(b.trim()).to_string();
+                curr_branch = Some(b_clean);
+            } else if line == "bare" {
+                is_bare = true;
+            }
+        }
+
+        if let Some(path) = curr_path.take() {
+            let is_current = current_pwd.starts_with(&path) || self.repo_root == path;
+            entries.push(WorktreeEntry {
+                path,
+                head: curr_head,
+                branch: curr_branch,
+                is_bare,
+                is_current,
+            });
+        }
+
+        Ok(entries)
     }
 }

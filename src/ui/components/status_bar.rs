@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
+use crate::core::models::Language;
 use crate::ui::theme::Theme;
 
 pub fn render_status_bar(
@@ -11,11 +12,12 @@ pub fn render_status_bar(
     area: Rect,
     notification: Option<&str>,
     mode_label: &str,
+    language: Language,
     theme: &Theme,
 ) {
     let (badge_fg, badge_bg) = match mode_label {
-        "VISUAL" => (Color::Rgb(15, 20, 25), Color::Rgb(215, 130, 255)),
-        "TREE" => (Color::Rgb(15, 20, 25), theme.status_u),
+        "VISUAL" => (Color::Rgb(15, 20, 25), Color::Rgb(203, 166, 247)), // Soft Lavender
+        "TREE" => (Color::Rgb(15, 20, 25), theme.status_u),              // Soft Blue
         _ => (Color::Rgb(15, 20, 25), theme.header_fg),
     };
 
@@ -32,7 +34,7 @@ pub fn render_status_bar(
             mode_pill,
             Span::raw("  "),
             Span::styled(
-                format!("🔔 {} ", msg),
+                format!("󰂚 {} ", msg),
                 Style::default()
                     .fg(theme.key_fg)
                     .bg(theme.status_bg)
@@ -44,35 +46,49 @@ pub fn render_status_bar(
         let text_style = Style::default().fg(theme.status_fg);
         let sep_style = Style::default().fg(theme.border);
 
+        let (stage_txt, unstage_txt, discard_txt, visual_txt, edit_txt, copy_txt, hist_txt, help_txt, quit_txt) = match language {
+            Language::En => ("Stage ", "Unstage ", "Discard ", "Visual ", "Edit ", "Copy ", "History ", "Help ", "Quit"),
+            Language::Pt => ("Preparar ", "Despreparar ", "Descartar ", "Visual ", "Editar ", "Copiar ", "Histórico ", "Ajuda ", "Sair"),
+        };
+
         Line::from(vec![
             mode_pill,
             Span::raw("  "),
+            Span::styled("1/2/3 ", key_style),
+            Span::styled(match language { Language::En => "Tabs ", Language::Pt => "Abas " }, text_style),
+            Span::styled("│ ", sep_style),
             Span::styled("s ", key_style),
-            Span::styled("Stage  ", text_style),
+            Span::styled(stage_txt, text_style),
             Span::styled("│ ", sep_style),
             Span::styled("u ", key_style),
-            Span::styled("Unstage  ", text_style),
+            Span::styled(unstage_txt, text_style),
             Span::styled("│ ", sep_style),
             Span::styled("d ", key_style),
-            Span::styled("Discard  ", text_style),
+            Span::styled(discard_txt, text_style),
             Span::styled("│ ", sep_style),
             Span::styled("v ", key_style),
-            Span::styled("Visual  ", text_style),
+            Span::styled(visual_txt, text_style),
             Span::styled("│ ", sep_style),
             Span::styled("e ", key_style),
-            Span::styled("Edit  ", text_style),
+            Span::styled(edit_txt, text_style),
             Span::styled("│ ", sep_style),
             Span::styled("c ", key_style),
-            Span::styled("Copy  ", text_style),
+            Span::styled(copy_txt, text_style),
             Span::styled("│ ", sep_style),
             Span::styled("H ", key_style),
-            Span::styled("History  ", text_style),
+            Span::styled(hist_txt, text_style),
+            Span::styled("│ ", sep_style),
+            Span::styled("W ", key_style),
+            Span::styled("Worktrees ", text_style),
+            Span::styled("│ ", sep_style),
+            Span::styled("L ", key_style),
+            Span::styled("Lang ", text_style),
             Span::styled("│ ", sep_style),
             Span::styled("? ", key_style),
-            Span::styled("Help  ", text_style),
+            Span::styled(help_txt, text_style),
             Span::styled("│ ", sep_style),
             Span::styled("q ", key_style),
-            Span::styled("Quit", text_style),
+            Span::styled(quit_txt, text_style),
         ])
     };
 

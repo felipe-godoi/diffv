@@ -130,3 +130,70 @@ fn test_file_history() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_worktrees_and_stashes() {
+    let temp_dir = std::env::temp_dir().join("diffv_test_git_worktrees");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&temp_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "Git command failed: {:?}", args);
+    };
+
+    run(&["init"]);
+    run(&["config", "user.name", "WorktreeTester"]);
+    run(&["config", "user.email", "worktree@example.com"]);
+
+    let main_file = temp_dir.join("main.txt");
+    fs::write(&main_file, "initial\n").unwrap();
+    run(&["add", "main.txt"]);
+    run(&["commit", "-m", "Initial commit"]);
+
+    let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
+
+    // 1. Worktrees
+    let worktrees = provider.get_worktrees(&temp_dir).unwrap();
+    assert!(!worktrees.is_empty());
+    assert!(worktrees[0].is_current);
+
+    // 2. Repo Commits
+    let commits = provider.get_repo_commits(10).unwrap();
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].message, "Initial commit");
+
+    // 3. Stash
+    fs::write(&main_file, "initial\nstashed line\n").unwrap();
+    run(&["stash", "push", "-m", "my-wip-stash"]);
+
+    let stashes = provider.get_stashes().unwrap();
+    assert_eq!(stashes.len(), 1);
+    assert!(stashes[0].message.contains("my-wip-stash"));
+
+    let stash_diff = provider.load_stash_diff(&stashes[0].selector).unwrap();
+    assert_eq!(stash_diff.len(), 1);
+    assert_eq!(stash_diff[0].stats.additions, 1);
+
+    // Clean up
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_models_language_and_drawer() {
+    use diffv::core::models::{DrawerTab, Language};
+    use diffv::ui::components::file_tree::FileViewMode;
+
+    let default_lang = Language::default();
+    assert_eq!(default_lang, Language::En);
+
+    let default_tab = DrawerTab::default();
+    assert_eq!(default_tab, DrawerTab::Changes);
+
+    let default_tree_mode = FileViewMode::Tree;
+    assert_eq!(default_tree_mode, FileViewMode::Tree);
+}
+

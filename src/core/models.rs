@@ -127,3 +127,45 @@ pub struct CommitEntry {
     pub date: String,
     pub message: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StashEntry {
+    pub index: usize,
+    pub selector: String, // e.g. "stash@{0}"
+    pub date: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeEntry {
+    pub path: PathBuf,
+    pub head: String,
+    pub branch: Option<String>,
+    pub is_bare: bool,
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawerTab {
+    Changes,
+    Commits,
+    Stashes,
+}
+
+impl Default for DrawerTab {
+    fn default() -> Self {
+        DrawerTab::Changes
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Language {
+    En,
+    Pt,
+}
+
+impl Default for Language {
+    fn default() -> Self {
+        Language::En
+    }
+}
