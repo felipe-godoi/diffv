@@ -643,7 +643,10 @@ impl App {
                     Err(e) => self.set_notification(format!("Clipboard error: {}", e)),
                 }
             } else {
-                self.set_notification("No hunk selected at cursor");
+                match crate::integration::clipboard::copy_file_diff_as_markdown(&file.new_path, &file.hunks) {
+                    Ok(_) => self.set_notification("✓ Copied full file diff to clipboard as Markdown!"),
+                    Err(e) => self.set_notification(format!("Clipboard error: {}", e)),
+                }
             }
         }
     }
@@ -695,23 +698,19 @@ impl App {
                     continue;
                 }
 
-                // Check left (deletion) and right (addition)
-                if let Some(left) = &row.left {
-                    if let Some(pos) = hunk.lines.iter().position(|l| l.old_line_no == left.old_line_no && l.kind == left.kind && l.content == left.content) {
-                        if !selected_indices.contains(&pos) {
-                            selected_indices.push(pos);
-                        }
+                if let Some(l_idx) = row.left_line_idx {
+                    if !selected_indices.contains(&l_idx) {
+                        selected_indices.push(l_idx);
                     }
                 }
-                if let Some(right) = &row.right {
-                    if let Some(pos) = hunk.lines.iter().position(|l| l.new_line_no == right.new_line_no && l.kind == right.kind && l.content == right.content) {
-                        if !selected_indices.contains(&pos) {
-                            selected_indices.push(pos);
-                        }
+                if let Some(r_idx) = row.right_line_idx {
+                    if !selected_indices.contains(&r_idx) {
+                        selected_indices.push(r_idx);
                     }
                 }
             }
         }
+        selected_indices.sort_unstable();
 
         if selected_indices.is_empty() {
             self.set_notification("No changed lines in visual selection to stage");

@@ -88,6 +88,8 @@ pub struct AlignedRow {
     pub left: Option<DiffLine>,
     pub right: Option<DiffLine>,
     pub hunk_index: Option<usize>,
+    pub left_line_idx: Option<usize>,
+    pub right_line_idx: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

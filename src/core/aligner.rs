@@ -16,19 +16,25 @@ pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
                         left: Some(lines[i].clone()),
                         right: Some(lines[i].clone()),
                         hunk_index: Some(hunk_idx),
+                        left_line_idx: Some(i),
+                        right_line_idx: Some(i),
                     });
                     i += 1;
                 }
                 DiffKind::Deletion | DiffKind::Addition => {
                     // Collect consecutive deletions and additions in this change block
                     let mut deletions = Vec::new();
+                    let mut del_indices = Vec::new();
                     let mut additions = Vec::new();
+                    let mut add_indices = Vec::new();
 
                     while i < lines.len() && (lines[i].kind == DiffKind::Deletion || lines[i].kind == DiffKind::Addition) {
                         if lines[i].kind == DiffKind::Deletion {
                             deletions.push(lines[i].clone());
+                            del_indices.push(i);
                         } else {
                             additions.push(lines[i].clone());
+                            add_indices.push(i);
                         }
                         i += 1;
                     }
@@ -47,6 +53,18 @@ pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
                             Some(DiffLine::virtual_line())
                         };
 
+                        let left_line_idx = if row_idx < del_indices.len() {
+                            Some(del_indices[row_idx])
+                        } else {
+                            None
+                        };
+
+                        let right_line_idx = if row_idx < add_indices.len() {
+                            Some(add_indices[row_idx])
+                        } else {
+                            None
+                        };
+
                         // Compute intra-line highlighting for paired modified lines
                         if row_idx < deletions.len() && row_idx < additions.len() {
                             let left_ref = left_line.as_mut().unwrap();
@@ -60,6 +78,8 @@ pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
                             left: left_line,
                             right: right_line,
                             hunk_index: Some(hunk_idx),
+                            left_line_idx,
+                            right_line_idx,
                         });
                     }
                 }

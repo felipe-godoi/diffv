@@ -94,7 +94,17 @@ impl GitProvider {
         }
 
         if let Some(r) = target_ref {
-            cmd.arg(r);
+            if self.repo_root.join(r).exists() || Path::new(r).exists() {
+                if staged_only {
+                    cmd.arg("--cached");
+                } else if self.has_head() {
+                    cmd.arg("HEAD");
+                }
+                cmd.arg("--");
+                cmd.arg(r);
+            } else {
+                cmd.arg(r);
+            }
         } else if staged_only {
             cmd.arg("--cached");
         } else if self.has_head() {
