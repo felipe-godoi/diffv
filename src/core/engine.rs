@@ -90,8 +90,8 @@ impl DiffEngine {
                 let content_b = fs::read_to_string(&file_b);
 
                 match (content_a, content_b) {
-                    (Ok(ca), Ok(cb)) => {
-                        if ca != cb {
+                    (Ok(ca), Ok(cb))
+                        if ca != cb => {
                             let mut diff = self.diff_texts(&ca, &cb, Some(&file_a), &file_b);
                             diff.new_path = rel.clone();
                             diff.old_path = Some(rel.clone());
@@ -99,7 +99,6 @@ impl DiffEngine {
                             diff.aligned_rows = align_hunks_side_by_side(&diff.hunks);
                             results.push(diff);
                         }
-                    }
                     _ => {
                         // Binary or read error
                     }

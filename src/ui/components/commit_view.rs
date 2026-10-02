@@ -45,11 +45,10 @@ pub fn render_commit_overview(
         .split(inner);
 
     // 1. Metadata lines
-    let mut meta_lines = Vec::new();
-    meta_lines.push(Line::from(vec![
+    let mut meta_lines = vec![Line::from(vec![
         Span::styled(" Commit:  ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
         Span::styled(&commit.hash, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-    ]));
+    ])];
     meta_lines.push(Line::from(vec![
         Span::styled(" Author:  ", Style::default().fg(theme.line_num_fg)),
         Span::styled(&commit.author, Style::default().fg(theme.status_u)),
@@ -159,11 +158,10 @@ pub fn render_stash_overview(
         .split(inner);
 
     // 1. Metadata
-    let mut meta_lines = Vec::new();
-    meta_lines.push(Line::from(vec![
+    let mut meta_lines = vec![Line::from(vec![
         Span::styled(" Stash:   ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
         Span::styled(&stash.selector, Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-    ]));
+    ])];
     meta_lines.push(Line::from(vec![
         Span::styled(" Date:    ", Style::default().fg(theme.line_num_fg)),
         Span::styled(&stash.date, Style::default().fg(theme.line_num_fg)),

@@ -14,9 +14,17 @@ pub struct GitProvider {
     pub context_lines: usize,
 }
 
+/// Reads never rewrite the index (GIT_OPTIONAL_LOCKS=0), so the watcher's
+/// `.git/index` trigger can't loop on diffv's own `git status`.
+fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    cmd.args(["-c", "core.quotePath=false"]).env("GIT_OPTIONAL_LOCKS", "0");
+    cmd
+}
+
 impl GitProvider {
     pub fn discover(start_dir: Option<&Path>) -> Result<Self> {
-        let mut cmd = Command::new("git");
+        let mut cmd = git_command();
         cmd.args(["rev-parse", "--show-toplevel"]);
         if let Some(dir) = start_dir {
             cmd.current_dir(dir);
@@ -39,7 +47,7 @@ impl GitProvider {
     }
 
     pub fn get_branch(&self) -> String {
-        let output = Command::new("git")
+        let output = git_command()
             .args(["branch", "--show-current"])
             .current_dir(&self.repo_root)
             .output();
@@ -52,7 +60,7 @@ impl GitProvider {
         }
 
         // Fallback for detached HEAD
-        let output_ref = Command::new("git")
+        let output_ref = git_command()
             .args(["rev-parse", "--short", "HEAD"])
             .current_dir(&self.repo_root)
             .output();
@@ -76,7 +84,7 @@ impl GitProvider {
     }
 
     pub fn has_head(&self) -> bool {
-        Command::new("git")
+        git_command()
             .args(["rev-parse", "--verify", "HEAD"])
             .current_dir(&self.repo_root)
             .output()
@@ -120,8 +128,9 @@ impl GitProvider {
         };
 
         // Fetch file statuses from `git status --porcelain -uall`
-        let status_output = Command::new("git")
-            .args(["status", "--porcelain=v1", "-uall"])
+        // `-z` keeps paths verbatim (spaces, unicode) and lists rename sources separately.
+        let status_output = git_command()
+            .args(["status", "--porcelain=v1", "-z", "-uall"])
             .current_dir(&self.repo_root)
             .output();
 
@@ -130,14 +139,18 @@ impl GitProvider {
 
         if let Ok(out) = status_output {
             let status_text = String::from_utf8_lossy(&out.stdout);
-            for line in status_text.lines() {
-                if line.len() < 4 {
+            let mut entries = status_text.split('\0');
+            while let Some(entry) = entries.next() {
+                let bytes = entry.as_bytes();
+                if bytes.len() < 4 {
                     continue;
                 }
-                let index_status = line.as_bytes()[0] as char;
-                let work_status = line.as_bytes()[1] as char;
-                let path_str = line[3..].trim();
-                let path = PathBuf::from(path_str);
+                let index_status = bytes[0] as char;
+                let work_status = bytes[1] as char;
+                if matches!(index_status, 'R' | 'C') || matches!(work_status, 'R' | 'C') {
+                    entries.next();
+                }
+                let path = PathBuf::from(&entry[3..]);
 
                 let stage_status = match (index_status, work_status) {
                     ('?', '?') => StageStatus::Untracked,
@@ -154,11 +167,10 @@ impl GitProvider {
                     _ => FileStatus::Modified,
                 };
 
-                status_map.insert(path.clone(), (file_status, stage_status));
-
                 if index_status == '?' && work_status == '?' {
-                    untracked_paths.push(path);
+                    untracked_paths.push(path.clone());
                 }
+                status_map.insert(path, (file_status, stage_status));
             }
         }
 
@@ -212,7 +224,7 @@ impl GitProvider {
     }
 
     fn run_git_diff(&self, args: &[String], ignore_whitespace: bool) -> Result<Vec<FileDiff>> {
-        let mut cmd = Command::new("git");
+        let mut cmd = git_command();
         cmd.current_dir(&self.repo_root).arg("diff").arg(self.unified_arg());
         if ignore_whitespace {
             cmd.arg("--ignore-all-space");
@@ -301,11 +313,11 @@ impl GitProvider {
     }
 
     pub fn get_file_history(&self, file_path: &Path, max_count: usize) -> Result<Vec<CommitEntry>> {
-        let output = Command::new("git")
+        let output = git_command()
             .args([
                 "log",
                 "--follow",
-                &format!("--format=%h\t%an\t%ar\t%s"),
+                "--format=%h\t%an\t%ar\t%s",
                 &format!("-n{}", max_count),
                 "--",
             ])
@@ -336,7 +348,7 @@ impl GitProvider {
     }
 
     pub fn load_commit_diff_for_file(&self, commit_hash: &str, file_path: &Path) -> Result<Option<FileDiff>> {
-        let output = Command::new("git")
+        let output = git_command()
             .args(["show", "--format=", "-p", &self.unified_arg(), commit_hash, "--"])
             .arg(file_path)
             .current_dir(&self.repo_root)
@@ -357,10 +369,10 @@ impl GitProvider {
     }
 
     pub fn get_repo_commits(&self, max_count: usize) -> Result<Vec<CommitEntry>> {
-        let output = Command::new("git")
+        let output = git_command()
             .args([
                 "log",
-                &format!("--format=%h\t%an\t%ar\t%s"),
+                "--format=%h\t%an\t%ar\t%s",
                 &format!("-n{}", max_count),
             ])
             .current_dir(&self.repo_root)
@@ -389,7 +401,7 @@ impl GitProvider {
     }
 
     pub fn load_commit_full_diff(&self, commit_hash: &str) -> Result<Vec<FileDiff>> {
-        let output = Command::new("git")
+        let output = git_command()
             .args(["show", "--format=", "-p", &self.unified_arg(), commit_hash])
             .current_dir(&self.repo_root)
             .output()?;
@@ -407,7 +419,7 @@ impl GitProvider {
     }
 
     pub fn get_stashes(&self) -> Result<Vec<StashEntry>> {
-        let output = Command::new("git")
+        let output = git_command()
             .args(["stash", "list", "--format=%gd\t%cr\t%gs"])
             .current_dir(&self.repo_root)
             .output()?;
@@ -435,7 +447,7 @@ impl GitProvider {
     }
 
     pub fn load_stash_diff(&self, stash_selector: &str) -> Result<Vec<FileDiff>> {
-        let output = Command::new("git")
+        let output = git_command()
             .args(["stash", "show", "-p", &self.unified_arg(), stash_selector])
             .current_dir(&self.repo_root)
             .output()?;
@@ -453,7 +465,7 @@ impl GitProvider {
     }
 
     pub fn get_worktrees(&self, current_pwd: &Path) -> Result<Vec<WorktreeEntry>> {
-        let output = Command::new("git")
+        let output = git_command()
             .args(["worktree", "list", "--porcelain"])
             .current_dir(&self.repo_root)
             .output()?;
@@ -520,7 +532,7 @@ impl GitProvider {
             anyhow::bail!("Worktree path cannot be empty");
         }
 
-        let mut cmd = Command::new("git");
+        let mut cmd = git_command();
         cmd.current_dir(&self.repo_root);
         cmd.arg("worktree").arg("add");
 
@@ -528,14 +540,14 @@ impl GitProvider {
             cmd.arg(trimmed_path);
         } else {
             // Check if branch exists
-            let branch_exists = Command::new("git")
+            let branch_exists = git_command()
                 .args(["rev-parse", "--verify", trimmed_branch])
                 .current_dir(&self.repo_root)
                 .output()
                 .map(|o| o.status.success())
                 .unwrap_or(false);
 
-            let remote_exists = Command::new("git")
+            let remote_exists = git_command()
                 .args(["show-ref", "--verify", &format!("refs/remotes/{}", trimmed_branch)])
                 .current_dir(&self.repo_root).output()
                 .map(|o| o.status.success()).unwrap_or(false);
@@ -566,7 +578,7 @@ impl GitProvider {
 
     pub fn get_branches(&self) -> Vec<String> {
         let mut branches = Vec::new();
-        if let Ok(out) = Command::new("git")
+        if let Ok(out) = git_command()
             .args(["branch", "--format=%(refname:short)"])
             .current_dir(&self.repo_root)
             .output()
@@ -581,7 +593,7 @@ impl GitProvider {
             }
         }
 
-        if let Ok(out) = Command::new("git")
+        if let Ok(out) = git_command()
             .args(["branch", "-r", "--format=%(refname:short)"])
             .current_dir(&self.repo_root)
             .output()

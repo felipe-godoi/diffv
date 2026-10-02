@@ -5,17 +5,6 @@ use anyhow::{bail, Context, Result};
 
 const POPUP_SESSION_PREFIX: &str = "diffv-popup-";
 
-pub fn is_inside_tmux() -> bool {
-    std::env::var("TMUX").is_ok()
-}
-
-pub fn get_tmux_popup_snippet() -> &'static str {
-    r##"# Add to your ~/.tmux.conf:
-# Prefix + d shows/hides diffv in a floating popup (state is kept while hidden):
-bind-key d run-shell -b "diffv --tmux-toggle '#{client_name}' '#{session_name}' '#{pane_current_path}'"
-"##
-}
-
 /// One background session per project; tmux session names cannot contain `.` or `:`.
 pub fn popup_session_name(path: &Path) -> String {
     let slug: String = path

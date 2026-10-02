@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub ui: UiConfig,
@@ -135,33 +136,22 @@ impl Default for EditorConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            ui: UiConfig::default(),
-            diff: DiffConfig::default(),
-            watcher: WatcherConfig::default(),
-            editor: EditorConfig::default(),
-        }
-    }
-}
 
 impl Config {
     pub fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|p| p.join("diffv").join("config.toml"))
     }
 
+    /// Loads the user config; an invalid file is reported (before the TUI
+    /// starts) instead of being silently replaced by defaults.
     pub fn load() -> Self {
-        if let Some(path) = Self::config_path() {
-            if path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(cfg) = toml::from_str::<Config>(&content) {
-                        return cfg;
-                    }
-                }
-            }
-        }
-        Config::default()
+        let Some(path) = Self::config_path().filter(|p| p.exists()) else {
+            return Config::default();
+        };
+        Self::load_from_path(&path).unwrap_or_else(|err| {
+            eprintln!("diffv: ignoring invalid config {}: {:#}", path.display(), err);
+            Config::default()
+        })
     }
 
     pub fn load_from_path(path: &Path) -> anyhow::Result<Self> {

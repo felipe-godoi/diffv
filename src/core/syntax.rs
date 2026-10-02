@@ -12,7 +12,8 @@ pub static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newl
 pub static THEME_SET: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
 
 // Fast zero-allocation cache keyed by (path_hash, line_hash)
-static HIGHLIGHT_CACHE: Lazy<Mutex<HashMap<(u64, u64), Arc<[SyntaxToken]>>>> =
+type TokenCache = HashMap<(u64, u64), Arc<[SyntaxToken]>>;
+static HIGHLIGHT_CACHE: Lazy<Mutex<TokenCache>> =
     Lazy::new(|| Mutex::new(HashMap::with_capacity(8192)));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

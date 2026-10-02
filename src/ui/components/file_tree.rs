@@ -162,8 +162,8 @@ pub fn build_tree_items(
                 .new_path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or_else(|| f.display_path().leak())
-                .to_string();
+                .map(str::to_string)
+                .unwrap_or_else(|| f.display_path());
 
             out.push(TreeItem {
                 name,
@@ -579,8 +579,8 @@ fn render_commit_files_drawer(
     let mut header_lines = Vec::new();
 
     let (details_label, back_label) = match language {
-        Language::En => ("[i] Details", "[Esc/2] Back"),
-        Language::Pt => ("[i] Detalhes", "[Esc/2] Voltar"),
+        Language::En => ("[i] Details · [o] PR", "[Esc/2] Back"),
+        Language::Pt => ("[i] Detalhes · [o] PR", "[Esc/2] Voltar"),
     };
 
     header_lines.push(Line::from(vec![
@@ -854,8 +854,8 @@ fn render_commits_tab(
 
     let mut lines = Vec::new();
     let header_msg = match language {
-        Language::En => if area.width < 28 { format!(" Commits ({})", commits.len()) } else { format!(" Recent Commits ({}) · [Enter] View", commits.len()) },
-        Language::Pt => if area.width < 28 { format!(" Commits ({})", commits.len()) } else { format!(" Commits Recentes ({}) · [Enter] Ver", commits.len()) },
+        Language::En => if area.width < 28 { format!(" Commits ({})", commits.len()) } else { format!(" Recent Commits ({}) · [Enter] View · [o] PR", commits.len()) },
+        Language::Pt => if area.width < 28 { format!(" Commits ({})", commits.len()) } else { format!(" Commits Recentes ({}) · [Enter] Ver · [o] PR", commits.len()) },
     };
     lines.push(Line::from(Span::styled(
         header_msg,

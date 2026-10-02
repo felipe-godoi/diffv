@@ -18,6 +18,7 @@ use crate::git::actions::{
     unstage_hunk, unstage_partial_hunk,
 };
 use crate::git::provider::GitProvider;
+use crate::integration::github::{github_repo_url, open_commit_pr};
 use crate::integration::clipboard::copy_hunk_as_markdown;
 use crate::ui::components::file_tree::{
     build_tree_items, render_drawer, render_drawer_line_overlay, FileViewMode, TreeItem,
@@ -716,6 +717,46 @@ impl App {
         }
     }
 
+    fn selected_commit_hash(&self) -> Option<String> {
+        if self.show_history {
+            return self.history_commits.get(self.selected_history_idx).map(|c| c.hash.clone());
+        }
+        if let Some(commit) = &self.active_commit_info {
+            return Some(commit.hash.clone());
+        }
+        if self.drawer_tab == DrawerTab::Commits {
+            return self.repo_commits.get(self.selected_repo_commit_idx).map(|c| c.hash.clone());
+        }
+        None
+    }
+
+    /// Opens the GitHub pull request for the commit under focus (commits tab,
+    /// open commit or file history), falling back to the commit page.
+    pub fn open_selected_commit_pr(&mut self) {
+        let Some(hash) = self.selected_commit_hash() else {
+            self.set_notification(match self.language {
+                Language::En => "Select a commit (Commits tab or file history) to open its PR",
+                Language::Pt => "Selecione um commit (aba Commits ou histórico) para abrir o PR",
+            });
+            return;
+        };
+        let AppMode::Git { git_provider, .. } = &self.mode else { return; };
+        let repo_root = git_provider.repo_root.clone();
+        let Some(repo_url) = github_repo_url(&repo_root) else {
+            self.set_notification(match self.language {
+                Language::En => "Remote 'origin' is not a GitHub repository",
+                Language::Pt => "O remote 'origin' não é um repositório do GitHub",
+            });
+            return;
+        };
+        let short: String = hash.chars().take(7).collect();
+        open_commit_pr(repo_root, repo_url, hash);
+        self.set_notification(match self.language {
+            Language::En => format!("Opening PR for {} in the browser…", short),
+            Language::Pt => format!("Abrindo PR de {} no navegador…", short),
+        });
+    }
+
     fn current_section(&self) -> Option<DiffSection> {
         self.current_file().map(|f| f.section)
     }
@@ -1131,12 +1172,11 @@ impl App {
                         return;
                     }
                 }
-                '[' => {
-                    if key.code == KeyCode::Char('c') {
+                '['
+                    if key.code == KeyCode::Char('c') => {
                         // [c was pressed: already jumped hunk on '['
                         return;
                     }
-                }
                 _ => {}
             }
         }
@@ -1303,6 +1343,7 @@ impl App {
                     self.show_details_popup = true;
                     self.details_popup_scroll = 0;
                 }
+                KeyCode::Char('o') => self.open_selected_commit_pr(),
                 KeyCode::Char('r') => {
                     self.wrap_lines = !self.wrap_lines;
                     self.wrap_skip = 0;
@@ -1481,13 +1522,12 @@ impl App {
                         let vp = self.file_tree_height.saturating_sub(4).max(1);
                         self.repo_commit_scroll = self.selected_repo_commit_idx.saturating_sub(vp.saturating_sub(1));
                     }
-                } else if self.drawer_tab == DrawerTab::Stashes {
-                    if !self.stashes.is_empty() {
+                } else if self.drawer_tab == DrawerTab::Stashes
+                    && !self.stashes.is_empty() {
                         self.selected_stash_idx = self.stashes.len() - 1;
                         let vp = self.file_tree_height.saturating_sub(4).max(1);
                         self.stash_scroll = self.selected_stash_idx.saturating_sub(vp.saturating_sub(1));
                     }
-                }
             }
             KeyCode::Char('z') => {
                 if self.focus == Focus::DiffView {
@@ -1585,6 +1625,7 @@ impl App {
                 self.set_notification(format!("Switched to {} view", mode));
             }
             KeyCode::Char('x') => self.toggle_full_context(),
+            KeyCode::Char('o') => self.open_selected_commit_pr(),
             KeyCode::Char('w') => {
                 self.watch_mode = !self.watch_mode;
                 let status = if self.watch_mode { "ON" } else { "OFF" };
@@ -1900,14 +1941,13 @@ impl App {
                     }
                 }
             }
-            DrawerTab::Stashes => {
-                if !self.stashes.is_empty() {
+            DrawerTab::Stashes
+                if !self.stashes.is_empty() => {
                     self.selected_stash_idx = (self.selected_stash_idx + amount).min(self.stashes.len() - 1);
                     if self.selected_stash_idx >= self.stash_scroll + tree_vp {
                         self.stash_scroll = self.selected_stash_idx.saturating_sub(tree_vp - 1);
                     }
                 }
-            }
             _ => {}
         }
     }
@@ -2442,10 +2482,9 @@ impl App {
                 _ => PathBuf::from("."),
             };
 
-            let target_path = if self.column_side == ColumnSide::Left && file.old_path.is_some() {
-                file.old_path.as_ref().unwrap()
-            } else {
-                &file.new_path
+            let target_path = match &file.old_path {
+                Some(old) if self.column_side == ColumnSide::Left => old,
+                _ => &file.new_path,
             };
 
             let full_path = repo_dir.join(target_path);
@@ -2829,7 +2868,7 @@ impl App {
                 self.file_view_mode,
                 self.language,
                 &self.theme,
-                if self.show_history { Some(match self.language { Language::En => "File history", Language::Pt => "Histórico do arquivo" }) } else { None },
+                if self.show_history { Some(match self.language { Language::En => "File history · o PR", Language::Pt => "Histórico do arquivo · o PR" }) } else { None },
             );
         }
 

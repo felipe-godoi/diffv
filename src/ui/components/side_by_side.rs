@@ -179,7 +179,7 @@ pub fn render_side_by_side(
         left.resize(height, Line::default());
         right.resize(height, Line::default());
         let skip = if wrap && idx == start_idx { wrap_skip.min(height.saturating_sub(1)) } else { 0 };
-        row_map.extend(std::iter::repeat(idx).take(height - skip));
+        row_map.extend(std::iter::repeat_n(idx, height - skip));
         left_lines.extend(left.into_iter().skip(skip));
         right_lines.extend(right.into_iter().skip(skip));
         if left_lines.len() >= max_lines { break; }
@@ -234,9 +234,7 @@ fn render_side_line<'a>(
                 };
                 spans.push(indicator);
 
-                let num_style = if is_cursor && is_in_visual {
-                    Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
-                } else if is_in_visual {
+                let num_style = if is_in_visual {
                     Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
                 } else if is_cursor {
                     Style::default().fg(theme.key_fg).bg(theme.line_num_bg).add_modifier(Modifier::BOLD)

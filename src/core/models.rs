@@ -156,26 +156,20 @@ pub struct WorktreeEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum DrawerTab {
+    #[default]
     Changes,
     Commits,
     Stashes,
 }
 
-impl Default for DrawerTab {
-    fn default() -> Self {
-        DrawerTab::Changes
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum Language {
+    #[default]
     En,
     Pt,
 }
 
-impl Default for Language {
-    fn default() -> Self {
-        Language::En
-    }
-}

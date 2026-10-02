@@ -108,6 +108,7 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `Mouse Drag` | General | **Drag vertical divider** to resize File Tree width |
 | `t` | File Tree | Toggle **📁 Pastas (Tree)** ↔ **📄 Lista (Flat)** |
 | `v` | Diff | Toggle **Visual Mode** for line-level partial staging / unstaging |
+| `o` | Commits / History | Open the selected commit's **GitHub pull request** in the browser (falls back to the commit page; uses `gh` when available) |
 | `x` | General | **Expand full file** ↔ changes only (keeps file and cursor line) |
 | `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash) |
 | `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched |

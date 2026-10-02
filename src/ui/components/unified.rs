@@ -80,7 +80,7 @@ pub fn render_unified(
             row_map.push(current_idx);
             rendered_lines.push(Line::from(vec![
                 Span::styled(
-                    format!(" 󰦨 @@ {} @@ ", &hunk.header),
+                    format!(" 󰦨 @@ {} @@ ", hunk.header),
                     Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD),
                 )
             ]));
@@ -122,7 +122,7 @@ pub fn render_unified(
         let lines = if wrap { crate::ui::components::horizontal::wrap_line(line, gutter, inner_area.width as usize) }
             else { vec![crate::ui::components::horizontal::scroll_line(line, 3, scroll_x)] };
         let skip = if wrap && idx == start_idx { wrap_skip.min(lines.len().saturating_sub(1)) } else { 0 };
-        row_map.extend(std::iter::repeat(idx).take(lines.len() - skip));
+        row_map.extend(std::iter::repeat_n(idx, lines.len() - skip));
         output.extend(lines.into_iter().skip(skip));
         if output.len() >= max_lines { break; }
     }
@@ -160,9 +160,7 @@ fn render_unified_line<'a>(
         Span::styled(" ", Style::default().fg(theme.line_num_fg))
     };
 
-    let num_style = if is_cursor && is_in_visual {
-        Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
-    } else if is_in_visual {
+    let num_style = if is_in_visual {
         Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
     } else if is_cursor {
         Style::default().fg(theme.key_fg).bg(theme.line_num_bg).add_modifier(Modifier::BOLD)

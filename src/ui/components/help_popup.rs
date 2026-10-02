@@ -9,6 +9,8 @@ use crate::core::models::Language;
 use crate::ui::components::style::{centered_rect, help_line, render_card};
 use crate::ui::theme::Theme;
 
+type Section<'a> = (&'a str, Vec<(&'a str, &'a str)>);
+
 pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, theme: &Theme) {
     let popup_area = centered_rect(88, 86, area);
 
@@ -25,7 +27,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
     frame.render_widget(Paragraph::new(help_line(&footer, footer_area.width, theme)).alignment(Alignment::Center), footer_area);
     let inner = Rect { y: body.y + 1, height: body.height.saturating_sub(1), ..body };
 
-    let (left_sections, right_sections): (Vec<(&str, Vec<(&str, &str)>)>, Vec<(&str, Vec<(&str, &str)>)>) = match language {
+    let (left_sections, right_sections): (Vec<Section>, Vec<Section>) = match language {
         Language::En => (
             vec![
                 ("󰌌  Neovim Motions & Diff Navigation", vec![
@@ -49,6 +51,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("S / U / D", "Stage / Unstage / Discard entire file"),
                     ("v", "Toggle Visual Mode (line-by-line selection)"),
                     ("H / gh", "View commit History for active file"),
+                    ("o", "Open the commit's GitHub PR (commits / history)"),
                     ("W", "Worktrees modal (switch or 'a'/'n' to create)"),
                 ]),
             ],
@@ -102,6 +105,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     ("S / U / D", "Preparar / Despreparar / Descartar arquivo inteiro"),
                     ("v", "Alternar Modo Visual para seleção linha a linha"),
                     ("H / gh", "Ver Histórico de commits do arquivo ativo"),
+                    ("o", "Abrir o PR do commit no GitHub (commits / histórico)"),
                     ("W", "Modal de Worktrees (alternar ou 'a'/'n' para criar)"),
                 ]),
             ],
@@ -160,7 +164,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
 }
 
 fn build_section_lines(
-    sections: &[(&str, Vec<(&str, &str)>)],
+    sections: &[Section],
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let key_pad = sections.iter().flat_map(|(_, bindings)| bindings.iter().map(|(key, _)| key.width())).max().unwrap_or(0) + 2;

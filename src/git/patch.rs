@@ -11,11 +11,9 @@ pub fn parse_unified_diff(diff_text: &str) -> Vec<FileDiff> {
     while i < lines.len() {
         let line = lines[i];
 
-        if line.starts_with("diff --git ") {
-            let (file_diff, next_idx) = parse_file_diff(&lines, i);
-            files.push(file_diff);
-            i = next_idx;
-        } else if line.starts_with("--- ") && i + 1 < lines.len() && lines[i + 1].starts_with("+++ ") {
+        let starts_file = line.starts_with("diff --git ")
+            || (line.starts_with("--- ") && i + 1 < lines.len() && lines[i + 1].starts_with("+++ "));
+        if starts_file {
             let (file_diff, next_idx) = parse_file_diff(&lines, i);
             files.push(file_diff);
             i = next_idx;
@@ -25,6 +23,60 @@ pub fn parse_unified_diff(diff_text: &str) -> Vec<FileDiff> {
     }
 
     files
+}
+
+/// Splits `a/<old> b/<new>`. Unquoted paths may contain spaces, so prefer the
+/// split where both halves name the same file, which is the common case.
+fn split_git_header(rest: &str) -> Option<(String, String)> {
+    if let Some(quoted) = rest.strip_prefix('"') {
+        let end = quoted.find("\" ").map(|i| i + 2)?;
+        let a = unquote_path(&rest[..end]);
+        let b = unquote_path(rest[end..].trim_start());
+        return Some((a.strip_prefix("a/")?.to_string(), b.strip_prefix("b/")?.to_string()));
+    }
+    let half = rest.len().checked_sub(1)? / 2;
+    if rest.is_char_boundary(half) && rest.is_char_boundary(half + 1) {
+        let (a, b) = (&rest[..half], &rest[half + 1..]);
+        if let (Some(a), Some(b)) = (a.strip_prefix("a/"), b.strip_prefix("b/")) {
+            if a == b {
+                return Some((a.to_string(), b.to_string()));
+            }
+        }
+    }
+    let idx = rest.find(" b/")?;
+    Some((rest[..idx].strip_prefix("a/")?.to_string(), rest[idx + 3..].to_string()))
+}
+
+/// Undoes git's C-style quoting (`"dir/caf\303\251.txt"`) for unusual paths.
+fn unquote_path(raw: &str) -> String {
+    let Some(inner) = raw.strip_prefix('"').and_then(|r| r.strip_suffix('"')) else {
+        return raw.to_string();
+    };
+    let mut bytes = Vec::new();
+    let mut chars = inner.bytes().peekable();
+    while let Some(b) = chars.next() {
+        if b != b'\\' {
+            bytes.push(b);
+            continue;
+        }
+        match chars.next() {
+            Some(b'n') => bytes.push(b'\n'),
+            Some(b't') => bytes.push(b'\t'),
+            Some(d @ b'0'..=b'7') => {
+                let mut value = (d - b'0') as u32;
+                for _ in 0..2 {
+                    if let Some(&n @ b'0'..=b'7') = chars.peek() {
+                        value = value * 8 + (n - b'0') as u32;
+                        chars.next();
+                    }
+                }
+                bytes.push(value as u8);
+            }
+            Some(other) => bytes.push(other),
+            None => {}
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn parse_file_diff(lines: &[&str], start_idx: usize) -> (FileDiff, usize) {
@@ -37,10 +89,7 @@ fn parse_file_diff(lines: &[&str], start_idx: usize) -> (FileDiff, usize) {
 
     // Check git header
     if lines[i].starts_with("diff --git ") {
-        let parts: Vec<&str> = lines[i]["diff --git ".len()..].split_whitespace().collect();
-        if parts.len() >= 2 {
-            let a = parts[0].strip_prefix("a/").unwrap_or(parts[0]);
-            let b = parts[1].strip_prefix("b/").unwrap_or(parts[1]);
+        if let Some((a, b)) = split_git_header(&lines[i]["diff --git ".len()..]) {
             old_path = Some(PathBuf::from(a));
             new_path = PathBuf::from(b);
         }
@@ -56,29 +105,37 @@ fn parse_file_diff(lines: &[&str], start_idx: usize) -> (FileDiff, usize) {
         } else if line.starts_with("deleted file mode") {
             status = FileStatus::Deleted;
             i += 1;
-        } else if line.starts_with("similarity index") || line.starts_with("rename from") || line.starts_with("rename to") {
+        } else if let Some(path) = line.strip_prefix("rename from ") {
+            status = FileStatus::Renamed;
+            old_path = Some(PathBuf::from(unquote_path(path)));
+            i += 1;
+        } else if let Some(path) = line.strip_prefix("rename to ") {
+            status = FileStatus::Renamed;
+            new_path = PathBuf::from(unquote_path(path));
+            i += 1;
+        } else if line.starts_with("similarity index") {
             status = FileStatus::Renamed;
             i += 1;
         } else if line.starts_with("Binary files ") {
             is_binary = true;
             i += 1;
-        } else if line.starts_with("--- ") {
-            let raw_path = &line[4..].trim();
-            if *raw_path == "/dev/null" {
+        } else if let Some(raw_path) = line.strip_prefix("--- ") {
+            let raw_path = raw_path.trim();
+            if raw_path == "/dev/null" {
                 status = FileStatus::Added;
                 old_path = None;
             } else {
-                let clean = raw_path.strip_prefix("a/").unwrap_or(raw_path);
-                old_path = Some(PathBuf::from(clean));
+                let unquoted = unquote_path(raw_path);
+                old_path = Some(PathBuf::from(unquoted.strip_prefix("a/").unwrap_or(&unquoted)));
             }
             i += 1;
-        } else if line.starts_with("+++ ") {
-            let raw_path = &line[4..].trim();
-            if *raw_path == "/dev/null" {
+        } else if let Some(raw_path) = line.strip_prefix("+++ ") {
+            let raw_path = raw_path.trim();
+            if raw_path == "/dev/null" {
                 status = FileStatus::Deleted;
             } else {
-                let clean = raw_path.strip_prefix("b/").unwrap_or(raw_path);
-                new_path = PathBuf::from(clean);
+                let unquoted = unquote_path(raw_path);
+                new_path = PathBuf::from(unquoted.strip_prefix("b/").unwrap_or(&unquoted));
             }
             i += 1;
         } else if line.starts_with("@@ ") {
@@ -369,6 +426,14 @@ fn partial_hunk_patch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splits_and_unquotes_git_paths() {
+        assert_eq!(split_git_header("a/my file.txt b/my file.txt"), Some(("my file.txt".into(), "my file.txt".into())));
+        assert_eq!(split_git_header("a/old.txt b/new.txt"), Some(("old.txt".into(), "new.txt".into())));
+        assert_eq!(split_git_header("\"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\""), Some(("café.txt".into(), "café.txt".into())));
+        assert_eq!(unquote_path("\"tab\\there\""), "tab\there");
+    }
 
     #[test]
     fn test_parse_unified_diff() {

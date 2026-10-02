@@ -294,7 +294,7 @@ fn test_tab_esc_worktree_fzf_features() {
 
     // 2. Modify file in main repo to test diffs and fzf search collection
     fs::write(&f1, "fn main() { println!(\"world\"); }\n").unwrap();
-    let mut config = diffv::config::Config::load();
+    let mut config = diffv::config::Config::default();
     config.ui.theme = "catppuccin-mocha".into();
 
     let mut app = diffv::ui::app::App::new(
@@ -488,7 +488,7 @@ fn history_previews_selected_diff_and_opens_commit_details() {
     fs::write(dir.join("file.txt"), "working_value\n").unwrap();
     let provider = GitProvider::discover(Some(&dir)).unwrap();
     let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-        diffv::config::Config::load(), false, false, false, None, false, false).unwrap();
+        diffv::config::Config::default(), false, false, false, None, false, false).unwrap();
     app.language = diffv::core::models::Language::En;
     app.open_file_history();
     assert_eq!(app.focus, Focus::FileTree);
@@ -611,7 +611,7 @@ fn full_context_toggle_expands_whole_file_and_keeps_cursor() {
 
     let provider = GitProvider::discover(Some(&dir)).unwrap();
     let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-        diffv::config::Config::load(), false, false, false, None, false, false).unwrap();
+        diffv::config::Config::default(), false, false, false, None, false, false).unwrap();
     app.config.diff.context_lines = 3;
     app.is_unified = true;
     app.reload_diffs();
@@ -656,7 +656,7 @@ fn live_reload_keeps_open_commit_and_its_selection() {
 
     let provider = GitProvider::discover(Some(&dir)).unwrap();
     let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-        diffv::config::Config::load(), true, false, false, None, false, false).unwrap();
+        diffv::config::Config::default(), true, false, false, None, false, false).unwrap();
     app.drawer_tab = DrawerTab::Commits;
     app.selected_repo_commit_idx = 1;
     app.load_selected_repo_commit();
@@ -702,7 +702,7 @@ fn stage_hunk_under_cursor_in_both_view_modes() {
 
         let provider = GitProvider::discover(Some(&dir)).unwrap();
         let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-            diffv::config::Config::load(), false, false, false, None, false, false).unwrap();
+            diffv::config::Config::default(), false, false, false, None, false, false).unwrap();
         app.config.diff.context_lines = 3;
         app.is_unified = unified;
         app.reload_diffs();
@@ -748,7 +748,7 @@ fn unstage_after_stage_round_trips() {
 
     let provider = GitProvider::discover(Some(&dir)).unwrap();
     let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-        diffv::config::Config::load(), false, false, false, None, false, false).unwrap();
+        diffv::config::Config::default(), false, false, false, None, false, false).unwrap();
     app.config.diff.context_lines = 3;
     app.reload_diffs();
     app.focus = Focus::DiffView;
@@ -790,5 +790,50 @@ fn unstage_after_stage_round_trips() {
     app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
     let note = app.notification.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert_eq!(git(&["diff", "--cached"]), "", "partial unstage failed: {}", note);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn paths_with_spaces_unicode_and_renames() {
+    use diffv::core::models::{DiffSection, FileStatus, StageStatus};
+    let dir = std::env::temp_dir().join(format!("diffv_paths_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git").args(args).current_dir(&dir).output().unwrap().status.success(), "{:?}", args);
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Paths Tester"]);
+    git(&["config", "user.email", "paths@example.com"]);
+    fs::write(dir.join("my file.txt"), "one\n").unwrap();
+    fs::write(dir.join("café.txt"), "one\n").unwrap();
+    fs::write(dir.join("old name.txt"), "a\nb\nc\nd\ne\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "base"]);
+    fs::write(dir.join("my file.txt"), "two\n").unwrap();
+    fs::write(dir.join("café.txt"), "two\n").unwrap();
+    git(&["mv", "old name.txt", "new name.txt"]);
+    fs::write(dir.join("untracked é.txt"), "new\n").unwrap();
+
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let (files, _) = provider.load_diffs(None, false, true, false).unwrap();
+    let find = |name: &str, section: DiffSection| files.iter().find(|f| f.display_path() == name && f.section == section);
+    assert!(find("my file.txt", DiffSection::Changes).is_some(), "{:#?}", files.iter().map(|f| f.display_path()).collect::<Vec<_>>());
+    assert!(find("café.txt", DiffSection::Changes).is_some(), "{:#?}", files.iter().map(|f| f.display_path()).collect::<Vec<_>>());
+    let renamed = find("new name.txt", DiffSection::Staged).expect("rename staged");
+    assert_eq!(renamed.status, FileStatus::Renamed);
+    let untracked = find("untracked é.txt", DiffSection::Changes).expect("untracked with unicode");
+    assert_eq!(untracked.stage_status, StageStatus::Untracked);
+    assert!(!untracked.hunks.is_empty());
+
+    for name in ["my file.txt", "café.txt"] {
+        let file = find(name, DiffSection::Changes).unwrap();
+        stage_hunk(&dir, &file.new_path, &file.hunks[0]).unwrap_or_else(|e| panic!("stage {}: {}", name, e));
+    }
+    let (files, _) = provider.load_diffs(None, false, true, false).unwrap();
+    for name in ["my file.txt", "café.txt"] {
+        let file = files.iter().find(|f| f.display_path() == name && f.section == DiffSection::Staged).expect(name);
+        unstage_hunk(&dir, &file.new_path, &file.hunks[0]).unwrap_or_else(|e| panic!("unstage {}: {}", name, e));
+    }
     let _ = fs::remove_dir_all(&dir);
 }

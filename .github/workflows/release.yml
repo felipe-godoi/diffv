@@ -1,10 +1,14 @@
 name: Release
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 jobs:
   build:
     strategy:
@@ -13,45 +17,60 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
-          - os: macos-15-intel
+            test: true
+          # Cross-compiled on Apple Silicon: Intel runners are slower and queue longer.
+          - os: macos-14
             target: x86_64-apple-darwin
+            test: false
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            test: true
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            test: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Install stable Rust
-        run: rustup update stable && rustup default stable
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup update stable && rustup default stable && rustup target add "$TARGET"
       - name: Validate release version
+        if: github.ref_type == 'tag'
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          if [[ "$RELEASE_TAG" == v* ]]; then
-            version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
-            test "v$version" = "$RELEASE_TAG"
-          fi
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
+          test "v$version" = "$RELEASE_TAG"
+      # Caches are scoped to the ref that saved them; only main's cache is
+      # visible to release tags, so main is the only ref that saves.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Embed commit in version
         run: |
           version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
           echo "DIFFV_VERSION=$version (${GITHUB_SHA::7} $(date -u +%Y-%m-%d))" >> "$GITHUB_ENV"
-      - run: cargo build --release --locked
-      - run: cargo test --release --locked
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - if: matrix.test
+        run: cargo test --release --locked --target ${{ matrix.target }}
+      - name: Clippy
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: rustup component add clippy && cargo clippy --all-targets --locked -- -D warnings
       - name: Package binary
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
           TARGET: ${{ matrix.target }}
         run: |
           mkdir dist
-          cp target/release/diffv "dist/diffv-$TARGET"
+          cp "target/$TARGET/release/diffv" "dist/diffv-$TARGET"
           cd dist
           shasum -a 256 "diffv-$TARGET" > "diffv-$TARGET.sha256"
       - uses: actions/upload-artifact@v7.0.1
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         with:
           name: diffv-${{ matrix.target }}
           path: dist/*
