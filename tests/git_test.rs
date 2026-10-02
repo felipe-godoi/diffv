@@ -1677,7 +1677,12 @@ fn test_worktree_selector_live_filter_and_modifier_commands() {
     assert!(!app.show_worktrees);
     assert_eq!(app.worktree_filter, "");
     if let AppMode::Git { git_provider, .. } = &app.mode {
-        assert_eq!(git_provider.repo_root, wt2_dir);
+        let expected = wt2_dir.canonicalize().unwrap_or(wt2_dir.clone());
+        let actual = git_provider
+            .repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| git_provider.repo_root.clone());
+        assert_eq!(actual, expected);
     }
 
     let _ = fs::remove_dir_all(&temp_dir);
