@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use crate::core::models::DiffSection;
 use crate::core::models::{ChangeStats, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, StageStatus};
 
 /// Parses unified diff text into a vector of FileDiff structs.
@@ -106,6 +107,7 @@ fn parse_file_diff(lines: &[&str], start_idx: usize) -> (FileDiff, usize) {
         new_path,
         status,
         stage_status: StageStatus::Unstaged,
+        section: DiffSection::Changes,
         stats,
         aligned_rows: Vec::new(),
         hunks,
@@ -277,6 +279,25 @@ pub fn generate_partial_hunk_patch(
     hunk: &Hunk,
     selected_indices: &[usize],
 ) -> String {
+    partial_hunk_patch(file_path, hunk, selected_indices, false)
+}
+
+/// Patch to reverse-apply against the index: unselected additions are already
+/// in the index (context) and unselected deletions are not (omitted).
+pub fn generate_partial_unstage_patch(
+    file_path: &Path,
+    hunk: &Hunk,
+    selected_indices: &[usize],
+) -> String {
+    partial_hunk_patch(file_path, hunk, selected_indices, true)
+}
+
+fn partial_hunk_patch(
+    file_path: &Path,
+    hunk: &Hunk,
+    selected_indices: &[usize],
+    for_reverse: bool,
+) -> String {
     let path_str = file_path.to_string_lossy();
     let old_header = if hunk.old_lines == 0 {
         "--- /dev/null".to_string()
@@ -310,7 +331,7 @@ pub fn generate_partial_hunk_patch(
                     body.push_str(&line.content);
                     body.push('\n');
                     old_count += 1;
-                } else {
+                } else if !for_reverse {
                     // Unselected deletion remains context in working tree
                     body.push(' ');
                     body.push_str(&line.content);
@@ -325,8 +346,13 @@ pub fn generate_partial_hunk_patch(
                     body.push_str(&line.content);
                     body.push('\n');
                     new_count += 1;
+                } else if for_reverse {
+                    body.push(' ');
+                    body.push_str(&line.content);
+                    body.push('\n');
+                    old_count += 1;
+                    new_count += 1;
                 }
-                // Unselected addition is omitted from staged patch
             }
             DiffKind::Virtual => {}
         }

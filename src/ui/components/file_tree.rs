@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::core::models::{CommitEntry, DrawerTab, FileDiff, FileStatus, Language, StageStatus, StashEntry};
+use crate::core::models::{CommitEntry, DiffSection, DrawerTab, FileDiff, FileStatus, Language, StageStatus, StashEntry};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +27,14 @@ pub struct TreeItem {
     pub additions: usize,
     pub deletions: usize,
     pub depth: usize,
+    pub is_section: bool,
+}
+
+pub fn section_key(section: DiffSection) -> PathBuf {
+    PathBuf::from(match section {
+        DiffSection::Staged => ":staged",
+        DiffSection::Changes => ":changes",
+    })
 }
 
 pub fn build_tree_items(
@@ -34,6 +42,7 @@ pub fn build_tree_items(
     filtered_indices: &[usize],
     collapsed_dirs: &std::collections::HashSet<PathBuf>,
     view_mode: FileViewMode,
+    language: Language,
 ) -> Vec<TreeItem> {
     if view_mode == FileViewMode::Flat {
         return filtered_indices
@@ -51,6 +60,7 @@ pub fn build_tree_items(
                     additions: f.stats.additions,
                     deletions: f.stats.deletions,
                     depth: 0,
+                    is_section: false,
                 }
             })
             .collect();
@@ -63,20 +73,21 @@ pub fn build_tree_items(
         dirs: BTreeMap<String, Node>,
     }
 
-    let mut root = Node::default();
-    for &idx in filtered_indices {
-        let path = &files[idx].new_path;
-        let mut curr = &mut root;
-        let components: Vec<&str> = path.iter().filter_map(|c| c.to_str()).collect();
-
-        if components.is_empty() {
-            continue;
+    fn build_node(files: &[FileDiff], indices: &[usize]) -> Node {
+        let mut root = Node::default();
+        for &idx in indices {
+            let path = &files[idx].new_path;
+            let mut curr = &mut root;
+            let components: Vec<&str> = path.iter().filter_map(|c| c.to_str()).collect();
+            if components.is_empty() {
+                continue;
+            }
+            for dir_name in &components[..components.len() - 1] {
+                curr = curr.dirs.entry((*dir_name).to_string()).or_default();
+            }
+            curr.files.push(idx);
         }
-
-        for dir_name in &components[..components.len() - 1] {
-            curr = curr.dirs.entry((*dir_name).to_string()).or_default();
-        }
-        curr.files.push(idx);
+        root
     }
 
     fn flatten_node(
@@ -106,6 +117,7 @@ pub fn build_tree_items(
                 additions: 0,
                 deletions: 0,
                 depth,
+                is_section: false,
             });
 
             if !is_collapsed {
@@ -164,6 +176,7 @@ pub fn build_tree_items(
                 additions: f.stats.additions,
                 deletions: f.stats.deletions,
                 depth,
+                is_section: false,
             });
             total_add += f.stats.additions;
             total_del += f.stats.deletions;
@@ -173,7 +186,41 @@ pub fn build_tree_items(
     }
 
     let mut items = Vec::new();
-    flatten_node(&root, PathBuf::new(), 0, files, collapsed_dirs, &mut items);
+    if !filtered_indices.iter().any(|&i| files[i].section == DiffSection::Staged) {
+        flatten_node(&build_node(files, filtered_indices), PathBuf::new(), 0, files, collapsed_dirs, &mut items);
+        return items;
+    }
+
+    for section in [DiffSection::Staged, DiffSection::Changes] {
+        let indices: Vec<usize> = filtered_indices.iter().copied().filter(|&i| files[i].section == section).collect();
+        if indices.is_empty() {
+            continue;
+        }
+        let key = section_key(section);
+        let is_collapsed = collapsed_dirs.contains(&key);
+        let name = match (section, language) {
+            (DiffSection::Staged, Language::En) => "Staged",
+            (DiffSection::Staged, Language::Pt) => "Staged",
+            (DiffSection::Changes, Language::En) => "Changes",
+            (DiffSection::Changes, Language::Pt) => "Mudanças",
+        };
+        items.push(TreeItem {
+            name: format!("{} ({})", name, indices.len()),
+            path: key.clone(),
+            is_dir: true,
+            is_collapsed,
+            file_index: None,
+            status: None,
+            stage_status: None,
+            additions: indices.iter().map(|&i| files[i].stats.additions).sum(),
+            deletions: indices.iter().map(|&i| files[i].stats.deletions).sum(),
+            depth: 0,
+            is_section: true,
+        });
+        if !is_collapsed {
+            flatten_node(&build_node(files, &indices), key, 1, files, collapsed_dirs, &mut items);
+        }
+    }
     items
 }
 
@@ -660,6 +707,7 @@ fn render_changes_tab(
     };
 
     let show_stats = area.width >= 28;
+    let file_count = items.iter().filter(|item| item.file_index.is_some()).count();
 
     let sub_header = if filter_mode {
         match language {
@@ -667,9 +715,9 @@ fn render_changes_tab(
             Language::Pt => format!(" 󰍉 Filtro: {}_ ", filter_query),
         }
     } else if area.width < 28 {
-        format!(" {} ({})", mode_str, items.len())
+        format!(" {} ({})", mode_str, file_count)
     } else {
-        format!(" Mode: {} · ({} files)", mode_str, items.len())
+        format!(" Mode: {} · ({} files)", mode_str, file_count)
     };
 
     let mut lines = Vec::new();
@@ -700,7 +748,18 @@ fn render_changes_tab(
 
         let indent = "  ".repeat(item.depth);
 
-        if item.is_dir {
+        if item.is_section {
+            let bg = if is_selected { theme.selected_bg } else { theme.bg };
+            let mut spans = vec![
+                cursor_span,
+                Span::styled(if item.is_collapsed { "▸ " } else { "▾ " }, Style::default().fg(theme.line_num_fg).bg(bg)),
+                Span::styled(item.name.clone(), Style::default().fg(theme.header_fg).bg(bg).add_modifier(Modifier::BOLD)),
+            ];
+            if show_stats {
+                spans.push(Span::styled(format!(" +{} -{}", item.additions, item.deletions), Style::default().fg(theme.line_num_fg).bg(bg)));
+            }
+            lines.push(Line::from(spans));
+        } else if item.is_dir {
             let (dir_icon, dir_color) = if item.is_collapsed {
                 (" ", theme.key_fg)
             } else {

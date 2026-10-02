@@ -17,7 +17,7 @@ pub fn search_files_fzf(files: &[String], header: &str) -> anyhow::Result<Option
 
 /// Candidates are `path:line<TAB>content`; only the content is matched.
 pub fn search_diff_text_fzf(lines: &[String], header: &str) -> anyhow::Result<Option<String>> {
-    run_fzf(lines, "󰈞 Diff Text> ", header, &["--delimiter=\t", "--nth=2..", "--tabstop=2"])
+    run_fzf(lines, "󰈞 Diff Text> ", header, &["--delimiter=\t", "--nth=2", "--with-nth=1,2,3", "--tabstop=2"])
 }
 
 fn run_fzf(items: &[String], prompt: &str, header: &str, extra: &[&str]) -> anyhow::Result<Option<String>> {

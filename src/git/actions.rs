@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use crate::core::models::Hunk;
-use crate::git::patch::{generate_hunk_patch, generate_partial_hunk_patch};
+use crate::git::patch::{generate_hunk_patch, generate_partial_hunk_patch, generate_partial_unstage_patch};
 
 pub fn stage_partial_hunk(
     repo_root: &Path,
@@ -11,22 +11,35 @@ pub fn stage_partial_hunk(
     selected_indices: &[usize],
 ) -> anyhow::Result<()> {
     let patch = generate_partial_hunk_patch(file_path, hunk, selected_indices);
+    apply_to_index(repo_root, &patch, &[]).map_err(|e| anyhow::anyhow!("Failed to stage partial hunk: {}", e))
+}
+
+pub fn unstage_partial_hunk(
+    repo_root: &Path,
+    file_path: &Path,
+    hunk: &Hunk,
+    selected_indices: &[usize],
+) -> anyhow::Result<()> {
+    let patch = generate_partial_unstage_patch(file_path, hunk, selected_indices);
+    apply_to_index(repo_root, &patch, &["--reverse"]).map_err(|e| anyhow::anyhow!("Failed to unstage partial hunk: {}", e))
+}
+
+fn apply_to_index(repo_root: &Path, patch: &str, extra: &[&str]) -> anyhow::Result<()> {
     let mut child = Command::new("git")
-        .args(["apply", "--cached", "--unidiff-zero", "-"])
+        .args(["apply", "--cached", "--unidiff-zero"])
+        .args(extra)
+        .arg("-")
         .current_dir(repo_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(patch.as_bytes())?;
     }
-
     let output = child.wait_with_output()?;
     if !output.status.success() {
-        let err_msg = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to stage partial hunk: {}", err_msg);
+        anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 [package]
 name = "diffv"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 authors = ["Felipe Godoi"]
 description = "High-performance VS Code style CLI diff viewer and companion for AI coding agents"

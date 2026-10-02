@@ -723,3 +723,72 @@ fn stage_hunk_under_cursor_in_both_view_modes() {
         let _ = fs::remove_dir_all(&dir);
     }
 }
+
+#[test]
+fn unstage_after_stage_round_trips() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::core::models::DiffSection;
+    use diffv::ui::app::{App, AppMode, Focus};
+    let dir = std::env::temp_dir().join(format!("diffv_unstage_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| -> String {
+        let out = Command::new("git").args(args).current_dir(&dir).output().unwrap();
+        assert!(out.status.success(), "{:?}", args);
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Unstage Tester"]);
+    git(&["config", "user.email", "unstage@example.com"]);
+    let original: String = (1..=60).map(|i| format!("line {}\n", i)).collect();
+    fs::write(dir.join("file.txt"), &original).unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "base"]);
+    fs::write(dir.join("file.txt"), original.replace("line 10\n", "line 10 a\n").replace("line 40\n", "line 40 b\n")).unwrap();
+
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
+        diffv::config::Config::load(), false, false, false, None, false, false).unwrap();
+    app.config.diff.context_lines = 3;
+    app.reload_diffs();
+    app.focus = Focus::DiffView;
+    app.jump_to_line(10);
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    assert!(git(&["diff", "--cached"]).contains("+line 10 a"));
+    let sections: Vec<_> = app.files.iter().map(|f| f.section).collect();
+    assert_eq!(sections, vec![DiffSection::Staged, DiffSection::Changes]);
+
+    // `u` on the Changes copy explains instead of failing silently
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+    assert!(git(&["diff", "--cached"]).contains("+line 10 a"));
+
+    // Editing the staged region afterwards used to break unstage
+    let current = fs::read_to_string(dir.join("file.txt")).unwrap();
+    fs::write(dir.join("file.txt"), current.replace("line 10 a\n", "line 10 a edited again\n")).unwrap();
+    app.reload_diffs();
+    assert!(app.jump_to_file_in("file.txt", DiffSection::Staged));
+    app.jump_to_line(10);
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+    let note = app.notification.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert_eq!(git(&["diff", "--cached"]), "", "unstage failed, notification: {}", note);
+
+    // Partial (visual) stage, then partial unstage of the same lines
+    app.reload_diffs();
+    assert!(app.jump_to_file_in("file.txt", DiffSection::Changes));
+    app.jump_to_line(40);
+    let row = app.selected_row;
+    app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    app.selected_row = row + 1;
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    let cached = git(&["diff", "--cached"]);
+    assert!(cached.contains("+line 40 b") && !cached.contains("line 10 a"), "{}", cached);
+    assert!(app.jump_to_file_in("file.txt", DiffSection::Staged));
+    app.jump_to_line(40);
+    let row = app.selected_row;
+    app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    app.selected_row = row + 1;
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+    let note = app.notification.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert_eq!(git(&["diff", "--cached"]), "", "partial unstage failed: {}", note);
+    let _ = fs::remove_dir_all(&dir);
+}

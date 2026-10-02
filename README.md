@@ -87,6 +87,8 @@ diffv --theme tokyonight
 
 ## ⌨️ Keybindings
 
+When something is staged, the Changes drawer splits into **Staged** (HEAD → index) and **Changes** (index → working tree), like VS Code and lazygit. A file with both kinds of edits appears in both groups, and every hunk shown is exactly what `s` / `u` apply.
+
 | Key | Context | Action |
 |---|---|---|
 | `j` / `k` or `↓` / `↑` | General | Scroll lines down / up |
@@ -105,15 +107,15 @@ diffv --theme tokyonight
 | `Mouse Click` | General | **Select** file / line, collapse/expand folders, switch focus |
 | `Mouse Drag` | General | **Drag vertical divider** to resize File Tree width |
 | `t` | File Tree | Toggle **📁 Pastas (Tree)** ↔ **📄 Lista (Flat)** |
-| `v` | Diff | Toggle **Visual Mode** for line-level partial staging |
+| `v` | Diff | Toggle **Visual Mode** for line-level partial staging / unstaging |
 | `x` | General | **Expand full file** ↔ changes only (keeps file and cursor line) |
 | `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash) |
 | `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched |
 | `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in Neovim |
 | `e` | Diff | Open file in Neovim / `$EDITOR` at cursor line (`+line`) |
-| `s` | Diff | **Stage** current hunk (or selected lines in Visual Mode) |
-| `u` | Diff | **Unstage** current hunk |
-| `d` | Diff | **Discard** current hunk (with `y/n` confirmation) |
+| `s` | Diff | **Stage** current hunk (or Visual lines) of a file under **Changes** |
+| `u` | Diff | **Unstage** current hunk (or Visual lines) of a file under **Staged** |
+| `d` | Diff | **Discard** current hunk under **Changes** (with `y/n` confirmation) |
 | `S` | General | **Stage** entire file |
 | `U` | General | **Unstage** entire file |
 | `D` | General | **Discard** entire file (with `y/n` confirmation) |

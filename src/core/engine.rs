@@ -6,6 +6,7 @@ use similar::{Algorithm, ChangeTag, TextDiff};
 use walkdir::WalkDir;
 
 use crate::core::aligner::align_hunks_side_by_side;
+use crate::core::models::DiffSection;
 use crate::core::models::{
     ChangeStats, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, RepoStats, StageStatus,
 };
@@ -246,6 +247,7 @@ impl DiffEngine {
             new_path: new_path.to_path_buf(),
             status: FileStatus::Modified,
             stage_status: StageStatus::Unstaged,
+            section: DiffSection::Changes,
             stats: ChangeStats {
                 additions,
                 deletions,

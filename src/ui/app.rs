@@ -8,13 +8,14 @@ use ratatui::Frame;
 use crate::config::Config;
 use crate::core::engine::DiffEngine;
 use crate::core::models::{
-    CommitEntry, DiffKind, DrawerTab, FileDiff, Language, RepoStats, StashEntry, WorktreeEntry,
+    CommitEntry, DiffKind, DiffSection, DrawerTab, FileDiff, Language, RepoStats, StageStatus, StashEntry,
+    WorktreeEntry,
 };
 
 
 use crate::git::actions::{
     discard_file, discard_hunk, stage_file, stage_hunk, stage_partial_hunk, unstage_file,
-    unstage_hunk,
+    unstage_hunk, unstage_partial_hunk,
 };
 use crate::git::provider::GitProvider;
 use crate::integration::clipboard::copy_hunk_as_markdown;
@@ -427,12 +428,19 @@ impl App {
     }
 
     pub fn jump_to_file(&mut self, path: &str) -> bool {
+        self.jump_to_file_in(path, DiffSection::Changes)
+    }
+
+    /// Selects `path`, preferring its copy in `section` when it appears in both.
+    pub fn jump_to_file_in(&mut self, path: &str, section: DiffSection) -> bool {
         let clean_path = path.trim();
-        let found_idx = self.files.iter().position(|f| {
+        let matches = |f: &FileDiff| {
             f.new_path.to_string_lossy() == clean_path
                 || f.display_path() == clean_path
                 || (f.old_path.as_ref().map(|p| p.to_string_lossy() == clean_path).unwrap_or(false))
-        });
+        };
+        let found_idx = self.files.iter().position(|f| matches(f) && f.section == section)
+            .or_else(|| self.files.iter().position(matches));
 
         if let Some(idx) = found_idx {
             if self.file_view_mode == FileViewMode::Tree {
@@ -556,7 +564,10 @@ impl App {
             _ => external.iter().collect(),
         };
         let items = match request {
-            FzfRequest::Files => files.iter().map(|f| f.display_path()).collect(),
+            FzfRequest::Files => {
+                let mut seen = std::collections::HashSet::new();
+                files.iter().map(|f| f.display_path()).filter(|p| seen.insert(p.clone())).collect()
+            }
             FzfRequest::Text => diff_text_lines(&files),
         };
         let label = self.search_label(source);
@@ -595,12 +606,14 @@ impl App {
     }
 
     pub fn handle_fzf_text_result(&mut self, selected_line: String) {
-        let location = selected_line.split('\t').next().unwrap_or_default();
+        let mut fields = selected_line.split('\t');
+        let location = fields.next().unwrap_or_default();
+        let section = if selected_line.ends_with("\tstaged") { DiffSection::Staged } else { DiffSection::Changes };
         let Some((path, line)) = location.rsplit_once(':') else { return; };
         let line_no: usize = line.parse().unwrap_or(0);
         if self.search_source != SearchSource::CurrentFile {
             self.enter_search_source();
-            if !self.jump_to_file(path) {
+            if !self.jump_to_file_in(path, section) {
                 return;
             }
         }
@@ -683,6 +696,41 @@ impl App {
         } else {
             file.aligned_rows.iter().position(|r| r.hunk_index == Some(hunk_idx))
         }
+    }
+
+    fn column_labels(&self) -> [&'static str; 2] {
+        if self.active_commit_view.is_some() || self.active_commit_info.is_some() {
+            return ["PARENT", "COMMIT"];
+        }
+        if self.active_stash_info.is_some() {
+            return ["BASE", "STASH"];
+        }
+        let working_tree = matches!(&self.mode, AppMode::Git { target_ref: None, .. }) && !self.staged_only;
+        match self.current_file() {
+            Some(file) if working_tree && file.section == DiffSection::Staged => ["HEAD", "STAGED"],
+            Some(file) if working_tree => {
+                let partly_staged = self.files.iter().any(|f| f.section == DiffSection::Staged && f.new_path == file.new_path);
+                [if partly_staged { "STAGED" } else { "HEAD" }, "WORKING TREE"]
+            }
+            _ => ["ORIGINAL", "MODIFIED"],
+        }
+    }
+
+    fn current_section(&self) -> Option<DiffSection> {
+        self.current_file().map(|f| f.section)
+    }
+
+    fn require_section(&mut self, wanted: DiffSection) -> bool {
+        if self.current_section() == Some(wanted) {
+            return true;
+        }
+        self.set_notification(match (wanted, self.language) {
+            (DiffSection::Changes, Language::En) => "Already staged · u to unstage",
+            (DiffSection::Changes, Language::Pt) => "Já está staged · u para unstage",
+            (DiffSection::Staged, Language::En) => "Not staged · select it under Staged to unstage",
+            (DiffSection::Staged, Language::Pt) => "Não está staged · selecione em Staged para unstage",
+        });
+        false
     }
 
     fn can_act_on_hunk(&mut self) -> bool {
@@ -784,8 +832,19 @@ impl App {
         }
     }
 
+    /// After the selected file disappears (e.g. fully staged), land on the
+    /// closest file instead of a section header or folder.
+    fn select_nearest_tree_file(&mut self) {
+        let start = self.selected_tree_idx.min(self.tree_items.len().saturating_sub(1));
+        let forward = (start..self.tree_items.len()).find(|&i| self.tree_items[i].file_index.is_some());
+        let backward = (0..start).rev().find(|&i| self.tree_items[i].file_index.is_some());
+        if let Some(pos) = forward.or(backward) {
+            self.selected_tree_idx = pos;
+        }
+    }
+
     fn reload_diffs_internal(&mut self, is_live_reload: bool) -> anyhow::Result<()> {
-        let previous_path = self.current_file().map(|f| f.new_path.clone());
+        let previous_file = self.current_file().map(|f| (f.new_path.clone(), f.section));
         let prev_scroll = self.scroll_y;
         let prev_row = self.selected_row;
 
@@ -842,12 +901,14 @@ impl App {
         self.update_filter();
 
         // Restore file selection if previous file still exists
-        if let Some(prev_p) = previous_path {
+        if let Some(prev) = previous_file {
+            let same = |f: &FileDiff| f.new_path == prev.0 && f.section == prev.1;
             if self.file_view_mode == FileViewMode::Tree {
-                if let Some(pos) = self.tree_items.iter().position(|item| item.path == prev_p) {
-                    self.selected_tree_idx = pos;
+                match self.tree_items.iter().position(|item| item.file_index.is_some_and(|i| same(&self.files[i]))) {
+                    Some(pos) => self.selected_tree_idx = pos,
+                    None => self.select_nearest_tree_file(),
                 }
-            } else if let Some(pos) = self.filtered_indices.iter().position(|&idx| self.files[idx].new_path == prev_p) {
+            } else if let Some(pos) = self.filtered_indices.iter().position(|&idx| same(&self.files[idx])) {
                 self.selected_filtered_idx = pos;
             }
         }
@@ -894,6 +955,7 @@ impl App {
             &self.filtered_indices,
             &self.collapsed_dirs,
             self.file_view_mode,
+            self.language,
         );
 
         if self.selected_tree_idx >= self.tree_items.len() {
@@ -1774,7 +1836,11 @@ impl App {
                 }
             }
             KeyCode::Char('u') => {
-                self.unstage_current_hunk();
+                if self.visual_mode {
+                    self.unstage_visual_selection();
+                } else {
+                    self.unstage_current_hunk();
+                }
             }
             KeyCode::Char('d') => {
                 self.request_discard_hunk();
@@ -2406,7 +2472,11 @@ impl App {
     }
 
     fn stage_current_hunk(&mut self) {
-        if !self.can_act_on_hunk() {
+        if !self.can_act_on_hunk() || !self.require_section(DiffSection::Changes) {
+            return;
+        }
+        if self.current_file().is_some_and(|f| f.stage_status == StageStatus::Untracked) {
+            self.stage_current_file();
             return;
         }
         let (repo_root, file_path, hunk) = match self.get_current_hunk_and_context() {
@@ -2424,7 +2494,16 @@ impl App {
     }
 
     fn stage_visual_selection(&mut self) {
-        if !self.can_modify_index() {
+        self.apply_visual_selection(false);
+    }
+
+    fn unstage_visual_selection(&mut self) {
+        self.apply_visual_selection(true);
+    }
+
+    fn apply_visual_selection(&mut self, unstage: bool) {
+        let wanted = if unstage { DiffSection::Staged } else { DiffSection::Changes };
+        if !self.can_modify_index() || !self.require_section(wanted) {
             return;
         }
         let repo_root = match &self.mode {
@@ -2443,26 +2522,32 @@ impl App {
         selected_indices.dedup();
 
         if selected_indices.is_empty() {
-            self.set_notification("No changed lines in visual selection to stage");
+            self.set_notification("No changed lines in visual selection");
             return;
         }
         let Some(file) = self.current_file() else { return; };
         let Some(hunk) = file.hunks.get(hunk_idx) else { return; };
 
-        match stage_partial_hunk(&repo_root, &file.new_path, hunk, &selected_indices) {
+        let result = if unstage {
+            unstage_partial_hunk(&repo_root, &file.new_path, hunk, &selected_indices)
+        } else {
+            stage_partial_hunk(&repo_root, &file.new_path, hunk, &selected_indices)
+        };
+        let verb = if unstage { "Unstaged" } else { "Staged" };
+        match result {
             Ok(_) => {
                 self.visual_mode = false;
-                self.set_notification(format!("✓ Staged {} selected lines", selected_indices.len()));
+                self.set_notification(format!("✓ {} {} selected lines", verb, selected_indices.len()));
                 self.reload_diffs();
             }
             Err(e) => {
-                self.set_notification(format!("Visual stage error: {}", e));
+                self.set_notification(format!("{} error: {}", verb, e));
             }
         }
     }
 
     fn unstage_current_hunk(&mut self) {
-        if !self.can_act_on_hunk() {
+        if !self.can_act_on_hunk() || !self.require_section(DiffSection::Staged) {
             return;
         }
         let (repo_root, file_path, hunk) = match self.get_current_hunk_and_context() {
@@ -2481,6 +2566,13 @@ impl App {
 
     fn request_discard_hunk(&mut self) {
         if !self.can_act_on_hunk() {
+            return;
+        }
+        if self.current_section() == Some(DiffSection::Staged) {
+            self.set_notification(match self.language {
+                Language::En => "Unstage it first (u), then discard from Changes",
+                Language::Pt => "Faça unstage antes (u) e descarte em Mudanças",
+            });
             return;
         }
         if let Some(file) = self.current_file() {
@@ -2821,6 +2913,7 @@ impl App {
                     self.selected_row,
                     visual_range,
                     self.column_side,
+                    self.column_labels(),
                     self.focus == Focus::DiffView,
                     syntax_enabled,
                     self.full_context,
@@ -2916,7 +3009,8 @@ fn diff_text_lines(files: &[&FileDiff]) -> Vec<String> {
                 DiffKind::Deletion => "-",
                 _ => " ",
             };
-            out.push(format!("{}:{}\t{} {}", path, line_no, prefix, line.content.trim_end_matches(['\r', '\n'])));
+            let section = if f.section == DiffSection::Staged { "\tstaged" } else { "" };
+            out.push(format!("{}:{}\t{} {}{}", path, line_no, prefix, line.content.trim_end_matches(['\r', '\n']), section));
         }
     }
     out

@@ -3,7 +3,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 
 use crate::core::aligner::align_hunks_side_by_side;
-use crate::core::models::{
+use crate::core::models::{DiffSection, 
     ChangeStats, CommitEntry, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, RepoStats, StageStatus,
     StashEntry, WorktreeEntry,
 };
@@ -91,38 +91,33 @@ impl GitProvider {
         include_untracked: bool,
         ignore_whitespace: bool,
     ) -> Result<(Vec<FileDiff>, RepoStats)> {
-        let mut cmd = Command::new("git");
-        cmd.current_dir(&self.repo_root);
-        cmd.arg("diff");
-        cmd.arg(self.unified_arg());
-
-        if ignore_whitespace {
-            cmd.arg("--ignore-all-space");
-        }
-
-        if let Some(r) = target_ref {
-            if self.repo_root.join(r).exists() || Path::new(r).exists() {
-                if staged_only {
-                    cmd.arg("--cached");
-                } else if self.has_head() {
-                    cmd.arg("HEAD");
-                }
-                cmd.arg("--");
-                cmd.arg(r);
-            } else {
-                cmd.arg(r);
+        // Working-tree mode splits HEAD → index (staged) from index → worktree
+        // (changes) so every hunk is exactly the patch git needs to (un)stage it.
+        let split = target_ref.is_none() && !staged_only;
+        let mut files = if split {
+            let mut staged = self.run_git_diff(&["--cached".to_string()], ignore_whitespace)?;
+            for file in &mut staged {
+                file.section = DiffSection::Staged;
             }
-        } else if staged_only {
-            cmd.arg("--cached");
-        } else if self.has_head() {
-            cmd.arg("HEAD");
+            staged.extend(self.run_git_diff(&[], ignore_whitespace)?);
+            staged
         } else {
-            cmd.arg("--cached");
-        }
-
-        let output = cmd.output().context("Failed to run git diff")?;
-        let diff_text = String::from_utf8_lossy(&output.stdout);
-        let mut files = parse_unified_diff(&diff_text);
+            let mut args = Vec::new();
+            match target_ref {
+                Some(r) if self.repo_root.join(r).exists() || Path::new(r).exists() => {
+                    if staged_only {
+                        args.push("--cached".to_string());
+                    } else if self.has_head() {
+                        args.push("HEAD".to_string());
+                    }
+                    args.push("--".to_string());
+                    args.push(r.to_string());
+                }
+                Some(r) => args.push(r.to_string()),
+                None => args.push("--cached".to_string()),
+            }
+            self.run_git_diff(&args, ignore_whitespace)?
+        };
 
         // Fetch file statuses from `git status --porcelain -uall`
         let status_output = Command::new("git")
@@ -171,7 +166,11 @@ impl GitProvider {
         for file in &mut files {
             if let Some((f_status, s_status)) = status_map.get(&file.new_path) {
                 file.status = *f_status;
-                file.stage_status = *s_status;
+                file.stage_status = match (split, file.section) {
+                    (true, DiffSection::Staged) => StageStatus::Staged,
+                    (true, DiffSection::Changes) => StageStatus::Unstaged,
+                    (false, _) => *s_status,
+                };
             }
         }
 
@@ -206,10 +205,20 @@ impl GitProvider {
             root_dir: self.repo_root.clone(),
             total_additions,
             total_deletions,
-            file_count: files.len(),
+            file_count: files.iter().map(|f| &f.new_path).collect::<std::collections::HashSet<_>>().len(),
         };
 
         Ok((files, repo_stats))
+    }
+
+    fn run_git_diff(&self, args: &[String], ignore_whitespace: bool) -> Result<Vec<FileDiff>> {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(&self.repo_root).arg("diff").arg(self.unified_arg());
+        if ignore_whitespace {
+            cmd.arg("--ignore-all-space");
+        }
+        let output = cmd.args(args).output().context("Failed to run git diff")?;
+        Ok(parse_unified_diff(&String::from_utf8_lossy(&output.stdout)))
     }
 
     fn create_untracked_diff(&self, relative_path: &Path) -> Result<FileDiff> {
@@ -226,6 +235,7 @@ impl GitProvider {
                 new_path: relative_path.to_path_buf(),
                 status: FileStatus::Untracked,
                 stage_status: StageStatus::Untracked,
+                section: DiffSection::Changes,
                 stats: ChangeStats::default(),
                 hunks: Vec::new(),
                 aligned_rows: Vec::new(),
@@ -241,6 +251,7 @@ impl GitProvider {
                     new_path: relative_path.to_path_buf(),
                     status: FileStatus::Untracked,
                     stage_status: StageStatus::Untracked,
+                    section: DiffSection::Changes,
                     stats: ChangeStats::default(),
                     hunks: Vec::new(),
                     aligned_rows: Vec::new(),
@@ -278,6 +289,7 @@ impl GitProvider {
             new_path: relative_path.to_path_buf(),
             status: FileStatus::Untracked,
             stage_status: StageStatus::Untracked,
+            section: DiffSection::Changes,
             stats: ChangeStats {
                 additions: count,
                 deletions: 0,

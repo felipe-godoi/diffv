@@ -23,6 +23,15 @@ impl FileStatus {
     }
 }
 
+/// Which side of the index a working-tree diff belongs to:
+/// `Staged` is HEAD → index, `Changes` is index → working tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffSection {
+    #[default]
+    Changes,
+    Staged,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageStatus {
     Unstaged,
@@ -98,6 +107,7 @@ pub struct FileDiff {
     pub new_path: PathBuf,
     pub status: FileStatus,
     pub stage_status: StageStatus,
+    pub section: DiffSection,
     pub stats: ChangeStats,
     pub hunks: Vec<Hunk>,
     pub aligned_rows: Vec<AlignedRow>,

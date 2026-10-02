@@ -27,6 +27,7 @@ pub fn render_side_by_side(
     selected_row: usize,
     visual_range: Option<(usize, usize)>,
     active_column: ColumnSide,
+    column_labels: [&str; 2],
     is_focused: bool,
     syntax_enabled: bool,
     full_context: bool,
@@ -108,9 +109,9 @@ pub fn render_side_by_side(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| file.display_path());
     let left_badge_text = if left_area.width < 28 {
-        " ◄ OLD "
+        " ◄ OLD ".to_string()
     } else {
-        " ◄ ORIGINAL (HEAD) "
+        format!(" ◄ {} ", column_labels[0])
     };
     let (left_badge, left_style) = if active_column == ColumnSide::Left {
         (left_badge_text, Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD))
@@ -125,9 +126,9 @@ pub fn render_side_by_side(
 
     // Right Column Header
     let right_badge_text = if right_area.width < 28 {
-        " ► NEW "
+        " ► NEW ".to_string()
     } else {
-        " ► MODIFIED (WORKING TREE) "
+        format!(" ► {} ", column_labels[1])
     };
     let (right_badge, right_style) = if active_column == ColumnSide::Right {
         (right_badge_text, Style::default().fg(theme.text_on(theme.key_fg)).bg(theme.key_fg).add_modifier(Modifier::BOLD))
