@@ -2,7 +2,8 @@
 
 use std::io::{self, stdout, IsTerminal};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -140,13 +141,22 @@ fn run_app(
 
     // Channel for unifying keyboard events, debounced filesystem events and tick timer
     let (tx, rx) = mpsc::channel();
+    let is_editor_active = Arc::new(AtomicBool::new(false));
 
     // 1. Keyboard & terminal event listener thread
     let input_tx = tx.clone();
+    let editor_flag = is_editor_active.clone();
     thread::spawn(move || {
         loop {
-            // Poll with small timeout so thread doesn't hang on exit
-            if event::poll(Duration::from_millis(50)).unwrap_or(false) {
+            if editor_flag.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+
+            if event::poll(Duration::from_millis(200)).unwrap_or(false) {
+                if editor_flag.load(Ordering::Relaxed) {
+                    continue;
+                }
                 if let Ok(evt) = event::read() {
                     if input_tx.send(AppEvent::Input(evt)).is_err() {
                         break;
@@ -160,7 +170,7 @@ fn run_app(
     let tick_tx = tx.clone();
     thread::spawn(move || {
         loop {
-            thread::sleep(Duration::from_millis(250));
+            thread::sleep(Duration::from_millis(300));
             if tick_tx.send(AppEvent::Tick).is_err() {
                 break;
             }
@@ -184,9 +194,14 @@ fn run_app(
         }
     });
 
-    // Main event loop
+    // Main event loop with dirty tracking for 0.0% idle CPU
+    let mut needs_redraw = true;
+
     loop {
-        terminal.draw(|f| app.render(f))?;
+        if needs_redraw {
+            terminal.draw(|f| app.render(f))?;
+            needs_redraw = false;
+        }
 
         if app.should_quit {
             break;
@@ -194,6 +209,12 @@ fn run_app(
 
         // Check if an external editor request is pending
         if let Some((file_path, line_no)) = app.editor_request.take() {
+            // Signal input thread to stop polling/reading stdin
+            is_editor_active.store(true, Ordering::SeqCst);
+
+            // Drain any pending input events already queued in rx before editor opens
+            while rx.try_recv().is_ok() {}
+
             disable_raw_mode()?;
             execute!(terminal.backend_mut(), LeaveAlternateScreen, event::DisableMouseCapture)?;
             terminal.show_cursor()?;
@@ -204,12 +225,22 @@ fn run_app(
             execute!(terminal.backend_mut(), EnterAlternateScreen, event::EnableMouseCapture)?;
             terminal.clear()?;
 
+            // Drain any leftover events in crossterm buffer and in rx channel from editor exit (:q<Enter>)
+            while event::poll(Duration::from_millis(40)).unwrap_or(false) {
+                let _ = event::read();
+            }
+            while rx.try_recv().is_ok() {}
+
+            is_editor_active.store(false, Ordering::SeqCst);
+            app.editor_request = None;
+
             if let Err(e) = edit_res {
                 app.set_notification(format!("Editor error: {}", e));
             } else {
                 app.set_notification("Returned from editor");
                 app.reload_diffs();
             }
+            needs_redraw = true;
             continue;
         }
 
@@ -217,21 +248,28 @@ fn run_app(
             AppEvent::Input(Event::Key(key)) => {
                 if key.kind == KeyEventKind::Press {
                     app.handle_key(key);
+                    needs_redraw = true;
                 }
             }
             AppEvent::Input(Event::Mouse(mouse)) => {
                 app.handle_mouse(mouse);
+                needs_redraw = true;
             }
             AppEvent::Input(Event::Resize(_, _)) => {
                 terminal.autoresize()?;
+                needs_redraw = true;
             }
             AppEvent::Reload => {
                 if app.watch_mode {
                     app.reload_diffs();
+                    needs_redraw = true;
                 }
             }
             AppEvent::Tick => {
-                // Trigger redraw if there's a notification
+                // Only trigger redraw if there's an active notification or pending multi-key sequence
+                if app.notification.is_some() || app.pending_key.is_some() {
+                    needs_redraw = true;
+                }
             }
             _ => {}
         }

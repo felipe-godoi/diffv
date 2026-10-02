@@ -1,3 +1,4 @@
+use std::path::Path;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -62,147 +63,172 @@ pub fn render_unified(
     }
 
     let file = file_diff.unwrap();
-
-    // Flatten hunks into a unified list of lines
-    let mut flat_lines = Vec::new();
-    for hunk in &file.hunks {
-        flat_lines.push((true, None, None, DiffKind::Context, hunk.header.clone()));
-        for line in &hunk.lines {
-            flat_lines.push((false, line.old_line_no, line.new_line_no, line.kind, line.content.clone()));
-        }
-    }
-
     let max_lines = inner_area.height as usize;
     if max_lines == 0 {
         return;
     }
 
     let start_idx = scroll_y;
-    let end_idx = (scroll_y + max_lines).min(flat_lines.len());
+    let end_idx = scroll_y + max_lines;
 
-    let mut rendered_lines = Vec::new();
+    let mut rendered_lines = Vec::with_capacity(max_lines);
+    let mut current_idx = 0usize;
 
-    for idx in start_idx..end_idx {
-        let (is_header, old_no, new_no, kind, content) = &flat_lines[idx];
-        let is_cursor = idx == selected_row;
-        let is_in_visual = visual_range.map(|(s, e)| idx >= s && idx <= e).unwrap_or(false);
-
-        if *is_header {
+    'outer: for hunk in &file.hunks {
+        if current_idx >= start_idx && current_idx < end_idx {
             rendered_lines.push(Line::from(vec![
                 Span::styled(
-                    format!(" 󰦨 @@ {} @@ ", content),
+                    format!(" 󰦨 @@ {} @@ ", &hunk.header),
                     Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD),
                 )
             ]));
-            continue;
+        }
+        current_idx += 1;
+        if current_idx >= end_idx {
+            break 'outer;
         }
 
-        let old_str = match old_no {
-            Some(n) => format!("{:4}", n),
-            None => "    ".to_string(),
-        };
-        let new_str = match new_no {
-            Some(n) => format!("{:4}", n),
-            None => "    ".to_string(),
-        };
+        for line in &hunk.lines {
+            if current_idx >= start_idx && current_idx < end_idx {
+                let is_cursor = current_idx == selected_row;
+                let is_in_visual = visual_range.map(|(s, e)| current_idx >= s && current_idx <= e).unwrap_or(false);
 
-        let indicator = if is_cursor && is_in_visual {
-            Span::styled("█", Style::default().fg(Color::Rgb(203, 166, 247)).add_modifier(Modifier::BOLD))
-        } else if is_cursor {
-            Span::styled("▎", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
-        } else if is_in_visual {
-            Span::styled("▌", Style::default().fg(Color::Rgb(180, 140, 220)).add_modifier(Modifier::BOLD))
-        } else {
-            Span::styled(" ", Style::default().fg(theme.line_num_fg))
-        };
-
-        let num_style = if is_cursor && is_in_visual {
-            Style::default().fg(Color::Rgb(255, 255, 255)).bg(Color::Rgb(75, 58, 100)).add_modifier(Modifier::BOLD)
-        } else if is_in_visual {
-            Style::default().fg(Color::Rgb(220, 205, 250)).bg(Color::Rgb(58, 48, 80)).add_modifier(Modifier::BOLD)
-        } else if is_cursor {
-            Style::default().fg(theme.key_fg).bg(theme.line_num_bg).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.line_num_fg).bg(theme.line_num_bg)
-        };
-
-        let num_span = Span::styled(format!("{} {} │ ", old_str, new_str), num_style);
-
-        match kind {
-            DiffKind::Context | DiffKind::Virtual => {
-                let line_bg = if is_in_visual {
-                    Color::Rgb(48, 42, 68)
-                } else {
-                    theme.bg
-                };
-
-                let mut spans = vec![indicator, num_span];
-                spans.push(Span::styled("  ", Style::default().fg(theme.fg).bg(line_bg)));
-
-                if syntax_enabled {
-                    let tokens = SyntaxHighlighter::highlight_line(&file.new_path, content);
-                    if !tokens.is_empty() {
-                        for token in tokens {
-                            let text = &content[token.start..token.end.min(content.len())];
-                            let fg = Color::Rgb(token.fg_color.0, token.fg_color.1, token.fg_color.2);
-                            spans.push(Span::styled(text.to_string(), Style::default().fg(fg).bg(line_bg)));
-                        }
-                    } else {
-                        spans.push(Span::styled(content, Style::default().fg(theme.fg).bg(line_bg)));
-                    }
-                } else {
-                    spans.push(Span::styled(content, Style::default().fg(theme.fg).bg(line_bg)));
-                }
-
-                rendered_lines.push(Line::from(spans));
+                rendered_lines.push(render_unified_line(
+                    line.old_line_no,
+                    line.new_line_no,
+                    line.kind,
+                    &line.content,
+                    is_cursor,
+                    is_in_visual,
+                    syntax_enabled,
+                    &file.new_path,
+                    theme,
+                ));
             }
-            DiffKind::Deletion => {
-                let (bg_color, num_bg) = if is_in_visual {
-                    (Color::Rgb(78, 32, 50), Color::Rgb(98, 38, 62))
-                } else {
-                    (theme.del_bg, theme.del_bg)
-                };
-                let num_span_del = Span::styled(
-                    format!("{} {} │ ", old_str, new_str),
-                    if is_in_visual {
-                        Style::default().fg(Color::Rgb(255, 230, 240)).bg(num_bg).add_modifier(Modifier::BOLD)
-                    } else {
-                        num_style
-                    },
-                );
-                let spans = vec![
-                    indicator,
-                    num_span_del,
-                    Span::styled("- ", Style::default().fg(theme.del_fg).bg(bg_color).add_modifier(Modifier::BOLD)),
-                    Span::styled(content, Style::default().fg(theme.del_fg).bg(bg_color)),
-                ];
-                rendered_lines.push(Line::from(spans));
-            }
-            DiffKind::Addition => {
-                let (bg_color, num_bg) = if is_in_visual {
-                    (Color::Rgb(32, 72, 52), Color::Rgb(40, 92, 65))
-                } else {
-                    (theme.add_bg, theme.add_bg)
-                };
-                let num_span_add = Span::styled(
-                    format!("{} {} │ ", old_str, new_str),
-                    if is_in_visual {
-                        Style::default().fg(Color::Rgb(230, 255, 240)).bg(num_bg).add_modifier(Modifier::BOLD)
-                    } else {
-                        num_style
-                    },
-                );
-                let spans = vec![
-                    indicator,
-                    num_span_add,
-                    Span::styled("+ ", Style::default().fg(theme.add_fg).bg(bg_color).add_modifier(Modifier::BOLD)),
-                    Span::styled(content, Style::default().fg(theme.add_fg).bg(bg_color)),
-                ];
-                rendered_lines.push(Line::from(spans));
+            current_idx += 1;
+            if current_idx >= end_idx {
+                break 'outer;
             }
         }
     }
 
     let paragraph = Paragraph::new(rendered_lines);
     frame.render_widget(paragraph, inner_area);
+}
+
+fn render_unified_line<'a>(
+    old_no: Option<usize>,
+    new_no: Option<usize>,
+    kind: DiffKind,
+    content: &'a str,
+    is_cursor: bool,
+    is_in_visual: bool,
+    syntax_enabled: bool,
+    path: &Path,
+    theme: &Theme,
+) -> Line<'a> {
+    let old_str = match old_no {
+        Some(n) => format!("{:4}", n),
+        None => "    ".to_string(),
+    };
+    let new_str = match new_no {
+        Some(n) => format!("{:4}", n),
+        None => "    ".to_string(),
+    };
+
+    let indicator = if is_cursor && is_in_visual {
+        Span::styled("█", Style::default().fg(Color::Rgb(203, 166, 247)).add_modifier(Modifier::BOLD))
+    } else if is_cursor {
+        Span::styled("▎", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
+    } else if is_in_visual {
+        Span::styled("▌", Style::default().fg(Color::Rgb(180, 140, 220)).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled(" ", Style::default().fg(theme.line_num_fg))
+    };
+
+    let num_style = if is_cursor && is_in_visual {
+        Style::default().fg(Color::Rgb(255, 255, 255)).bg(Color::Rgb(75, 58, 100)).add_modifier(Modifier::BOLD)
+    } else if is_in_visual {
+        Style::default().fg(Color::Rgb(220, 205, 250)).bg(Color::Rgb(58, 48, 80)).add_modifier(Modifier::BOLD)
+    } else if is_cursor {
+        Style::default().fg(theme.key_fg).bg(theme.line_num_bg).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.line_num_fg).bg(theme.line_num_bg)
+    };
+
+    let num_span = Span::styled(format!("{} {} │ ", old_str, new_str), num_style);
+
+    match kind {
+        DiffKind::Context | DiffKind::Virtual => {
+            let line_bg = if is_in_visual {
+                Color::Rgb(48, 42, 68)
+            } else {
+                theme.bg
+            };
+
+            let mut spans = vec![indicator, num_span];
+            spans.push(Span::styled("  ", Style::default().fg(theme.fg).bg(line_bg)));
+
+            if syntax_enabled {
+                let tokens = SyntaxHighlighter::highlight_line(path, content);
+                if !tokens.is_empty() {
+                    for token in tokens {
+                        let text = &content[token.start..token.end.min(content.len())];
+                        let fg = Color::Rgb(token.fg_color.0, token.fg_color.1, token.fg_color.2);
+                        spans.push(Span::styled(text.to_string(), Style::default().fg(fg).bg(line_bg)));
+                    }
+                } else {
+                    spans.push(Span::styled(content, Style::default().fg(theme.fg).bg(line_bg)));
+                }
+            } else {
+                spans.push(Span::styled(content, Style::default().fg(theme.fg).bg(line_bg)));
+            }
+
+            Line::from(spans)
+        }
+        DiffKind::Deletion => {
+            let (bg_color, num_bg) = if is_in_visual {
+                (Color::Rgb(78, 32, 50), Color::Rgb(98, 38, 62))
+            } else {
+                (theme.del_bg, theme.del_bg)
+            };
+            let num_span_del = Span::styled(
+                format!("{} {} │ ", old_str, new_str),
+                if is_in_visual {
+                    Style::default().fg(Color::Rgb(255, 230, 240)).bg(num_bg).add_modifier(Modifier::BOLD)
+                } else {
+                    num_style
+                },
+            );
+            let spans = vec![
+                indicator,
+                num_span_del,
+                Span::styled("- ", Style::default().fg(theme.del_fg).bg(bg_color).add_modifier(Modifier::BOLD)),
+                Span::styled(content, Style::default().fg(theme.del_fg).bg(bg_color)),
+            ];
+            Line::from(spans)
+        }
+        DiffKind::Addition => {
+            let (bg_color, num_bg) = if is_in_visual {
+                (Color::Rgb(32, 72, 52), Color::Rgb(40, 92, 65))
+            } else {
+                (theme.add_bg, theme.add_bg)
+            };
+            let num_span_add = Span::styled(
+                format!("{} {} │ ", old_str, new_str),
+                if is_in_visual {
+                    Style::default().fg(Color::Rgb(230, 255, 240)).bg(num_bg).add_modifier(Modifier::BOLD)
+                } else {
+                    num_style
+                },
+            );
+            let spans = vec![
+                indicator,
+                num_span_add,
+                Span::styled("+ ", Style::default().fg(theme.add_fg).bg(bg_color).add_modifier(Modifier::BOLD)),
+                Span::styled(content, Style::default().fg(theme.add_fg).bg(bg_color)),
+            ];
+            Line::from(spans)
+        }
+    }
 }

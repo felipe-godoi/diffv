@@ -201,10 +201,10 @@ fn render_side_line<'a>(
                 ])
             }
             DiffKind::Context => {
-                let line_no_str = if is_left {
-                    format_line_no(diff_line.old_line_no)
+                let line_no = if is_left {
+                    diff_line.old_line_no
                 } else {
-                    format_line_no(diff_line.new_line_no)
+                    diff_line.new_line_no
                 };
 
                 let mut spans = Vec::new();
@@ -228,7 +228,7 @@ fn render_side_line<'a>(
                 } else {
                     Style::default().fg(theme.line_num_fg).bg(theme.line_num_bg)
                 };
-                spans.push(Span::styled(format!("{} │ ", line_no_str), num_style));
+                spans.push(Span::styled(format_gutter_no(line_no, " │ "), num_style));
 
                 let line_bg = if is_in_visual {
                     Color::Rgb(48, 42, 68)
@@ -254,7 +254,6 @@ fn render_side_line<'a>(
                 Line::from(spans)
             }
             DiffKind::Deletion => {
-                let line_no_str = format_line_no(diff_line.old_line_no);
                 let (bg_color, num_bg) = if is_in_visual {
                     (Color::Rgb(78, 32, 50), Color::Rgb(98, 38, 62))
                 } else {
@@ -282,7 +281,7 @@ fn render_side_line<'a>(
                 };
 
                 spans.push(Span::styled(
-                    format!("{} -│ ", line_no_str),
+                    format_gutter_no(diff_line.old_line_no, " -│ "),
                     num_style,
                 ));
 
@@ -290,7 +289,6 @@ fn render_side_line<'a>(
                 Line::from(spans)
             }
             DiffKind::Addition => {
-                let line_no_str = format_line_no(diff_line.new_line_no);
                 let (bg_color, num_bg) = if is_in_visual {
                     (Color::Rgb(32, 72, 52), Color::Rgb(40, 92, 65))
                 } else {
@@ -318,7 +316,7 @@ fn render_side_line<'a>(
                 };
 
                 spans.push(Span::styled(
-                    format!("{} +│ ", line_no_str),
+                    format_gutter_no(diff_line.new_line_no, " +│ "),
                     num_style,
                 ));
 
@@ -329,10 +327,11 @@ fn render_side_line<'a>(
     }
 }
 
-fn format_line_no(num: Option<usize>) -> String {
+#[inline(always)]
+fn format_gutter_no(num: Option<usize>, suffix: &str) -> String {
     match num {
-        Some(n) => format!("{:4}", n),
-        None => "    ".to_string(),
+        Some(n) => format!("{:4}{}", n, suffix),
+        None => format!("    {}", suffix),
     }
 }
 

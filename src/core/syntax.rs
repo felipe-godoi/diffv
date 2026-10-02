@@ -1,16 +1,19 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::hash::{Hash, Hasher};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Color as SynColor, ThemeSet};
-use syntect::parsing::SyntaxSet;
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 pub static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
 pub static THEME_SET: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
 
-static HIGHLIGHT_CACHE: Lazy<Mutex<HashMap<(PathBuf, String), Vec<SyntaxToken>>>> =
-    Lazy::new(|| Mutex::new(HashMap::with_capacity(4096)));
+// Fast zero-allocation cache keyed by (path_hash, line_hash)
+static HIGHLIGHT_CACHE: Lazy<Mutex<HashMap<(u64, u64), Arc<[SyntaxToken]>>>> =
+    Lazy::new(|| Mutex::new(HashMap::with_capacity(8192)));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyntaxToken {
@@ -23,6 +26,15 @@ pub struct SyntaxHighlighter {
     _private: (),
 }
 
+#[inline(always)]
+fn compute_cache_key(path: &Path, line: &str) -> (u64, u64) {
+    let mut h1 = DefaultHasher::new();
+    path.hash(&mut h1);
+    let mut h2 = DefaultHasher::new();
+    line.hash(&mut h2);
+    (h1.finish(), h2.finish())
+}
+
 impl SyntaxHighlighter {
     pub fn highlight_line(
         path: &Path,
@@ -32,14 +44,17 @@ impl SyntaxHighlighter {
             return Vec::new();
         }
 
-        let cache_key = (path.to_path_buf(), line.to_string());
+        let key = compute_cache_key(path, line);
+
+        // 1. Fast cache lookup with ZERO heap allocations
         if let Ok(cache) = HIGHLIGHT_CACHE.lock() {
-            if let Some(tokens) = cache.get(&cache_key) {
-                return tokens.clone();
+            if let Some(tokens) = cache.get(&key) {
+                return tokens.to_vec();
             }
         }
 
-        let syntax = path
+        // 2. Resolve syntax definition
+        let syntax: &SyntaxReference = path
             .extension()
             .and_then(|ext| ext.to_str())
             .and_then(|ext| SYNTAX_SET.find_syntax_by_extension(ext))
@@ -84,11 +99,12 @@ impl SyntaxHighlighter {
             }
         }
 
+        let arc_tokens: Arc<[SyntaxToken]> = tokens.clone().into();
         if let Ok(mut cache) = HIGHLIGHT_CACHE.lock() {
-            if cache.len() > 8192 {
+            if cache.len() > 16384 {
                 cache.clear();
             }
-            cache.insert(cache_key, tokens.clone());
+            cache.insert(key, arc_tokens);
         }
 
         tokens

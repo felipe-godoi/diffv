@@ -1145,7 +1145,7 @@ impl App {
                         }
                     }
                 } else {
-                    self.trigger_editor_open();
+                    self.scroll_down(1);
                 }
             }
             KeyCode::Char('e') => {
