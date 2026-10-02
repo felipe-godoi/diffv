@@ -68,6 +68,7 @@ pub enum UpdateChannel {
     #[default]
     Stable,
     Beta,
+    Nightly,
 }
 
 impl UpdateChannel {
@@ -75,6 +76,7 @@ impl UpdateChannel {
         match self {
             UpdateChannel::Stable => "stable",
             UpdateChannel::Beta => "beta",
+            UpdateChannel::Nightly => "nightly",
         }
     }
 }
@@ -83,9 +85,10 @@ impl std::str::FromStr for UpdateChannel {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_lowercase().as_str() {
-            "stable" => Ok(UpdateChannel::Stable),
-            "beta" | "main" | "nightly" => Ok(UpdateChannel::Beta),
-            other => anyhow::bail!("Unknown update channel '{}'. Expected 'stable' or 'beta'.", other),
+            "stable" | "release" => Ok(UpdateChannel::Stable),
+            "beta" | "rc" | "preview" => Ok(UpdateChannel::Beta),
+            "nightly" | "dev" | "canary" | "main" | "rolling" => Ok(UpdateChannel::Nightly),
+            other => anyhow::bail!("Unknown update channel '{}'. Expected 'stable', 'beta', or 'nightly'.", other),
         }
     }
 }

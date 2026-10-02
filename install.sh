@@ -54,12 +54,20 @@ for arg in "$@"; do
         --beta|-b)
             INSTALL_CHANNEL="beta"
             ;;
+        --nightly)
+            INSTALL_CHANNEL="nightly"
+            ;;
+        --channel=*)
+            INSTALL_CHANNEL="${arg#*=}"
+            ;;
         --help|-h)
             echo "Usage: ./install.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  -b, --beta         Install latest beta build from main branch"
-            echo "  -U, --uninstall    Uninstall diffv and remove binaries and aliases"
+            echo "  -b, --beta         Install latest beta pre-release"
+            echo "      --nightly      Install latest nightly build from main branch"
+            echo "      --channel <ch> Select channel: stable, beta, or nightly"
+            echo "  -U, --uninstall    Uninstall diffv and remove binaries and configurations"
             echo "  -h, --help         Show this help message"
             exit 0
             ;;
@@ -178,9 +186,12 @@ else
     TARGET_ARCH="$ARCH_NAME"
     [ "$TARGET_ARCH" = "arm64" ] && TARGET_ARCH="aarch64"
     ASSET="diffv-$TARGET_ARCH-$TARGET_OS"
-    if [ "$INSTALL_CHANNEL" = "beta" ]; then
+    if [ "$INSTALL_CHANNEL" = "nightly" ]; then
+        RELEASE_URL="https://github.com/felipe-godoi/diffv/releases/download/nightly/$ASSET"
+        info "Downloading latest diffv nightly build (from main)..."
+    elif [ "$INSTALL_CHANNEL" = "beta" ]; then
         RELEASE_URL="https://github.com/felipe-godoi/diffv/releases/download/beta/$ASSET"
-        info "Downloading latest diffv beta build (from main)..."
+        info "Downloading latest diffv beta build..."
     else
         RELEASE_URL="https://github.com/felipe-godoi/diffv/releases/latest/download/$ASSET"
         info "Downloading latest stable diffv release..."

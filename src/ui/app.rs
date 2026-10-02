@@ -366,17 +366,22 @@ impl App {
     pub fn toggle_update_channel(&mut self) {
         self.config.update.channel = match self.config.update.channel {
             UpdateChannel::Stable => UpdateChannel::Beta,
-            UpdateChannel::Beta => UpdateChannel::Stable,
+            UpdateChannel::Beta => UpdateChannel::Nightly,
+            UpdateChannel::Nightly => UpdateChannel::Stable,
         };
         let _ = self.config.save();
         let msg = match self.config.update.channel {
-            UpdateChannel::Beta => match self.language {
-                Language::En => "Channel: Beta (opt-in for latest main builds) · Config [C]",
-                Language::Pt => "Canal: Beta (opt-in para últimas builds da main) · Configurações [C]",
-            },
             UpdateChannel::Stable => match self.language {
                 Language::En => "Channel: Stable (official releases) · Config [C]",
                 Language::Pt => "Canal: Stable (versões estáveis) · Configurações [C]",
+            },
+            UpdateChannel::Beta => match self.language {
+                Language::En => "Channel: Beta (pre-releases & RC) · Config [C]",
+                Language::Pt => "Canal: Beta (pré-lançamentos e RC) · Configurações [C]",
+            },
+            UpdateChannel::Nightly => match self.language {
+                Language::En => "Channel: Nightly (latest build from main) · Config [C]",
+                Language::Pt => "Canal: Nightly (última build da branch main) · Configurações [C]",
             },
         };
         self.set_notification(msg);
@@ -401,18 +406,31 @@ impl App {
                 self.set_notification(msg);
             }
             SettingItem::UpdateChannel => {
-                self.config.update.channel = match self.config.update.channel {
-                    UpdateChannel::Stable => UpdateChannel::Beta,
-                    UpdateChannel::Beta => UpdateChannel::Stable,
+                self.config.update.channel = if forward {
+                    match self.config.update.channel {
+                        UpdateChannel::Stable => UpdateChannel::Beta,
+                        UpdateChannel::Beta => UpdateChannel::Nightly,
+                        UpdateChannel::Nightly => UpdateChannel::Stable,
+                    }
+                } else {
+                    match self.config.update.channel {
+                        UpdateChannel::Stable => UpdateChannel::Nightly,
+                        UpdateChannel::Nightly => UpdateChannel::Beta,
+                        UpdateChannel::Beta => UpdateChannel::Stable,
+                    }
                 };
                 let msg = match self.config.update.channel {
-                    UpdateChannel::Beta => match self.language {
-                        Language::En => "Channel: Beta (opt-in for latest main builds) · Config [C]",
-                        Language::Pt => "Canal: Beta (opt-in para últimas builds da main) · Configurações [C]",
-                    },
                     UpdateChannel::Stable => match self.language {
                         Language::En => "Channel: Stable (official releases) · Config [C]",
                         Language::Pt => "Canal: Stable (versões estáveis) · Configurações [C]",
+                    },
+                    UpdateChannel::Beta => match self.language {
+                        Language::En => "Channel: Beta (pre-releases & RC) · Config [C]",
+                        Language::Pt => "Canal: Beta (pré-lançamentos e RC) · Configurações [C]",
+                    },
+                    UpdateChannel::Nightly => match self.language {
+                        Language::En => "Channel: Nightly (latest build from main) · Config [C]",
+                        Language::Pt => "Canal: Nightly (última build da branch main) · Configurações [C]",
                     },
                 };
                 self.set_notification(msg);

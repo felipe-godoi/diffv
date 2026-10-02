@@ -119,13 +119,17 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" dist/* --clobber || \
           gh release create "$RELEASE_TAG" dist/* --verify-tag --title "diffv $RELEASE_TAG" --generate-notes
-      - name: Publish rolling beta release from main
+      - name: Publish rolling nightly and beta release from main
         if: github.ref == 'refs/heads/main' && needs.release-please.outputs.release_created != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          gh release delete nightly --yes || true
+          git tag -d nightly 2>/dev/null || true
+          git push origin :refs/tags/nightly 2>/dev/null || true
+          gh release create nightly dist/* --target main --prerelease --title "diffv nightly (latest main)" --notes "Automated rolling nightly build from the latest commit on main (${GITHUB_SHA::7})."
           gh release delete beta --yes || true
           git tag -d beta 2>/dev/null || true
           git push origin :refs/tags/beta 2>/dev/null || true
-          gh release create beta dist/* --target main --prerelease --title "diffv beta (latest main)" --notes "Automated rolling pre-release built from the latest commit on main (${GITHUB_SHA::7})."
+          gh release create beta dist/* --target main --prerelease --title "diffv beta (latest main)" --notes "Automated rolling pre-release from the latest commit on main (${GITHUB_SHA::7})."

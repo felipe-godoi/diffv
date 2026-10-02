@@ -27,11 +27,15 @@ pub struct Cli {
     #[arg(short = 'n', long = "no-update", visible_aliases = ["no-auto-update", "no-up"])]
     pub no_update: bool,
 
-    /// Opt-in to beta builds (latest build from main branch)
+    /// Opt-in to beta pre-releases
     #[arg(short = 'b', long = "beta")]
     pub beta: bool,
 
-    /// Select update channel ('stable' or 'beta')
+    /// Opt-in to nightly builds (latest build from main branch)
+    #[arg(long = "nightly")]
+    pub nightly: bool,
+
+    /// Select update channel ('stable', 'beta', or 'nightly')
     #[arg(long = "channel", value_name = "CHANNEL")]
     pub channel: Option<String>,
 

@@ -91,6 +91,20 @@ channel = "beta"
     let cfg_alias: Config = toml::from_str(alias_toml).unwrap();
     assert!(!cfg_alias.update.auto_update);
     assert_eq!(cfg_alias.update.channel, UpdateChannel::Beta);
+
+    // 5. Nightly channel and aliases
+    let nightly_toml = r#"
+[update]
+channel = "nightly"
+"#;
+    let cfg_nightly: Config = toml::from_str(nightly_toml).unwrap();
+    assert_eq!(cfg_nightly.update.channel, UpdateChannel::Nightly);
+
+    assert_eq!("rc".parse::<UpdateChannel>().unwrap(), UpdateChannel::Beta);
+    assert_eq!("preview".parse::<UpdateChannel>().unwrap(), UpdateChannel::Beta);
+    assert_eq!("dev".parse::<UpdateChannel>().unwrap(), UpdateChannel::Nightly);
+    assert_eq!("canary".parse::<UpdateChannel>().unwrap(), UpdateChannel::Nightly);
+    assert_eq!("main".parse::<UpdateChannel>().unwrap(), UpdateChannel::Nightly);
 }
 
 #[test]

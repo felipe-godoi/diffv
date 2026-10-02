@@ -101,15 +101,19 @@ pub fn render_settings_popup(
                 let badge = match language { Language::En => "CHANNEL", Language::Pt => "CANAL" };
                 let (val, style_fg) = match config.update.channel {
                     UpdateChannel::Stable => (
-                        match language { Language::En => "[ Stable (releases) ]", Language::Pt => "[ Stable (estável) ]" },
+                        match language { Language::En => "[ Stable (releases) ]", Language::Pt => "[ Stable (oficiais estáveis) ]" },
                         theme.status_a,
                     ),
                     UpdateChannel::Beta => (
-                        match language { Language::En => "[ Beta (latest main build) ]", Language::Pt => "[ Beta (última build da main) ]" },
+                        match language { Language::En => "[ Beta (pre-releases & RC) ]", Language::Pt => "[ Beta (pré-lançamentos e RC) ]" },
                         theme.header_fg,
                     ),
+                    UpdateChannel::Nightly => (
+                        match language { Language::En => "[ Nightly (latest main) ]", Language::Pt => "[ Nightly (última build da main) ]" },
+                        theme.key_fg,
+                    ),
                 };
-                ("󰏤", match language { Language::En => "Update Channel (Opt-in Beta)", Language::Pt => "Canal de Atualização (Opt-in Beta)" }, val, (badge, style_fg))
+                ("󰏤", match language { Language::En => "Update Channel", Language::Pt => "Canal de Atualização" }, val, (badge, style_fg))
             }
             SettingItem::Theme => {
                 ("󰔎", match language { Language::En => "Color Theme", Language::Pt => "Tema de Cores" }, config.ui.theme.as_str(), ("UI", theme.key_fg))
@@ -212,12 +216,12 @@ pub fn render_settings_popup(
         ),
         SettingItem::UpdateChannel => (
             match language {
-                Language::En => "Update channel. 'Stable' receives validated GitHub releases. 'Beta' automatically fetches the latest development build compiled from the main branch.",
-                Language::Pt => "Canal de atualizações. 'Stable' recebe releases oficiais estáveis. 'Beta' recebe a versão mais recente compilada diretamente da branch main.",
+                Language::En => "Update channel: 'Stable' (official validated releases), 'Beta' (pre-releases and release candidates), or 'Nightly' (automated builds from main).",
+                Language::Pt => "Canal de atualizações: 'Stable' (releases oficiais), 'Beta' (pré-lançamentos e RCs) ou 'Nightly' (builds contínuos da branch main).",
             },
             match language {
-                Language::En => "Notice: You can also opt-in via CLI with 'diffv -b' or 'diffv --channel beta'.",
-                Language::Pt => "Aviso: Você também pode ativar via CLI com 'diffv -b' ou 'diffv --channel beta'.",
+                Language::En => "Notice: You can also opt-in via CLI with 'diffv --channel <stable|beta|nightly>' or key 'B'.",
+                Language::Pt => "Aviso: Você também pode alternar via CLI com 'diffv --channel <stable|beta|nightly>' ou tecla 'B'.",
             }
         ),
         SettingItem::Theme => (

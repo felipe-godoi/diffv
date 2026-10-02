@@ -100,23 +100,42 @@ fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<O
     };
     let metadata = tempfile::tempdir()?;
     let json = metadata.path().join("release.json");
-    let endpoint = match channel {
-        UpdateChannel::Stable => format!("repos/{}/releases/latest", REPO),
-        UpdateChannel::Beta => format!("repos/{}/releases/tags/beta", REPO),
-    };
     if verbose {
         eprintln!("Checking for updates on {} channel...", channel.as_str());
     }
-    let fetch_res = fetch(
-        curl(&format!("https://api.github.com/{}", endpoint)),
-        &json,
-        Duration::from_secs(if verbose { 10 } else { 3 }),
-    );
-    if let Err(err) = fetch_res {
-        if channel == UpdateChannel::Beta {
-            bail!("No beta pre-release found on GitHub yet (beta builds are generated when commits land on main).");
+
+    let fetch_timeout = Duration::from_secs(if verbose { 10 } else { 3 });
+
+    let fetch_res = match channel {
+        UpdateChannel::Stable => {
+            fetch(curl(&format!("https://api.github.com/repos/{}/releases/latest", REPO)), &json, fetch_timeout)
         }
-        return Err(err);
+        UpdateChannel::Beta => {
+            // Try explicit 'beta' tag, fallback to 'nightly' if no separate beta tag
+            let beta_res = fetch(curl(&format!("https://api.github.com/repos/{}/releases/tags/beta", REPO)), &json, fetch_timeout);
+            if beta_res.is_err() {
+                fetch(curl(&format!("https://api.github.com/repos/{}/releases/tags/nightly", REPO)), &json, fetch_timeout)
+            } else {
+                beta_res
+            }
+        }
+        UpdateChannel::Nightly => {
+            // Try 'nightly' tag, fallback to 'beta'
+            let nightly_res = fetch(curl(&format!("https://api.github.com/repos/{}/releases/tags/nightly", REPO)), &json, fetch_timeout);
+            if nightly_res.is_err() {
+                fetch(curl(&format!("https://api.github.com/repos/{}/releases/tags/beta", REPO)), &json, fetch_timeout)
+            } else {
+                nightly_res
+            }
+        }
+    };
+
+    if let Err(err) = fetch_res {
+        match channel {
+            UpdateChannel::Beta => bail!("No beta pre-release found on GitHub yet."),
+            UpdateChannel::Nightly => bail!("No nightly build found on GitHub yet (nightly builds are generated on push to main)."),
+            UpdateChannel::Stable => return Err(err),
+        }
     }
     let release: Release = serde_json::from_slice(&fs::read(&json)?)?;
 
@@ -134,7 +153,7 @@ fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<O
 
     let should_update = match channel {
         UpdateChannel::Stable => newer_release(&release, env!("CARGO_PKG_VERSION"))?,
-        UpdateChannel::Beta => {
+        UpdateChannel::Beta | UpdateChannel::Nightly => {
             let expected = digest.strip_prefix("sha256:").unwrap_or(digest);
             let current_bytes = fs::read(&executable)?;
             let current_digest = format!("{:x}", Sha256::digest(&current_bytes));

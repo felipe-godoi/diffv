@@ -87,11 +87,15 @@ fn run(args: Cli) -> Result<()> {
     let config = Config::load();
 
     // Determine target update channel:
-    // CLI --beta flag > CLI --channel <ch> > DIFFV_BETA / DIFFV_CHANNEL env > config.update.channel
-    let channel = if args.beta {
+    // CLI --nightly > CLI --beta > CLI --channel <ch> > DIFFV_NIGHTLY / DIFFV_BETA / DIFFV_CHANNEL env > config.update.channel
+    let channel = if args.nightly {
+        UpdateChannel::Nightly
+    } else if args.beta {
         UpdateChannel::Beta
     } else if let Some(ref ch) = args.channel {
         ch.parse().unwrap_or(UpdateChannel::Stable)
+    } else if std::env::var_os("DIFFV_NIGHTLY").is_some() {
+        UpdateChannel::Nightly
     } else if std::env::var_os("DIFFV_BETA").is_some() {
         UpdateChannel::Beta
     } else if let Ok(ch) = std::env::var("DIFFV_CHANNEL") {
