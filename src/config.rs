@@ -12,6 +12,8 @@ pub struct Config {
     pub watcher: WatcherConfig,
     #[serde(default)]
     pub editor: EditorConfig,
+    #[serde(default)]
+    pub update: UpdateConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +60,48 @@ pub struct EditorConfig {
     pub args: Vec<String>,
     #[serde(default = "default_true")]
     pub use_nvr: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Beta,
+}
+
+impl UpdateChannel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UpdateChannel::Stable => "stable",
+            UpdateChannel::Beta => "beta",
+        }
+    }
+}
+
+impl std::str::FromStr for UpdateChannel {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "stable" => Ok(UpdateChannel::Stable),
+            "beta" | "main" | "nightly" => Ok(UpdateChannel::Beta),
+            other => anyhow::bail!("Unknown update channel '{}'. Expected 'stable' or 'beta'.", other),
+        }
+    }
+}
+
+impl std::fmt::Display for UpdateChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateConfig {
+    #[serde(default = "default_true", alias = "enabled")]
+    pub auto_update: bool,
+    #[serde(default)]
+    pub channel: UpdateChannel,
 }
 
 fn default_theme() -> String {
@@ -135,6 +179,15 @@ impl Default for EditorConfig {
             command: default_editor_command(),
             args: default_editor_args(),
             use_nvr: default_true(),
+        }
+    }
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            auto_update: true,
+            channel: UpdateChannel::Stable,
         }
     }
 }

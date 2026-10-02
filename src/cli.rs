@@ -19,11 +19,27 @@ const VERSION: &str = match option_env!("DIFFV_VERSION") {
 )]
 pub struct Cli {
     /// Skip the automatic update check on startup
-    #[arg(long)]
+    #[arg(short = 'n', long = "no-update", visible_aliases = ["no-auto-update", "no-up"])]
     pub no_update: bool,
 
+    /// Opt-in to beta builds (latest build from main branch)
+    #[arg(short = 'b', long = "beta")]
+    pub beta: bool,
+
+    /// Select update channel ('stable' or 'beta')
+    #[arg(long = "channel", value_name = "CHANNEL")]
+    pub channel: Option<String>,
+
+    /// Explicitly enable or disable automatic updates (true or false)
+    #[arg(long = "auto-update", value_name = "BOOL")]
+    pub auto_update: Option<bool>,
+
+    /// Check and install updates immediately
+    #[arg(long = "update", visible_alias = "upgrade")]
+    pub update: bool,
+
     /// Uninstall diffv and remove installed binaries and configurations
-    #[arg(long)]
+    #[arg(short = 'U', long = "uninstall")]
     pub uninstall: bool,
 
     /// Positional targets: can be a git ref (HEAD~1, branch), two files, two directories, or '-' for stdin
@@ -43,15 +59,15 @@ pub struct Cli {
     pub unified: bool,
 
     /// Override color theme (vscode-dark, tokyonight, catppuccin, gruvbox)
-    #[arg(long = "theme")]
+    #[arg(short = 't', long = "theme")]
     pub theme: Option<String>,
 
     /// Ignore whitespace differences
-    #[arg(long = "ignore-whitespace")]
+    #[arg(short = 'i', short_alias = 'W', long = "ignore-whitespace", visible_aliases = ["ignore-all-space", "ws"])]
     pub ignore_whitespace: bool,
 
     /// View commit history for the specified target file
-    #[arg(short = 'H', long = "history")]
+    #[arg(short = 'H', long = "history", visible_alias = "log")]
     pub history: bool,
 
     /// Run as if started in <PATH> instead of the current working directory
@@ -59,7 +75,7 @@ pub struct Cli {
     pub cwd: Option<PathBuf>,
 
     /// On error, print it and wait for a key before exiting (keeps tmux popups readable)
-    #[arg(long)]
+    #[arg(short = 'e', long = "wait-on-error", visible_alias = "wait")]
     pub wait_on_error: bool,
 
     /// Show/hide diffv in a tmux popup, keeping its state between toggles.

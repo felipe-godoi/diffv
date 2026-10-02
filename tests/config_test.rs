@@ -54,3 +54,41 @@ fn test_all_themes_loading() {
         assert!(!theme.name.is_empty());
     }
 }
+
+#[test]
+fn test_update_config_opt_out_and_channel() {
+    use diffv::config::UpdateChannel;
+
+    // 1. Default configuration
+    let default_cfg = Config::default();
+    assert!(default_cfg.update.auto_update);
+    assert_eq!(default_cfg.update.channel, UpdateChannel::Stable);
+
+    // 2. Opt-out of auto-update
+    let opt_out_toml = r#"
+[update]
+auto_update = false
+"#;
+    let cfg: Config = toml::from_str(opt_out_toml).unwrap();
+    assert!(!cfg.update.auto_update);
+    assert_eq!(cfg.update.channel, UpdateChannel::Stable);
+
+    // 3. Opt-in to beta channel
+    let beta_toml = r#"
+[update]
+channel = "beta"
+"#;
+    let cfg_beta: Config = toml::from_str(beta_toml).unwrap();
+    assert!(cfg_beta.update.auto_update);
+    assert_eq!(cfg_beta.update.channel, UpdateChannel::Beta);
+
+    // 4. Using enabled alias
+    let alias_toml = r#"
+[update]
+enabled = false
+channel = "beta"
+"#;
+    let cfg_alias: Config = toml::from_str(alias_toml).unwrap();
+    assert!(!cfg_alias.update.auto_update);
+    assert_eq!(cfg_alias.update.channel, UpdateChannel::Beta);
+}

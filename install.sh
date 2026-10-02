@@ -42,11 +42,35 @@ echo "/_____/_/_/ /_/    |___/  "
 echo -e "${NC}"
 echo -e "${BOLD}High-Performance Terminal Diff Viewer (macOS & Linux)${NC}\n"
 
+# Parse arguments
+INSTALL_CHANNEL="stable"
+DO_UNINSTALL=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall|-U)
+            DO_UNINSTALL=1
+            ;;
+        --beta|-b)
+            INSTALL_CHANNEL="beta"
+            ;;
+        --help|-h)
+            echo "Usage: ./install.sh [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  -b, --beta         Install latest beta build from main branch"
+            echo "  -U, --uninstall    Uninstall diffv and remove binaries and aliases"
+            echo "  -h, --help         Show this help message"
+            exit 0
+            ;;
+    esac
+done
+
 # Handle uninstall flag
-if [[ "$1" == "--uninstall" ]]; then
+if [ "$DO_UNINSTALL" -eq 1 ]; then
     info "Uninstalling diffv..."
     REMOVED=0
-    for target in "$HOME/.local/bin/diffv" "$HOME/.cargo/bin/diffv" "/usr/local/bin/diffv"; do
+    for target in "$HOME/.local/bin/diffv" "$HOME/.local/bin/dv" "$HOME/.cargo/bin/diffv" "$HOME/.cargo/bin/dv" "/usr/local/bin/diffv" "/usr/local/bin/dv"; do
         if [ -f "$target" ] || [ -L "$target" ]; then
             rm -f "$target"
             success "Removed $target"
@@ -62,15 +86,6 @@ if [[ "$1" == "--uninstall" ]]; then
     else
         warn "No diffv installation found."
     fi
-    exit 0
-fi
-
-if [[ "$1" == "--help" || "$1" == "-h" ]]; then
-    echo "Usage: ./install.sh [OPTIONS]"
-    echo ""
-    echo "Options:"
-    echo "  --uninstall    Uninstall diffv and remove binaries"
-    echo "  -h, --help     Show this help message"
     exit 0
 fi
 
@@ -163,10 +178,15 @@ else
     TARGET_ARCH="$ARCH_NAME"
     [ "$TARGET_ARCH" = "arm64" ] && TARGET_ARCH="aarch64"
     ASSET="diffv-$TARGET_ARCH-$TARGET_OS"
-    RELEASE_URL="https://github.com/felipe-godoi/diffv/releases/latest/download/$ASSET"
+    if [ "$INSTALL_CHANNEL" = "beta" ]; then
+        RELEASE_URL="https://github.com/felipe-godoi/diffv/releases/download/beta/$ASSET"
+        info "Downloading latest diffv beta build (from main)..."
+    else
+        RELEASE_URL="https://github.com/felipe-godoi/diffv/releases/latest/download/$ASSET"
+        info "Downloading latest stable diffv release..."
+    fi
     DOWNLOAD_DIR=$(mktemp -d)
     trap 'rm -rf "$DOWNLOAD_DIR"' EXIT
-    info "Downloading latest diffv release..."
     if curl --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 90 -fsSL "$RELEASE_URL" -o "$DOWNLOAD_DIR/$ASSET"; then
         curl --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 15 -fsSL "$RELEASE_URL.sha256" -o "$DOWNLOAD_DIR/$ASSET.sha256"
         if command -v sha256sum >/dev/null 2>&1; then
@@ -183,15 +203,20 @@ else
         if [ "$HAS_CARGO" -eq 0 ]; then
             error "Install Rust from https://rustup.rs or choose a supported release binary."
         fi
-        cargo install --git https://github.com/felipe-godoi/diffv.git --locked --force
+        if [ "$INSTALL_CHANNEL" = "beta" ]; then
+            cargo install --git https://github.com/felipe-godoi/diffv.git --branch main --locked --force
+        else
+            cargo install --git https://github.com/felipe-godoi/diffv.git --locked --force
+        fi
         ln -sf "$HOME/.cargo/bin/diffv" "$INSTALL_DIR/diffv"
     fi
 fi
 
-# Verify binary
+# Verify binary and create alias
 if [ -x "$INSTALL_DIR/diffv" ]; then
+    ln -sf "$INSTALL_DIR/diffv" "$INSTALL_DIR/dv"
     VERSION="$("$INSTALL_DIR/diffv" --version 2>/dev/null || echo "diffv")"
-    success "Successfully installed $VERSION to $INSTALL_DIR/diffv"
+    success "Successfully installed $VERSION to $INSTALL_DIR/diffv (alias: $INSTALL_DIR/dv)"
 else
     error "Installation failed: executable not found at $INSTALL_DIR/diffv"
 fi

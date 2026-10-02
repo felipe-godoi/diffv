@@ -73,9 +73,12 @@ pub fn run() -> Result<()> {
     // 2. Standard installation paths
     if let Some(home) = dirs::home_dir() {
         targets.push(home.join(".local/bin/diffv"));
+        targets.push(home.join(".local/bin/dv"));
         targets.push(home.join(".cargo/bin/diffv"));
+        targets.push(home.join(".cargo/bin/dv"));
     }
     targets.push(PathBuf::from("/usr/local/bin/diffv"));
+    targets.push(PathBuf::from("/usr/local/bin/dv"));
 
     let config_dir = dirs::config_dir().map(|p| p.join("diffv"));
 

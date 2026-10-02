@@ -17,7 +17,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use diffv::cli::Cli;
-use diffv::config::Config;
+use diffv::config::{Config, UpdateChannel};
 use diffv::git::provider::GitProvider;
 use diffv::integration::editor::open_editor;
 use diffv::integration::fzf::{is_fzf_available, search_diff_text_fzf, search_files_fzf};
@@ -33,7 +33,12 @@ enum AppEvent {
 
 fn main() {
     let args = Cli::parse();
-    if args.uninstall {
+    let is_uninstall = args.uninstall
+        || (args.targets.len() == 1
+            && (args.targets[0] == "uninstall" || args.targets[0] == "remove")
+            && !Path::new(&args.targets[0]).exists());
+
+    if is_uninstall {
         if let Err(err) = diffv::uninstall::run() {
             eprintln!("Error: {:#}", err);
             std::process::exit(1);
@@ -68,10 +73,61 @@ fn wait_for_key() {
 }
 
 fn run(args: Cli) -> Result<()> {
-    if !args.no_update && std::env::var_os("DIFFV_NO_UPDATE").is_none()
-        && std::env::var_os("DIFFV_UPDATE_RESTART").is_none() {
+    let config = Config::load();
+
+    // Determine target update channel:
+    // CLI --beta flag > CLI --channel <ch> > DIFFV_BETA / DIFFV_CHANNEL env > config.update.channel
+    let channel = if args.beta {
+        UpdateChannel::Beta
+    } else if let Some(ref ch) = args.channel {
+        ch.parse().unwrap_or(UpdateChannel::Stable)
+    } else if std::env::var_os("DIFFV_BETA").is_some() {
+        UpdateChannel::Beta
+    } else if let Ok(ch) = std::env::var("DIFFV_CHANNEL") {
+        ch.parse().unwrap_or(UpdateChannel::Stable)
+    } else {
+        config.update.channel
+    };
+
+    // Explicit update request (e.g. diffv --update, diffv update, dv upgrade)
+    let is_explicit_update = args.update
+        || (args.targets.len() == 1
+            && (args.targets[0] == "update" || args.targets[0] == "upgrade")
+            && !Path::new(&args.targets[0]).exists());
+
+    if is_explicit_update {
+        match diffv::update::check_and_install_verbose(channel) {
+            Ok(Some(path)) => {
+                println!("Successfully updated diffv to {} ({})!", path.display(), channel);
+            }
+            Ok(None) => {
+                println!("diffv is already up to date ({})", channel);
+            }
+            Err(err) => {
+                eprintln!("Update failed: {:#}", err);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    // Determine if automatic update check is enabled on startup:
+    // Opt-out priority: CLI -n / --no-update > CLI --auto-update <BOOL> > env DIFFV_NO_UPDATE / DIFFV_AUTO_UPDATE > config.update.auto_update
+    let auto_update_enabled = if args.no_update {
+        false
+    } else if let Some(enabled) = args.auto_update {
+        enabled
+    } else if std::env::var_os("DIFFV_NO_UPDATE").is_some() {
+        false
+    } else if let Ok(val) = std::env::var("DIFFV_AUTO_UPDATE") {
+        val != "0" && val.to_lowercase() != "false"
+    } else {
+        config.update.auto_update
+    };
+
+    if auto_update_enabled && std::env::var_os("DIFFV_UPDATE_RESTART").is_none() {
         // Offline, rate-limited or no newer release: keep running the installed version.
-        if let Ok(Some(path)) = diffv::update::check_and_install() {
+        if let Ok(Some(path)) = diffv::update::check_and_install(channel) {
             eprintln!("diffv updated. Restarting…");
             #[cfg(unix)] {
                 use std::os::unix::process::CommandExt;
@@ -82,7 +138,6 @@ fn run(args: Cli) -> Result<()> {
             }
         }
     }
-    let config = Config::load();
 
     // Setup custom panic hook to restore terminal
     let default_panic = std::panic::take_hook();

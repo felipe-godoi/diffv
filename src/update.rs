@@ -81,26 +81,97 @@ fn install_verified(download: &Path, executable: &Path, digest: &str) -> Result<
     Ok(())
 }
 
-pub fn check_and_install() -> Result<Option<PathBuf>> {
-    let Some(name) = platform_asset() else { return Ok(None); };
+use crate::config::UpdateChannel;
+
+pub fn check_and_install(channel: UpdateChannel) -> Result<Option<PathBuf>> {
+    check_and_install_internal(channel, false)
+}
+
+pub fn check_and_install_verbose(channel: UpdateChannel) -> Result<Option<PathBuf>> {
+    check_and_install_internal(channel, true)
+}
+
+fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<Option<PathBuf>> {
+    let Some(name) = platform_asset() else {
+        if verbose {
+            eprintln!("diffv: No precompiled binary available for this platform.");
+        }
+        return Ok(None);
+    };
     let metadata = tempfile::tempdir()?;
     let json = metadata.path().join("release.json");
-    let endpoint = format!("repos/{}/releases/latest", REPO);
-    fetch(curl(&format!("https://api.github.com/{}", endpoint)), &json, Duration::from_secs(3))?;
+    let endpoint = match channel {
+        UpdateChannel::Stable => format!("repos/{}/releases/latest", REPO),
+        UpdateChannel::Beta => format!("repos/{}/releases/tags/beta", REPO),
+    };
+    if verbose {
+        eprintln!("Checking for updates on {} channel...", channel.as_str());
+    }
+    let fetch_res = fetch(
+        curl(&format!("https://api.github.com/{}", endpoint)),
+        &json,
+        Duration::from_secs(if verbose { 10 } else { 3 }),
+    );
+    if let Err(err) = fetch_res {
+        if channel == UpdateChannel::Beta {
+            bail!("No beta pre-release found on GitHub yet (beta builds are generated when commits land on main).");
+        }
+        return Err(err);
+    }
     let release: Release = serde_json::from_slice(&fs::read(&json)?)?;
-    if !newer_release(&release, env!("CARGO_PKG_VERSION"))? { return Ok(None); }
-    let asset = release.assets.iter().find(|a| a.name == name).context("No release binary for this platform")?;
-    let digest = asset.digest.as_deref().context("Release asset checksum unavailable")?;
+
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == name)
+        .context("No release binary for this platform")?;
+    let digest = asset
+        .digest
+        .as_deref()
+        .context("Release asset checksum unavailable")?;
+
     let executable = std::env::current_exe()?.canonicalize()?;
+
+    let should_update = match channel {
+        UpdateChannel::Stable => newer_release(&release, env!("CARGO_PKG_VERSION"))?,
+        UpdateChannel::Beta => {
+            let expected = digest.strip_prefix("sha256:").unwrap_or(digest);
+            let current_bytes = fs::read(&executable)?;
+            let current_digest = format!("{:x}", Sha256::digest(&current_bytes));
+            !current_digest.eq_ignore_ascii_case(expected)
+        }
+    };
+
+    if !should_update {
+        return Ok(None);
+    }
+
     let parent = executable.parent().context("Invalid executable path")?;
-    let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(parent.join(".diffv-update.lock"))?;
-    if lock.try_lock_exclusive().is_err() { return Ok(None); }
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(parent.join(".diffv-update.lock"))?;
+    if lock.try_lock_exclusive().is_err() {
+        return Ok(None);
+    }
     let staging = tempfile::tempdir_in(parent)?;
     let download = staging.path().join("diffv");
-    eprintln!("Updating diffv {} → {}…", env!("CARGO_PKG_VERSION"), release.tag_name);
+    eprintln!(
+        "Updating diffv ({}) → {}…",
+        channel.as_str(),
+        release.tag_name
+    );
     let prefix = format!("https://github.com/{}/releases/download/", REPO);
-    if !asset.browser_download_url.starts_with(&prefix) { bail!("Unexpected release download URL"); }
-    fetch(curl(&asset.browser_download_url), &download, Duration::from_secs(90))?;
+    if !asset.browser_download_url.starts_with(&prefix) {
+        bail!("Unexpected release download URL");
+    }
+    fetch(
+        curl(&asset.browser_download_url),
+        &download,
+        Duration::from_secs(90),
+    )?;
     install_verified(&download, &executable, digest)?;
     Ok(Some(executable))
 }
