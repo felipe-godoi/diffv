@@ -7,7 +7,7 @@ use ratatui::Frame;
 
 use crate::config::Config;
 use crate::core::engine::DiffEngine;
-use crate::core::models::{FileDiff, RepoStats};
+use crate::core::models::{CommitEntry, FileDiff, RepoStats};
 use crate::git::actions::{
     discard_file, discard_hunk, stage_file, stage_hunk, stage_partial_hunk, unstage_file,
     unstage_hunk,
@@ -19,6 +19,7 @@ use crate::ui::components::file_tree::{
 };
 use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
+use crate::ui::components::history_popup::render_history_popup;
 use crate::ui::components::ruler::render_ruler;
 use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
 use crate::ui::components::status_bar::render_status_bar;
@@ -81,6 +82,13 @@ pub struct App {
     pub collapsed_dirs: HashSet<PathBuf>,
     pub tree_items: Vec<TreeItem>,
     pub selected_tree_idx: usize,
+
+    // File commit history
+    pub show_history: bool,
+    pub history_commits: Vec<CommitEntry>,
+    pub selected_history_idx: usize,
+    pub history_scroll: usize,
+    pub active_commit_view: Option<(String, FileDiff)>,
 }
 
 impl App {
@@ -92,6 +100,7 @@ impl App {
         unified: bool,
         theme_override: Option<String>,
         ignore_whitespace: bool,
+        history_mode: bool,
     ) -> anyhow::Result<Self> {
         let theme_name = theme_override.unwrap_or_else(|| config.ui.theme.clone());
         let theme = Theme::from_name(&theme_name);
@@ -126,16 +135,33 @@ impl App {
             collapsed_dirs: HashSet::new(),
             tree_items: Vec::new(),
             selected_tree_idx: 0,
+            show_history: false,
+            history_commits: Vec::new(),
+            selected_history_idx: 0,
+            history_scroll: 0,
+            active_commit_view: None,
         };
 
         app.reload_diffs_internal(false)?;
         if app.files.is_empty() {
             app.set_notification("No differences found.");
         }
+
+        if history_mode {
+            app.open_file_history();
+        }
+
         Ok(app)
     }
 
     pub fn current_file(&self) -> Option<&FileDiff> {
+        if let Some((_, commit_diff)) = &self.active_commit_view {
+            return Some(commit_diff);
+        }
+        self.get_underlying_file()
+    }
+
+    pub fn get_underlying_file(&self) -> Option<&FileDiff> {
         if self.file_view_mode == FileViewMode::Tree {
             if let Some(item) = self.tree_items.get(self.selected_tree_idx) {
                 if let Some(idx) = item.file_index {
@@ -312,7 +338,37 @@ impl App {
             return;
         }
 
-        // 3. Filter Search Active
+        // 3. History Modal Active
+        if self.show_history {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('H') | KeyCode::Char('q') => {
+                    self.show_history = false;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if self.selected_history_idx + 1 < self.history_commits.len() {
+                        self.selected_history_idx += 1;
+                        if self.selected_history_idx >= self.history_scroll + 12 {
+                            self.history_scroll = self.selected_history_idx.saturating_sub(11);
+                        }
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if self.selected_history_idx > 0 {
+                        self.selected_history_idx -= 1;
+                        if self.selected_history_idx < self.history_scroll {
+                            self.history_scroll = self.selected_history_idx;
+                        }
+                    }
+                }
+                KeyCode::Enter => {
+                    self.load_selected_commit_diff();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // 4. Filter Search Active
         if self.filter_mode {
             match key.code {
                 KeyCode::Enter => {
@@ -336,14 +392,25 @@ impl App {
             return;
         }
 
-        // 4. Normal / Visual Navigation
+        // 5. Normal / Visual Navigation
         match key.code {
             KeyCode::Esc => {
-                if self.visual_mode {
+                if self.active_commit_view.is_some() {
+                    self.active_commit_view = None;
+                    self.set_notification("Returned to live working tree diff");
+                } else if self.visual_mode {
                     self.visual_mode = false;
                     self.set_notification("Exited visual mode");
                 } else {
                     self.should_quit = true;
+                }
+            }
+            KeyCode::Char('H') => {
+                if self.active_commit_view.is_some() {
+                    self.active_commit_view = None;
+                    self.set_notification("Returned to live working tree diff");
+                } else {
+                    self.open_file_history();
                 }
             }
             KeyCode::Char('q') => {
@@ -844,6 +911,52 @@ impl App {
         Some((repo_root, file.new_path.clone(), hunk))
     }
 
+    pub fn open_file_history(&mut self) {
+        if let AppMode::Git { git_provider, .. } = &self.mode {
+            if let Some(file) = self.get_underlying_file() {
+                match git_provider.get_file_history(&file.new_path, 50) {
+                    Ok(commits) if !commits.is_empty() => {
+                        self.history_commits = commits;
+                        self.selected_history_idx = 0;
+                        self.history_scroll = 0;
+                        self.show_history = true;
+                    }
+                    _ => {
+                        self.set_notification(format!("No git history found for {}", file.display_path()));
+                    }
+                }
+            } else {
+                self.set_notification("No file selected for history");
+            }
+        } else {
+            self.set_notification("History view is only available inside Git repositories");
+        }
+    }
+
+    pub fn load_selected_commit_diff(&mut self) {
+        if let Some(commit) = self.history_commits.get(self.selected_history_idx) {
+            let hash = commit.hash.clone();
+            let msg = commit.message.clone();
+
+            if let AppMode::Git { git_provider, .. } = &self.mode {
+                if let Some(file) = self.get_underlying_file() {
+                    match git_provider.load_commit_diff_for_file(&hash, &file.new_path) {
+                        Ok(Some(commit_diff)) => {
+                            self.active_commit_view = Some((hash.clone(), commit_diff));
+                            self.show_history = false;
+                            self.scroll_y = 0;
+                            self.selected_row = 0;
+                            self.set_notification(format!("Viewing commit {} - {} (Press Esc/H to return)", hash, msg));
+                        }
+                        _ => {
+                            self.set_notification(format!("No diff changes in commit {} for this file", hash));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn render(&mut self, frame: &mut Frame) {
         let size = frame.area();
 
@@ -857,10 +970,15 @@ impl App {
             .split(size);
 
         // 1. Render Header
+        let mut display_stats = self.repo_stats.clone();
+        if let Some((hash, _)) = &self.active_commit_view {
+            display_stats.branch = format!("commit: {}", hash);
+        }
+
         render_header(
             frame,
             chunks[0],
-            &self.repo_stats,
+            &display_stats,
             self.is_unified,
             self.watch_mode,
             &self.theme,
@@ -942,6 +1060,8 @@ impl App {
         // 3. Render Status Bar
         let notif_text = if self.visual_mode {
             Some("-- VISUAL MODE (Select lines with j/k, press 's' to stage, Esc to exit) --")
+        } else if self.active_commit_view.is_some() {
+            Some("[COMMIT VIEW] Viewing commit diff  [Esc/H] Return to Live Diff")
         } else {
             self.notification.as_ref().map(|(msg, _)| msg.as_str())
         };
@@ -950,6 +1070,20 @@ impl App {
         // 4. Overlays
         if self.show_help {
             render_help_popup(frame, size, &self.theme);
+        } else if self.show_history {
+            let path_str = self
+                .get_underlying_file()
+                .map(|f| f.display_path())
+                .unwrap_or_default();
+            render_history_popup(
+                frame,
+                size,
+                &path_str,
+                &self.history_commits,
+                self.selected_history_idx,
+                self.history_scroll,
+                &self.theme,
+            );
         } else if let Some((_, msg)) = &self.confirm_action {
             render_confirm_popup(frame, size, msg, &self.theme);
         }

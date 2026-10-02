@@ -36,6 +36,10 @@ pub struct Cli {
     #[arg(long = "ignore-whitespace")]
     pub ignore_whitespace: bool,
 
+    /// View commit history for the specified target file
+    #[arg(short = 'H', long = "history")]
+    pub history: bool,
+
     /// Run as if started in <PATH> instead of the current working directory
     #[arg(short = 'C', long = "cwd")]
     pub cwd: Option<PathBuf>,

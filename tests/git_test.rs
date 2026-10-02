@@ -72,3 +72,61 @@ fn test_git_provider_lifecycle() {
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_file_history() {
+    let temp_dir = std::env::temp_dir().join("diffv_test_git_history");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&temp_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "Git command failed: {:?}", args);
+    };
+
+    run(&["init"]);
+    run(&["config", "user.name", "HistoryTester"]);
+    run(&["config", "user.email", "history@example.com"]);
+
+    let file_path = temp_dir.join("history_doc.txt");
+
+    // Commit 1
+    fs::write(&file_path, "version 1\n").unwrap();
+    run(&["add", "history_doc.txt"]);
+    run(&["commit", "-m", "First commit on doc"]);
+
+    // Commit 2
+    fs::write(&file_path, "version 1\nversion 2\n").unwrap();
+    run(&["add", "history_doc.txt"]);
+    run(&["commit", "-m", "Second commit on doc"]);
+
+    // Commit 3
+    fs::write(&file_path, "version 1\nversion 2\nversion 3\n").unwrap();
+    run(&["add", "history_doc.txt"]);
+    run(&["commit", "-m", "Third commit on doc"]);
+
+    let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
+    let commits = provider.get_file_history(std::path::Path::new("history_doc.txt"), 10).unwrap();
+
+    assert_eq!(commits.len(), 3);
+    assert_eq!(commits[0].message, "Third commit on doc");
+    assert_eq!(commits[1].message, "Second commit on doc");
+    assert_eq!(commits[2].message, "First commit on doc");
+    assert_eq!(commits[0].author, "HistoryTester");
+
+    // Test load commit diff
+    let diff = provider.load_commit_diff_for_file(&commits[0].hash, std::path::Path::new("history_doc.txt")).unwrap();
+    assert!(diff.is_some());
+    let diff = diff.unwrap();
+    assert_eq!(diff.new_path, std::path::PathBuf::from("history_doc.txt"));
+    assert_eq!(diff.stats.additions, 1);
+    assert_eq!(diff.stats.deletions, 0);
+
+    // Clean up
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+

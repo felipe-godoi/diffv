@@ -126,3 +126,14 @@ Este roadmap decompõe as especificações do [docs/spec.md](file:///Users/felip
 - [x] **7.3 Qualidade, Testes & Release**
   - [x] Testes unitários para alinhamento side-by-side, intra-line diffing e parsing de patches.
   - [x] Compilação de binário estático único e instrução de instalação no `README.md`.
+
+---
+
+## Fase 8: Histórico de Commits por Arquivo (File Commit History)
+
+- [x] **8.1 Visualização de Histórico de Arquivos**
+  - [x] Extração de log de commits para o arquivo ativo via `git log --follow` com hash curto, data relativa, autor e mensagem.
+  - [x] Modal interativo de histórico (`H` ou flag CLI `-H` / `--history`) com navegação vertical por setas/`j`/`k`.
+  - [x] Pré-visualização do diff exato do commit selecionado ao pressionar `Enter` na lista de commits.
+  - [x] Retorno imediato ao diff do working tree ao pressionar `Esc` ou fechar a visualização.
+

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::core::aligner::align_hunks_side_by_side;
 use crate::core::models::{
-    ChangeStats, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, RepoStats, StageStatus,
+    ChangeStats, CommitEntry, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, RepoStats, StageStatus,
 };
 use crate::git::patch::parse_unified_diff;
 
@@ -279,5 +279,61 @@ impl GitProvider {
             hunks: vec![hunk],
             is_binary: false,
         })
+    }
+
+    pub fn get_file_history(&self, file_path: &Path, max_count: usize) -> Result<Vec<CommitEntry>> {
+        let output = Command::new("git")
+            .args([
+                "log",
+                "--follow",
+                &format!("--format=%h\t%an\t%ar\t%s"),
+                &format!("-n{}", max_count),
+                "--",
+            ])
+            .arg(file_path)
+            .current_dir(&self.repo_root)
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut entries = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 4 {
+                entries.push(CommitEntry {
+                    hash: parts[0].to_string(),
+                    author: parts[1].to_string(),
+                    date: parts[2].to_string(),
+                    message: parts[3].to_string(),
+                });
+            }
+        }
+
+        Ok(entries)
+    }
+
+    pub fn load_commit_diff_for_file(&self, commit_hash: &str, file_path: &Path) -> Result<Option<FileDiff>> {
+        let output = Command::new("git")
+            .args(["show", "--format=", "-p", commit_hash, "--"])
+            .arg(file_path)
+            .current_dir(&self.repo_root)
+            .output()?;
+
+        if !output.status.success() {
+            anyhow::bail!("Failed to get commit diff for {}", commit_hash);
+        }
+
+        let diff_text = String::from_utf8_lossy(&output.stdout);
+        let mut files = parse_unified_diff(&diff_text);
+        if let Some(mut file) = files.pop() {
+            file.aligned_rows = align_hunks_side_by_side(&file.hunks);
+            Ok(Some(file))
+        } else {
+            Ok(None)
+        }
     }
 }

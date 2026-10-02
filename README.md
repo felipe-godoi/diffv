@@ -15,8 +15,8 @@
 - 🎯 **Granular Staging & Discarding**: Stage (`s`), unstage (`u`), or discard (`d`) individual hunks, or stage (`S`), unstage (`U`), or discard (`D`) entire files with quick confirmation dialogs.
 - 📋 **AI Context Copying (`c`)**: One-key copy of the active hunk or file diff formatted in Markdown directly to your system clipboard (`arboard`) to easily paste into AI agent prompts.
 - ✏️ **Instant Neovim / $EDITOR Jump (`e` or `Enter`)**: Opens `$EDITOR +<line> <file>` or routes to an active Neovim session via `nvr` (neovim-remote).
-- 🪟 **Tmux Floating Popup Ready**: Built to run instantly inside `tmux display-popup` with zero flickering and clean `SIGWINCH` resize handling.
 - 📂 **Multi-Mode Comparison**: Works with Git working trees, `--staged` mode, specific Git branches/commits (`HEAD~1`, `main..feat`), arbitrary local files (`diffv a.rs b.rs`), local directories (`diffv dir1 dir2`), and standard input pipes (`git diff | diffv -`).
+- 📜 **File Commit History (`H` / `-H`)**: Inspect commit log entries for the active file with author, relative timestamp, and commit message, and preview individual commit diffs in-place.
 
 ---
 
@@ -97,6 +97,7 @@ diffv --theme tokyonight
 | `U` | General | **Unstage** entire file |
 | `D` | General | **Discard** entire file (with `y/n` confirmation) |
 | `c` | Diff | **Copy** hunk to clipboard as Markdown |
+| `H` | General | Open **File Commit History** modal & diff preview |
 | `m` | General | Toggle view mode (**Side-by-Side** ↔ **Unified**) |
 | `w` | General | Toggle **Live Watch Mode** |
 | `/` | File Tree | Filter files by name/extension (fuzzy search) |

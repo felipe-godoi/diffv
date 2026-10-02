@@ -135,6 +135,7 @@ fn run_app(
         args.unified,
         args.theme.clone(),
         args.ignore_whitespace,
+        args.history,
     )?;
 
     // Channel for unifying keyboard events, debounced filesystem events and tick timer

@@ -119,3 +119,11 @@ pub struct RepoStats {
     pub total_deletions: usize,
     pub file_count: usize,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitEntry {
+    pub hash: String,
+    pub author: String,
+    pub date: String,
+    pub message: String,
+}
