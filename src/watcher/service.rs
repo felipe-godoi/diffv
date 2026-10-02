@@ -9,6 +9,8 @@ use notify::{RecursiveMode, Watcher};
 use notify_debouncer_mini::{new_debouncer, DebouncedEvent};
 
 pub enum WatchEvent {
+    Scanning { scanned_dirs: usize },
+    Ready { total_dirs: usize },
     ReloadRequested,
 }
 
@@ -58,14 +60,13 @@ impl WatchService {
             .name("diffv-watcher".to_string())
             .spawn(move || {
                 let repo_root = watch_path.clone();
-                let tx_clone = tx.clone();
-
+                let debouncer_tx = tx.clone();
                 let mut debouncer = match new_debouncer(
                     Duration::from_millis(debounce_ms),
                     move |res: Result<Vec<DebouncedEvent>, _>| {
                         if let Ok(events) = res {
                             if is_relevant(&repo_root, events.iter().map(|e| e.path.as_path())) {
-                                let _ = tx_clone.send(WatchEvent::ReloadRequested);
+                                let _ = debouncer_tx.send(WatchEvent::ReloadRequested);
                             }
                         }
                     },
@@ -74,7 +75,8 @@ impl WatchService {
                     Err(_) => return,
                 };
 
-                setup_watches(&watch_path, debouncer.watcher());
+                let _ = tx.send(WatchEvent::Scanning { scanned_dirs: 0 });
+                setup_watches(&watch_path, debouncer.watcher(), &tx);
 
                 // Keep debouncer alive until Stop signal is received when diffv exits
                 let _ = stop_rx.recv();
@@ -88,9 +90,10 @@ impl WatchService {
 }
 
 /// Recursively registers non-ignored directories using `.gitignore` patterns.
-fn setup_watches(watch_path: &Path, watcher: &mut dyn Watcher) {
+fn setup_watches(watch_path: &Path, watcher: &mut dyn Watcher, tx: &Sender<WatchEvent>) {
     if !watch_path.is_dir() {
         let _ = watcher.watch(watch_path, RecursiveMode::NonRecursive);
+        let _ = tx.send(WatchEvent::Ready { total_dirs: 1 });
         return;
     }
 
@@ -117,9 +120,14 @@ fn setup_watches(watch_path: &Path, watcher: &mut dyn Watcher) {
             true
         });
 
+    let mut dir_count = 0;
     for result in builder.build().flatten() {
         if result.file_type().is_some_and(|ft| ft.is_dir()) {
             let _ = watcher.watch(result.path(), RecursiveMode::NonRecursive);
+            dir_count += 1;
+            if dir_count % 35 == 0 {
+                let _ = tx.send(WatchEvent::Scanning { scanned_dirs: dir_count });
+            }
         }
     }
 
@@ -149,6 +157,8 @@ fn setup_watches(watch_path: &Path, watcher: &mut dyn Watcher) {
             let _ = watcher.watch(&refs, RecursiveMode::Recursive);
         }
     }
+
+    let _ = tx.send(WatchEvent::Ready { total_dirs: dir_count });
 }
 
 /// Index/HEAD/ref updates (staging or committing elsewhere) count; other
@@ -224,5 +234,18 @@ mod tests {
         assert!(service.is_ok());
         // Must return almost instantaneously (under 50ms)
         assert!(start.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_watch_service_emits_scanning_and_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let _service = WatchService::start(dir.path(), 100, tx).unwrap();
+
+        let first = rx.recv_timeout(Duration::from_secs(2));
+        assert!(matches!(first, Ok(WatchEvent::Scanning { scanned_dirs: 0 })));
+
+        let second = rx.recv_timeout(Duration::from_secs(2));
+        assert!(matches!(second, Ok(WatchEvent::Ready { .. })));
     }
 }

@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::core::engine::DiffEngine;
 use crate::core::models::{
     CommitEntry, DiffKind, DiffSection, DrawerTab, FileDiff, Language, RepoStats, StageStatus, StashEntry,
-    WorktreeEntry,
+    WatcherScanState, WorktreeEntry,
 };
 
 
@@ -173,6 +173,10 @@ pub struct App {
     // Terminal geometry for responsive drag resizing
     pub term_width: u16,
     pub term_height: u16,
+
+    // Watcher scanning state and animation
+    pub watcher_state: WatcherScanState,
+    pub spinner_idx: usize,
 }
 
 impl App {
@@ -280,6 +284,12 @@ impl App {
             fzf_request: None,
             term_width: 80,
             term_height: 25,
+            watcher_state: if watch_mode {
+                WatcherScanState::Scanning { scanned_dirs: 0 }
+            } else {
+                WatcherScanState::Idle
+            },
+            spinner_idx: 0,
         };
 
         app.reload_diffs_internal(false)?;
@@ -296,6 +306,18 @@ impl App {
         }
 
         Ok(app)
+    }
+
+    pub fn is_watcher_scanning(&self) -> bool {
+        matches!(self.watcher_state, WatcherScanState::Scanning { .. })
+    }
+
+    pub fn update_watcher_progress(&mut self, scanned: usize, total: Option<usize>) {
+        if let Some(total_dirs) = total {
+            self.watcher_state = WatcherScanState::Ready { total_dirs };
+        } else {
+            self.watcher_state = WatcherScanState::Scanning { scanned_dirs: scanned };
+        }
     }
 
     pub fn current_file(&self) -> Option<&FileDiff> {
@@ -2806,6 +2828,8 @@ impl App {
             &display_stats,
             self.is_unified,
             self.watch_mode,
+            self.watcher_state,
+            self.spinner_idx,
             active_worktree_name,
             self.language,
             &self.theme,

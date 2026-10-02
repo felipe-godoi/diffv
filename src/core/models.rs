@@ -173,3 +173,11 @@ pub enum Language {
     Pt,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WatcherScanState {
+    #[default]
+    Idle,
+    Scanning { scanned_dirs: usize },
+    Ready { total_dirs: usize },
+}
+

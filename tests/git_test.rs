@@ -837,3 +837,36 @@ fn paths_with_spaces_unicode_and_renames() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_watcher_scan_state_transitions() {
+    use diffv::config::Config;
+    use diffv::core::models::WatcherScanState;
+    use diffv::ui::app::{App, AppMode};
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mode = AppMode::DirPair(temp_dir.path().to_path_buf(), temp_dir.path().to_path_buf());
+
+    let mut app = App::new(
+        mode,
+        Config::default(),
+        true,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+
+    assert!(app.is_watcher_scanning());
+    assert_eq!(app.watcher_state, WatcherScanState::Scanning { scanned_dirs: 0 });
+
+    app.update_watcher_progress(50, None);
+    assert!(app.is_watcher_scanning());
+    assert_eq!(app.watcher_state, WatcherScanState::Scanning { scanned_dirs: 50 });
+
+    app.update_watcher_progress(120, Some(120));
+    assert!(!app.is_watcher_scanning());
+    assert_eq!(app.watcher_state, WatcherScanState::Ready { total_dirs: 120 });
+}

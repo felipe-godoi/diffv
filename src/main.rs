@@ -27,6 +27,7 @@ use diffv::watcher::service::{WatchEvent, WatchService};
 enum AppEvent {
     Input(Event),
     Reload,
+    WatcherProgress { scanned: usize, total: Option<usize> },
     Tick,
 }
 
@@ -233,11 +234,37 @@ fn run_app(
         None
     };
 
-    let reload_tx = tx.clone();
+    let watch_event_tx = tx.clone();
     thread::spawn(move || {
-        while let Ok(WatchEvent::ReloadRequested) = watch_rx.recv() {
-            if reload_tx.send(AppEvent::Reload).is_err() {
-                break;
+        while let Ok(evt) = watch_rx.recv() {
+            match evt {
+                WatchEvent::ReloadRequested => {
+                    if watch_event_tx.send(AppEvent::Reload).is_err() {
+                        break;
+                    }
+                }
+                WatchEvent::Scanning { scanned_dirs } => {
+                    if watch_event_tx
+                        .send(AppEvent::WatcherProgress {
+                            scanned: scanned_dirs,
+                            total: None,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                WatchEvent::Ready { total_dirs } => {
+                    if watch_event_tx
+                        .send(AppEvent::WatcherProgress {
+                            scanned: total_dirs,
+                            total: Some(total_dirs),
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
             }
         }
     });
@@ -368,10 +395,20 @@ fn run_app(
                     needs_redraw = true;
                 }
             }
+            AppEvent::WatcherProgress { scanned, total } => {
+                if app.watch_mode {
+                    app.update_watcher_progress(scanned, total);
+                    needs_redraw = true;
+                }
+            }
             AppEvent::Tick => {
                 let had_notification = app.notification.is_some();
                 app.expire_notification();
-                if had_notification || app.pending_key.is_some() {
+                let scanning = app.is_watcher_scanning();
+                if scanning {
+                    app.spinner_idx = (app.spinner_idx + 1) % 10;
+                }
+                if had_notification || app.pending_key.is_some() || scanning {
                     needs_redraw = true;
                 }
             }

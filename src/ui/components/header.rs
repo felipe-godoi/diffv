@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::core::models::{Language, RepoStats};
+use crate::core::models::{Language, RepoStats, WatcherScanState};
 use crate::ui::theme::Theme;
 
 pub fn render_header(
@@ -13,6 +13,8 @@ pub fn render_header(
     repo_stats: &RepoStats,
     is_unified: bool,
     watch_mode: bool,
+    watcher_state: WatcherScanState,
+    spinner_idx: usize,
     worktree_name: Option<&str>,
     language: Language,
     theme: &Theme,
@@ -113,17 +115,48 @@ pub fn render_header(
             .add_modifier(Modifier::BOLD),
     ));
 
+    const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
     // Watch indicator pill (if space permits)
-    if width >= 85 {
+    if width >= 80 {
         spans.push(Span::styled("│ ", Style::default().fg(theme.border)));
         if watch_mode {
-            spans.push(Span::styled(
-                " 󰐥 LIVE ",
-                Style::default()
-                    .fg(theme.text_on(theme.status_a))
-                    .bg(theme.status_a)
-                    .add_modifier(Modifier::BOLD),
-            ));
+            match watcher_state {
+                WatcherScanState::Scanning { scanned_dirs } => {
+                    let spinner_char = SPINNER[spinner_idx % SPINNER.len()];
+                    let count_str = if scanned_dirs >= 1000 {
+                        format!("{:.1}k", scanned_dirs as f64 / 1000.0)
+                    } else {
+                        scanned_dirs.to_string()
+                    };
+                    let (scan_text, scan_short) = match language {
+                        Language::En => (
+                            format!(" {} scan ({} dirs) ", spinner_char, count_str),
+                            format!(" {} scan ", spinner_char),
+                        ),
+                        Language::Pt => (
+                            format!(" {} varrendo ({} pastas) ", spinner_char, count_str),
+                            format!(" {} varrendo ", spinner_char),
+                        ),
+                    };
+                    let text = if width >= 100 { scan_text } else { scan_short };
+                    spans.push(Span::styled(
+                        text,
+                        Style::default()
+                            .fg(theme.key_fg)
+                            .add_modifier(Modifier::DIM),
+                    ));
+                }
+                WatcherScanState::Ready { .. } | WatcherScanState::Idle => {
+                    spans.push(Span::styled(
+                        " 󰐥 LIVE ",
+                        Style::default()
+                            .fg(theme.text_on(theme.status_a))
+                            .bg(theme.status_a)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+            }
         } else {
             spans.push(Span::styled(
                 " 󰏤 PAUSED ",
