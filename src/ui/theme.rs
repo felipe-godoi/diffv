@@ -116,7 +116,10 @@ impl Theme {
     }
 
     pub fn terminal() -> Self {
-        let is_dark = detect_dark_mode();
+        Self::terminal_variant(detect_dark_mode())
+    }
+
+    pub fn terminal_variant(is_dark: bool) -> Self {
         if is_dark {
             Self {
                 name: "terminal-dark".to_string(),
@@ -173,7 +176,7 @@ impl Theme {
                 ruler_bg: Color::Reset,
                 ruler_viewport: Color::Rgb(30, 120, 240),
                 status_m: Color::Rgb(200, 130, 20),
-                status_a: Color::Rgb(28, 130, 48),
+                status_a: Color::Rgb(24, 120, 44),
                 status_d: Color::Rgb(210, 40, 60),
                 status_u: Color::Rgb(30, 120, 240),
             }
@@ -323,10 +326,7 @@ mod contrast_tests {
     use super::*;
     #[test]
     fn accent_labels_have_concrete_high_contrast_text() {
-        let mut automatic = Theme::terminal();
-        automatic.bg = Color::Reset;
-        automatic.fg = Color::Reset;
-        for theme in [automatic, Theme::vscode_dark(), Theme::tokyonight(), Theme::catppuccin(), Theme::gruvbox()] {
+        for theme in [Theme::terminal_variant(true), Theme::terminal_variant(false), Theme::vscode_dark(), Theme::tokyonight(), Theme::catppuccin(), Theme::gruvbox()] {
             for background in [theme.key_fg, theme.header_fg, theme.status_m, theme.status_a] {
                 let text = luminance(theme.text_on(background)).expect("badge text must not use Reset");
                 let bg = luminance(background).unwrap();
