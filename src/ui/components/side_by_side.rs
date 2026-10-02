@@ -119,9 +119,9 @@ pub fn render_side_by_side(
         " ◄ ORIGINAL (HEAD) "
     };
     let (left_badge, left_style) = if active_column == ColumnSide::Left {
-        (left_badge_text, Style::default().fg(theme.bg).bg(theme.header_fg).add_modifier(Modifier::BOLD))
+        (left_badge_text, Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD))
     } else {
-        (left_badge_text, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg))
+        (left_badge_text, Style::default().fg(theme.selected_fg).bg(theme.selected_bg))
     };
     let left_header = Line::from(vec![
         Span::styled(left_badge, left_style),
@@ -136,9 +136,9 @@ pub fn render_side_by_side(
         " ► MODIFIED (WORKING TREE) "
     };
     let (right_badge, right_style) = if active_column == ColumnSide::Right {
-        (right_badge_text, Style::default().fg(theme.bg).bg(theme.key_fg).add_modifier(Modifier::BOLD))
+        (right_badge_text, Style::default().fg(theme.text_on(theme.key_fg)).bg(theme.key_fg).add_modifier(Modifier::BOLD))
     } else {
-        (right_badge_text, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg))
+        (right_badge_text, Style::default().fg(theme.selected_fg).bg(theme.selected_bg))
     };
     let right_header = Line::from(vec![
         Span::styled(right_badge, right_style),

@@ -104,6 +104,7 @@ pub struct App {
     pub show_history: bool,
     pub history_commits: Vec<CommitEntry>,
     pub history_file_path: Option<PathBuf>,
+    history_return_focus: Focus,
     pub selected_history_idx: usize,
     pub history_scroll: usize,
     pub active_commit_view: Option<(String, FileDiff)>,
@@ -226,6 +227,7 @@ impl App {
             show_history: false,
             history_commits: Vec::new(),
             history_file_path: None,
+            history_return_focus: Focus::FileTree,
             selected_history_idx: 0,
             history_scroll: 0,
             active_commit_view: None,
@@ -324,7 +326,7 @@ impl App {
     }
 
     pub fn switch_drawer_tab(&mut self, new_tab: DrawerTab) {
-        if self.show_history || self.active_commit_info.is_some() { return; }
+        if self.show_history || self.active_commit_info.is_some() || self.active_stash_info.is_some() { return; }
         self.show_drawer = true;
         if (self.active_commit_info.is_some() || self.active_stash_info.is_some() || self.active_commit_view.is_some())
             && new_tab == DrawerTab::Changes
@@ -994,7 +996,7 @@ impl App {
         }
 
         // Temporary file history drawer
-        if self.show_history && (self.focus == Focus::FileTree || key.code == KeyCode::Esc) {
+        if self.show_history && self.focus == Focus::FileTree {
             match key.code {
                 KeyCode::Tab | KeyCode::BackTab if self.active_commit_view.is_some() => self.focus = Focus::DiffView,
                 KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => self.file_tree_down(1),
@@ -1006,7 +1008,8 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('H') | KeyCode::Char('q') => {
                     self.show_history = false;
                     self.active_commit_view = None;
-                    self.focus = Focus::FileTree;
+                    self.history_file_path = None;
+                    self.focus = self.history_return_focus;
                 }
                 KeyCode::Char('j') | KeyCode::Down => self.file_tree_down(1),
                 KeyCode::Char('k') | KeyCode::Up => self.file_tree_up(1),
@@ -1022,7 +1025,7 @@ impl App {
                 KeyCode::Char('?') => self.show_help = true,
                 KeyCode::Enter => {
                     self.load_selected_commit_diff();
-                    self.focus = Focus::DiffView;
+                    if self.active_commit_view.is_some() { self.focus = Focus::DiffView; }
                 }
                 _ => {}
             }
@@ -1056,7 +1059,22 @@ impl App {
         // 5. Normal / Visual Navigation
         match key.code {
             KeyCode::Esc => {
-                if self.active_commit_info.is_some() {
+                if self.visual_mode {
+                    self.visual_mode = false;
+                    let msg = match self.language {
+                        Language::En => "Exited visual mode",
+                        Language::Pt => "Saiu do modo visual",
+                    };
+                    self.set_notification(msg);
+                } else if self.focus == Focus::DiffView {
+                    self.focus = Focus::FileTree;
+                    self.show_drawer = true;
+                    let msg = match self.language {
+                        Language::En => "Returned to File Drawer",
+                        Language::Pt => "Retornou ao painel lateral",
+                    };
+                    self.set_notification(msg);
+                } else if self.active_commit_info.is_some() {
                     self.active_commit_info = None;
                     if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
                         self.files = saved_files;
@@ -1099,20 +1117,6 @@ impl App {
                     let msg = match self.language {
                         Language::En => "Returned to live working tree diff",
                         Language::Pt => "Retornou para o diff da árvore de trabalho",
-                    };
-                    self.set_notification(msg);
-                } else if self.visual_mode {
-                    self.visual_mode = false;
-                    let msg = match self.language {
-                        Language::En => "Exited visual mode",
-                        Language::Pt => "Saiu do modo visual",
-                    };
-                    self.set_notification(msg);
-                } else if self.focus == Focus::DiffView {
-                    self.focus = Focus::FileTree;
-                    let msg = match self.language {
-                        Language::En => "Returned to File Drawer",
-                        Language::Pt => "Retornou ao painel lateral",
                     };
                     self.set_notification(msg);
                 } else {
@@ -1238,7 +1242,7 @@ impl App {
             KeyCode::Tab | KeyCode::BackTab if self.focus == Focus::DiffView => {
                 self.column_side = if self.column_side == ColumnSide::Left { ColumnSide::Right } else { ColumnSide::Left };
             }
-            KeyCode::Tab | KeyCode::BackTab if self.show_history || self.active_commit_info.is_some() => {
+            KeyCode::Tab | KeyCode::BackTab if self.show_history || self.active_commit_info.is_some() || self.active_stash_info.is_some() => {
                 self.focus = if self.focus == Focus::FileTree { Focus::DiffView } else { Focus::FileTree };
             }
             KeyCode::Tab => {
@@ -1835,6 +1839,8 @@ impl App {
             return;
         }
 
+        if self.show_help || self.show_worktrees || self.confirm_action.is_some() { return; }
+
         let effective_tree_width = if !self.show_drawer {
             0
         } else if self.term_width > 0 && self.term_width < 85 {
@@ -1899,7 +1905,7 @@ impl App {
                     if mouse.column < effective_tree_width {
                         self.focus = Focus::FileTree;
                         if mouse.row <= 2 {
-                            if self.active_commit_info.is_some() { return; }
+                            if self.active_commit_info.is_some() || self.active_stash_info.is_some() { return; }
                             let col = mouse.column;
                             let tab_w = (effective_tree_width / 3).max(1);
                             if col < tab_w {
@@ -2404,6 +2410,7 @@ impl App {
                 let path = file.new_path.clone();
                 match git_provider.get_file_history(&path, 50) {
                     Ok(commits) if !commits.is_empty() => {
+                        self.history_return_focus = self.focus;
                         self.history_file_path = Some(path);
                         self.history_commits = commits;
                         self.selected_history_idx = 0;

@@ -386,7 +386,7 @@ pub fn render_drawer(
 
     // Header title with 3 tabs
     let mut title_spans = Vec::new();
-    let sel_tab_style = Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD);
+    let sel_tab_style = Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD);
     let norm_tab_style = Style::default().fg(theme.line_num_fg);
 
     title_spans.push(Span::raw(" "));
@@ -537,7 +537,7 @@ fn render_commit_files_drawer(
     };
 
     header_lines.push(Line::from(vec![
-        Span::styled(format!(" 󰜉 {} ", short_hash), Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" 󰜉 {} ", short_hash), Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
         Span::styled(format!("👤 {} · {}", commit.author, commit.date), Style::default().fg(theme.line_num_fg)),
     ]));
@@ -599,7 +599,7 @@ fn render_stash_files_drawer(
     };
 
     header_lines.push(Line::from(vec![
-        Span::styled(format!(" 󰮎 {} ", stash.selector), Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.key_fg).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" 󰮎 {} ", stash.selector), Style::default().fg(theme.text_on(theme.key_fg)).bg(theme.key_fg).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
         Span::styled(&stash.date, Style::default().fg(theme.line_num_fg)),
     ]));

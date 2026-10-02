@@ -1,5 +1,5 @@
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -33,7 +33,7 @@ pub fn render_header(
         Span::styled(
             " ⚡ diffv ",
             Style::default()
-                .fg(Color::Rgb(15, 20, 25))
+                .fg(theme.text_on(theme.header_fg))
                 .bg(theme.header_fg)
                 .add_modifier(Modifier::BOLD),
         ),
@@ -120,7 +120,7 @@ pub fn render_header(
             spans.push(Span::styled(
                 " 󰐥 LIVE ",
                 Style::default()
-                    .fg(Color::Rgb(15, 20, 25))
+                    .fg(theme.text_on(theme.status_a))
                     .bg(theme.status_a)
                     .add_modifier(Modifier::BOLD),
             ));

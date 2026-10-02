@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Wrap};
 use ratatui::Frame;
@@ -109,9 +109,9 @@ pub fn render_commit_overview(
     let actions = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled(inspect_btn, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(inspect_btn, Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
             Span::styled(format!(" {}   ", inspect_label), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-            Span::styled(details_label, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.key_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(details_label, Style::default().fg(theme.text_on(theme.key_fg)).bg(theme.key_fg).add_modifier(Modifier::BOLD)),
             Span::styled("   ", Style::default()),
             Span::styled(format!("{}   ", nav_label), Style::default().fg(theme.line_num_fg)),
             Span::styled(back_label, Style::default().fg(theme.line_num_fg)),
@@ -207,7 +207,7 @@ pub fn render_stash_overview(
     let actions = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled(inspect_btn, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(inspect_btn, Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
             Span::styled(format!(" {}    ", inspect_label), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
             Span::styled(format!("{}    ", nav_label), Style::default().fg(theme.line_num_fg)),
             Span::styled(back_label, Style::default().fg(theme.line_num_fg)),

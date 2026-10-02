@@ -1,5 +1,5 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Clear, Paragraph};
 use ratatui::Frame;
@@ -128,8 +128,8 @@ pub fn render_worktree_popup(
 
         let current_pill = if wt.is_current {
             match language {
-                Language::En => Span::styled(" [ACTIVE] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
-                Language::Pt => Span::styled(" [ATIVO] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
+                Language::En => Span::styled(" [ACTIVE] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
+                Language::Pt => Span::styled(" [ATIVO] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
             }
         } else {
             Span::styled("          ", base_style)
@@ -190,9 +190,9 @@ pub fn render_worktree_popup(
     // Footer shortcuts
     let footer_line = match language {
         Language::En => Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
             Span::styled("Switch  ", Style::default().fg(theme.fg)),
-            Span::styled(" [a / n] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
+            Span::styled(" [a / n] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
             Span::styled("New Worktree  ", Style::default().fg(theme.fg)),
             Span::styled(" [j/k] ", Style::default().fg(theme.key_fg)),
             Span::styled("Nav  ", Style::default().fg(theme.line_num_fg)),
@@ -200,9 +200,9 @@ pub fn render_worktree_popup(
             Span::styled("Close", Style::default().fg(theme.line_num_fg)),
         ]),
         Language::Pt => Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
             Span::styled("Alternar  ", Style::default().fg(theme.fg)),
-            Span::styled(" [a / n] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
+            Span::styled(" [a / n] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
             Span::styled("Nova Worktree  ", Style::default().fg(theme.fg)),
             Span::styled(" [j/k] ", Style::default().fg(theme.key_fg)),
             Span::styled("Navegar  ", Style::default().fg(theme.line_num_fg)),
@@ -332,17 +332,17 @@ fn render_creation_form(
     // Footer actions
     let footer_line = match language {
         Language::En => Line::from(vec![
-            Span::styled(" [Tab] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" [Tab] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
             Span::styled("Complete / field  ", Style::default().fg(theme.fg)),
-            Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
+            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
             Span::styled("Create & Switch  ", Style::default().fg(theme.fg)),
             Span::styled(" [Esc] ", Style::default().fg(theme.key_fg)),
             Span::styled("Cancel", Style::default().fg(theme.line_num_fg)),
         ]),
         Language::Pt => Line::from(vec![
-            Span::styled(" [Tab] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" [Tab] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
             Span::styled("Completar / campo  ", Style::default().fg(theme.fg)),
-            Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
+            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.status_a)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
             Span::styled("Criar e Alternar  ", Style::default().fg(theme.fg)),
             Span::styled(" [Esc] ", Style::default().fg(theme.key_fg)),
             Span::styled("Cancelar", Style::default().fg(theme.line_num_fg)),

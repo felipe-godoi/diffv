@@ -1,5 +1,5 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Clear, Paragraph};
 use ratatui::Frame;
@@ -113,7 +113,7 @@ pub fn render_history_popup(
     let footer_w = chunks[1].width;
     let footer_line = if footer_w < 55 {
         Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
             Span::styled("View ", Style::default().fg(theme.fg)),
             Span::styled("│ [j/k] ", Style::default().fg(theme.key_fg)),
             Span::styled("Nav ", Style::default().fg(theme.line_num_fg)),
@@ -122,7 +122,7 @@ pub fn render_history_popup(
         ])
     } else {
         Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" [Enter] ", Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
             Span::styled(" View Commit Diff    ", Style::default().fg(theme.fg)),
             Span::styled(" [j/k] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
             Span::styled(" Navigate    ", Style::default().fg(theme.line_num_fg)),
