@@ -48,7 +48,14 @@ use_nvr = false
 
 #[test]
 fn test_all_themes_loading() {
-    let themes = ["auto", "terminal", "vscode-dark", "tokyonight", "catppuccin", "gruvbox"];
+    let themes = [
+        "auto",
+        "terminal",
+        "vscode-dark",
+        "tokyonight",
+        "catppuccin",
+        "gruvbox",
+    ];
     for theme_name in themes {
         let theme = Theme::from_name(theme_name);
         assert!(!theme.name.is_empty());
@@ -101,10 +108,22 @@ channel = "nightly"
     assert_eq!(cfg_nightly.update.channel, UpdateChannel::Nightly);
 
     assert_eq!("rc".parse::<UpdateChannel>().unwrap(), UpdateChannel::Beta);
-    assert_eq!("preview".parse::<UpdateChannel>().unwrap(), UpdateChannel::Beta);
-    assert_eq!("dev".parse::<UpdateChannel>().unwrap(), UpdateChannel::Nightly);
-    assert_eq!("canary".parse::<UpdateChannel>().unwrap(), UpdateChannel::Nightly);
-    assert_eq!("main".parse::<UpdateChannel>().unwrap(), UpdateChannel::Nightly);
+    assert_eq!(
+        "preview".parse::<UpdateChannel>().unwrap(),
+        UpdateChannel::Beta
+    );
+    assert_eq!(
+        "dev".parse::<UpdateChannel>().unwrap(),
+        UpdateChannel::Nightly
+    );
+    assert_eq!(
+        "canary".parse::<UpdateChannel>().unwrap(),
+        UpdateChannel::Nightly
+    );
+    assert_eq!(
+        "main".parse::<UpdateChannel>().unwrap(),
+        UpdateChannel::Nightly
+    );
 }
 
 #[test]
@@ -128,4 +147,3 @@ fn test_config_save_persistence() {
     assert_eq!(loaded.ui.theme, "tokyonight");
     assert_eq!(loaded.ui.default_view, "unified");
 }
-

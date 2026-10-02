@@ -22,11 +22,23 @@ pub enum ToastKind {
 impl ToastKind {
     pub fn classify(message: &str) -> Self {
         let lower = message.to_lowercase();
-        if ["error", "erro", "fail", "falh", "✖"].iter().any(|w| lower.contains(w)) {
+        if ["error", "erro", "fail", "falh", "✖"]
+            .iter()
+            .any(|w| lower.contains(w))
+        {
             Self::Error
-        } else if lower.starts_with('✓') || ["staged", "copied", "copiado", "created", "criad", "switched", "alternad"].iter().any(|w| lower.contains(w)) {
+        } else if lower.starts_with('✓')
+            || [
+                "staged", "copied", "copiado", "created", "criad", "switched", "alternad",
+            ]
+            .iter()
+            .any(|w| lower.contains(w))
+        {
             Self::Success
-        } else if ["cancel", "reached", "no ", "nenhum", "⚠"].iter().any(|w| lower.contains(w)) {
+        } else if ["cancel", "reached", "no ", "nenhum", "⚠"]
+            .iter()
+            .any(|w| lower.contains(w))
+        {
             Self::Warning
         } else {
             Self::Info
@@ -63,7 +75,9 @@ pub fn render_toast(frame: &mut Frame, area: Rect, notification: &str, theme: &T
     let text: String = if text.width() > max_text {
         let mut out = String::new();
         for c in text.chars() {
-            if out.width() + 2 > max_text { break; }
+            if out.width() + 2 > max_text {
+                break;
+            }
             out.push(c);
         }
         out + "…"
@@ -72,7 +86,10 @@ pub fn render_toast(frame: &mut Frame, area: Rect, notification: &str, theme: &T
     };
 
     let line = Line::from(vec![
-        Span::styled(format!(" {} ", kind.icon()), Style::default().fg(kind.accent(theme))),
+        Span::styled(
+            format!(" {} ", kind.icon()),
+            Style::default().fg(kind.accent(theme)),
+        ),
         Span::styled(format!("{} ", text), Style::default().fg(theme.status_fg)),
     ]);
     let width = line.width() as u16;
@@ -83,7 +100,10 @@ pub fn render_toast(frame: &mut Frame, area: Rect, notification: &str, theme: &T
         height: 1,
     };
     frame.render_widget(Clear, toast_area);
-    frame.render_widget(Paragraph::new(line).style(Style::default().bg(theme.status_bg)), toast_area);
+    frame.render_widget(
+        Paragraph::new(line).style(Style::default().bg(theme.status_bg)),
+        toast_area,
+    );
 }
 
 #[cfg(test)]
@@ -93,7 +113,10 @@ mod tests {
     #[test]
     fn classifies_notifications() {
         assert_eq!(ToastKind::classify("✓ Hunk staged"), ToastKind::Success);
-        assert_eq!(ToastKind::classify("Clipboard error: denied"), ToastKind::Error);
+        assert_eq!(
+            ToastKind::classify("Clipboard error: denied"),
+            ToastKind::Error
+        );
         assert_eq!(ToastKind::classify("Action cancelled"), ToastKind::Warning);
         assert_eq!(ToastKind::classify("Jumped to Hunk #2"), ToastKind::Info);
     }

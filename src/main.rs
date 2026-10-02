@@ -1,4 +1,3 @@
-
 use std::io::{self, stdout, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,7 +26,10 @@ use diffv::watcher::service::{WatchEvent, WatchService};
 enum AppEvent {
     Input(Event),
     Reload,
-    WatcherProgress { scanned: usize, total: Option<usize> },
+    WatcherProgress {
+        scanned: usize,
+        total: Option<usize>,
+    },
     Tick,
 }
 
@@ -58,7 +60,9 @@ fn main() {
     }
     let wait_on_error = args.wait_on_error;
     let result = match &args.tmux_toggle {
-        Some(toggle) => diffv::integration::tmux::toggle_popup(&toggle[0], &toggle[1], Path::new(&toggle[2])),
+        Some(toggle) => {
+            diffv::integration::tmux::toggle_popup(&toggle[0], &toggle[1], Path::new(&toggle[2]))
+        }
         None => run(args),
     };
     if let Err(err) = result {
@@ -107,13 +111,19 @@ fn run(args: Cli) -> Result<()> {
     // Explicit update request (e.g. diffv --update, diffv update, diffv upgrade, diffv up)
     let is_explicit_update = args.update
         || (args.targets.len() == 1
-            && (args.targets[0] == "update" || args.targets[0] == "upgrade" || args.targets[0] == "up")
+            && (args.targets[0] == "update"
+                || args.targets[0] == "upgrade"
+                || args.targets[0] == "up")
             && !Path::new(&args.targets[0]).exists());
 
     if is_explicit_update {
         match diffv::update::check_and_install_verbose(channel) {
             Ok(Some(path)) => {
-                println!("Successfully updated diffv to {} ({})!", path.display(), channel);
+                println!(
+                    "Successfully updated diffv to {} ({})!",
+                    path.display(),
+                    channel
+                );
             }
             Ok(None) => {
                 println!("diffv is already up to date ({})", channel);
@@ -128,6 +138,13 @@ fn run(args: Cli) -> Result<()> {
 
     // Determine if automatic update check is enabled on startup:
     // Opt-out priority: CLI -n / --no-update > CLI --auto-update <BOOL> > env DIFFV_NO_UPDATE / DIFFV_AUTO_UPDATE > config.update.auto_update
+    // Auto-update is disabled for development / debug builds (cargo run, target directory)
+    // unless explicitly forced via CLI `--auto-update true` or `DIFFV_AUTO_UPDATE=1`.
+    let is_dev_build = cfg!(debug_assertions)
+        || std::env::var_os("CARGO").is_some()
+        || std::env::var_os("CARGO_MANIFEST_DIR").is_some()
+        || std::env::current_exe().is_ok_and(|p| p.components().any(|c| c.as_os_str() == "target"));
+
     let auto_update_enabled = if args.no_update {
         false
     } else if let Some(enabled) = args.auto_update {
@@ -136,6 +153,8 @@ fn run(args: Cli) -> Result<()> {
         false
     } else if let Ok(val) = std::env::var("DIFFV_AUTO_UPDATE") {
         val != "0" && val.to_lowercase() != "false"
+    } else if is_dev_build {
+        false
     } else {
         config.update.auto_update
     };
@@ -144,12 +163,17 @@ fn run(args: Cli) -> Result<()> {
         // Offline, rate-limited or no newer release: keep running the installed version.
         if let Ok(Some(path)) = diffv::update::check_and_install(channel) {
             eprintln!("diffv updated. Restarting…");
-            #[cfg(unix)] {
+            #[cfg(unix)]
+            {
                 use std::os::unix::process::CommandExt;
                 let error = std::process::Command::new(path)
                     .args(std::env::args_os().skip(1))
-                    .env("DIFFV_UPDATE_RESTART", "1").exec();
-                eprintln!("Could not restart diffv: {}. Reopen to use the update.", error);
+                    .env("DIFFV_UPDATE_RESTART", "1")
+                    .exec();
+                eprintln!(
+                    "Could not restart diffv: {}. Reopen to use the update.",
+                    error
+                );
             }
         }
     }
@@ -179,7 +203,11 @@ fn run(args: Cli) -> Result<()> {
 
     // Teardown TUI
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, event::DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        event::DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     app_result
@@ -214,7 +242,9 @@ fn determine_app_mode(args: &Cli, cwd: &Path) -> Result<AppMode> {
         return Ok(AppMode::FilePair(p1, p2));
     }
 
-    let target_ref = if args.targets.len() == 1 {
+    let target_ref = if let Some(ref branch) = args.compare {
+        Some(branch.clone())
+    } else if args.targets.len() == 1 {
         Some(args.targets[0].clone())
     } else {
         None
@@ -241,7 +271,8 @@ fn run_app(
     args: &Cli,
     cwd: &Path,
 ) -> Result<()> {
-    let watch_enabled = args.watch || (config.watcher.enabled && matches!(mode, AppMode::Git { .. }));
+    let watch_enabled =
+        args.watch || (config.watcher.enabled && matches!(mode, AppMode::Git { .. }));
 
     let mut app = App::new(
         mode,
@@ -261,21 +292,19 @@ fn run_app(
     // 1. Keyboard & terminal event listener thread
     let input_tx = tx.clone();
     let editor_flag = is_editor_active.clone();
-    thread::spawn(move || {
-        loop {
+    thread::spawn(move || loop {
+        if editor_flag.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
+
+        if event::poll(Duration::from_millis(200)).unwrap_or(false) {
             if editor_flag.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_millis(50));
                 continue;
             }
-
-            if event::poll(Duration::from_millis(200)).unwrap_or(false) {
-                if editor_flag.load(Ordering::Relaxed) {
-                    continue;
-                }
-                if let Ok(evt) = event::read() {
-                    if input_tx.send(AppEvent::Input(evt)).is_err() {
-                        break;
-                    }
+            if let Ok(evt) = event::read() {
+                if input_tx.send(AppEvent::Input(evt)).is_err() {
+                    break;
                 }
             }
         }
@@ -283,12 +312,10 @@ fn run_app(
 
     // 2. Tick event thread for smooth UI refresh and notification expiration
     let tick_tx = tx.clone();
-    thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_millis(300));
-            if tick_tx.send(AppEvent::Tick).is_err() {
-                break;
-            }
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(300));
+        if tick_tx.send(AppEvent::Tick).is_err() {
+            break;
         }
     });
 
@@ -296,7 +323,12 @@ fn run_app(
     let (watch_tx, watch_rx) = mpsc::channel();
     let _watcher = if watch_enabled {
         if let AppMode::Git { git_provider, .. } = &app.mode {
-            WatchService::start(&git_provider.repo_root, app.config.watcher.debounce_ms, watch_tx).ok()
+            WatchService::start(
+                &git_provider.repo_root,
+                app.config.watcher.debounce_ms,
+                watch_tx,
+            )
+            .ok()
         } else {
             WatchService::start(cwd, app.config.watcher.debounce_ms, watch_tx).ok()
         }
@@ -361,13 +393,21 @@ fn run_app(
             while rx.try_recv().is_ok() {}
 
             disable_raw_mode()?;
-            execute!(terminal.backend_mut(), LeaveAlternateScreen, event::DisableMouseCapture)?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                event::DisableMouseCapture
+            )?;
             terminal.show_cursor()?;
 
             let edit_res = open_editor(&file_path, line_no, &app.config.editor);
 
             enable_raw_mode()?;
-            execute!(terminal.backend_mut(), EnterAlternateScreen, event::EnableMouseCapture)?;
+            execute!(
+                terminal.backend_mut(),
+                EnterAlternateScreen,
+                event::EnableMouseCapture
+            )?;
             terminal.clear()?;
 
             // Drain any leftover events in crossterm buffer and in rx channel from editor exit (:q<Enter>)
@@ -393,8 +433,12 @@ fn run_app(
         if let Some(fzf_req) = app.fzf_request.take() {
             if !is_fzf_available() {
                 let msg = match app.language {
-                    diffv::core::models::Language::En => "fzf is not installed or not found on PATH",
-                    diffv::core::models::Language::Pt => "fzf não está instalado ou não foi encontrado no PATH",
+                    diffv::core::models::Language::En => {
+                        "fzf is not installed or not found on PATH"
+                    }
+                    diffv::core::models::Language::Pt => {
+                        "fzf não está instalado ou não foi encontrado no PATH"
+                    }
                 };
                 app.set_notification(msg);
                 needs_redraw = true;
@@ -411,7 +455,11 @@ fn run_app(
             while rx.try_recv().is_ok() {}
 
             disable_raw_mode()?;
-            execute!(terminal.backend_mut(), LeaveAlternateScreen, event::DisableMouseCapture)?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                event::DisableMouseCapture
+            )?;
             terminal.show_cursor()?;
 
             let res = match fzf_req {
@@ -420,7 +468,11 @@ fn run_app(
             };
 
             enable_raw_mode()?;
-            execute!(terminal.backend_mut(), EnterAlternateScreen, event::EnableMouseCapture)?;
+            execute!(
+                terminal.backend_mut(),
+                EnterAlternateScreen,
+                event::EnableMouseCapture
+            )?;
             terminal.clear()?;
 
             while event::poll(Duration::from_millis(40)).unwrap_or(false) {
@@ -442,7 +494,6 @@ fn run_app(
             needs_redraw = true;
             continue;
         }
-
 
         match rx.recv()? {
             AppEvent::Input(Event::Key(key)) => {

@@ -16,6 +16,7 @@
 - 📋 **AI Context Copying (`c`)**: One-key copy of the active hunk or file diff formatted in Markdown directly to your system clipboard (`arboard`) to easily paste into AI agent prompts.
 - ✏️ **Instant Neovim / $EDITOR Jump (`e` or `Enter`)**: Opens `$EDITOR +<line> <file>` or routes to an active Neovim session via `nvr` (neovim-remote).
 - 📂 **Multi-Mode Comparison**: Works with Git working trees, `--staged` mode, specific Git branches/commits (`HEAD~1`, `main..feat`), arbitrary local files (`diffv a.rs b.rs`), local directories (`diffv dir1 dir2`), and standard input pipes (`git diff | diffv -`).
+- 🔀 **Branch Comparison Selector (`B` / `--compare`)**: Interactive branch picker popup (just like VS Code) to compare your current worktree against any local or remote branch (`main`, `origin/main`, etc.), with instant fuzzy search and quick reset to default worktree changes.
 - 📜 **File Commit History (`H` / `-H`)**: Inspect commit log entries for the active file with author, relative timestamp, and commit message, and preview individual commit diffs in-place.
 
 ---
@@ -66,6 +67,11 @@ diffv -w
 # View only staged / cached changes
 diffv --staged
 
+# Compare current worktree against another branch (or press B inside diffv)
+diffv --compare main
+# or alias:
+diffv --branch main
+
 # View a specific commit or branch diff
 diffv HEAD~1
 diffv main..feature-branch
@@ -100,6 +106,7 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `[` or `p` | Diff | Jump to **Previous Hunk** |
 | `Tab` | General | Switch focus between **File Tree** and **Diff View** |
 | `b` | General | **Toggle Sidebar** (show/hide file tree drawer, great for split/half terminals) |
+| `B` | General | Open **Branch Comparison Selector** popup (compare worktree with any branch or reset to Default) |
 | `1` / `2` / `3` | General | Switch drawer tabs: **[1] Changes**, **[2] Commits**, **[3] Stashes** |
 | `W` | General | Open **Worktrees Switcher** popup |
 | `L` | General | Toggle UI language: **English** ↔ **Português** |
@@ -107,7 +114,7 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `Space` | File Tree | Toggle collapse/expand on current folder |
 | `<` / `>` or `,` / `.` | General | **Resize Panes**: shrink / expand File Tree width |
 | `Mouse Wheel` | General | **Scroll** hovered pane smoothly (File Tree or Diff) |
-| `Mouse Click` | General | **Select** file / line, collapse/expand folders, switch focus |
+| `Mouse Click` | General | **Select** file / line, collapse/expand folders, switch focus, or click branch badge to open Branch Selector |
 | `Mouse Drag` | General | **Drag vertical divider** to resize File Tree width |
 | `t` | File Tree | Toggle **📁 Pastas (Tree)** ↔ **📄 Lista (Flat)** |
 | `v` | Diff | Toggle **Visual Mode** for line-level partial staging / unstaging |
@@ -197,10 +204,15 @@ All unit tests for side-by-side alignment, fillers, code tokenization intra-line
 
 MIT OR Apache-2.0
 
-## Automatic updates
+## Automatic updates & Release Channels
 
-At startup, diffv checks the latest stable GitHub release, downloads a newer binary for the current OS/architecture, verifies its SHA-256 digest, replaces the executable atomically, and restarts with the same arguments. Offline checks and failed downloads leave the existing installation available. The check has a short timeout; updates do not require Rust.
+At startup, `diffv` checks for updates on GitHub, downloads newer binaries for the current OS/architecture, verifies SHA-256 digests, replaces the executable atomically, and restarts with the same arguments. Offline checks and failed downloads leave the existing installation available.
+
+- **Available Channels:**
+  - `stable` (default): Official immutable releases (`/releases/latest`).
+  - `beta`: Release Candidate builds from the `beta` branch.
+  - `nightly`: Continuous builds from the latest commit on `main`.
 
 Use `diffv --no-update` or `DIFFV_NO_UPDATE=1 diffv` to skip the check. Help and version commands do not make network requests. Installation and updates use public HTTPS downloads; no GitHub account or authentication is required.
 
-Maintainers: bump the version in `Cargo.toml`, run `cargo test`, commit and push, then create and push the matching `vX.Y.Z` tag. The release workflow tests and builds macOS and Linux binaries for Intel and ARM, and publishes the release only after all builds succeed. Keep `Cargo.lock` committed and updated. Development builds can use `--no-update`.
+For full details on the development lifecycle, branch model, and CI/CD pipelines, see [docs/release-flow.md](docs/release-flow.md).

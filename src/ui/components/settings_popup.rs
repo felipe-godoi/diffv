@@ -1,7 +1,7 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::config::{Config, UpdateChannel};
@@ -73,73 +73,175 @@ pub fn render_settings_popup(
         Span::styled(" 󰈚 ", Style::default().fg(theme.key_fg)),
         Span::styled(
             match language {
-                Language::En => format!("Config file: {}  (Changes persist automatically)", config_file_path),
-                Language::Pt => format!("Arquivo de config: {}  (Alterações persistem automaticamente)", config_file_path),
+                Language::En => format!(
+                    "Config file: {}  (Changes persist automatically)",
+                    config_file_path
+                ),
+                Language::Pt => format!(
+                    "Arquivo de config: {}  (Alterações persistem automaticamente)",
+                    config_file_path
+                ),
             },
-            Style::default().fg(theme.line_num_fg).add_modifier(Modifier::DIM),
+            Style::default()
+                .fg(theme.line_num_fg)
+                .add_modifier(Modifier::DIM),
         ),
     ]);
     frame.render_widget(Paragraph::new(header_line), header_area);
 
     // 2. Settings list
-    let selected_item = SETTING_ITEMS.get(selected_idx).copied().unwrap_or(SettingItem::AutoUpdate);
+    let selected_item = SETTING_ITEMS
+        .get(selected_idx)
+        .copied()
+        .unwrap_or(SettingItem::AutoUpdate);
     let mut list_lines = Vec::new();
 
     for (idx, &item) in SETTING_ITEMS.iter().enumerate() {
         let is_selected = idx == selected_idx;
         let (icon, label, value_str, category_badge) = match item {
             SettingItem::AutoUpdate => {
-                let badge = match language { Language::En => "UPDATE", Language::Pt => "ATUALIZAÇÃO" };
-                let (val, style_fg) = if config.update.auto_update {
-                    (match language { Language::En => "[ ✓ Enabled ]", Language::Pt => "[ ✓ Ativado ]" }, theme.add_fg)
-                } else {
-                    (match language { Language::En => "[ ✗ Disabled ]", Language::Pt => "[ ✗ Desativado ]" }, theme.del_fg)
+                let badge = match language {
+                    Language::En => "UPDATE",
+                    Language::Pt => "ATUALIZAÇÃO",
                 };
-                ("󰚰", match language { Language::En => "Automatic Updates (Startup check)", Language::Pt => "Atualizações Automáticas (Auto-Update)" }, val, (badge, style_fg))
+                let (val, style_fg) = if config.update.auto_update {
+                    (
+                        match language {
+                            Language::En => "[ ✓ Enabled ]",
+                            Language::Pt => "[ ✓ Ativado ]",
+                        },
+                        theme.add_fg,
+                    )
+                } else {
+                    (
+                        match language {
+                            Language::En => "[ ✗ Disabled ]",
+                            Language::Pt => "[ ✗ Desativado ]",
+                        },
+                        theme.del_fg,
+                    )
+                };
+                (
+                    "󰚰",
+                    match language {
+                        Language::En => "Automatic Updates (Startup check)",
+                        Language::Pt => "Atualizações Automáticas (Auto-Update)",
+                    },
+                    val,
+                    (badge, style_fg),
+                )
             }
             SettingItem::UpdateChannel => {
-                let badge = match language { Language::En => "CHANNEL", Language::Pt => "CANAL" };
+                let badge = match language {
+                    Language::En => "CHANNEL",
+                    Language::Pt => "CANAL",
+                };
                 let (val, style_fg) = match config.update.channel {
                     UpdateChannel::Stable => (
-                        match language { Language::En => "[ Stable (releases) ]", Language::Pt => "[ Stable (oficiais estáveis) ]" },
+                        match language {
+                            Language::En => "[ Stable (releases) ]",
+                            Language::Pt => "[ Stable (oficiais estáveis) ]",
+                        },
                         theme.status_a,
                     ),
                     UpdateChannel::Beta => (
-                        match language { Language::En => "[ Beta (pre-releases & RC) ]", Language::Pt => "[ Beta (pré-lançamentos e RC) ]" },
+                        match language {
+                            Language::En => "[ Beta (pre-releases & RC) ]",
+                            Language::Pt => "[ Beta (pré-lançamentos e RC) ]",
+                        },
                         theme.header_fg,
                     ),
                     UpdateChannel::Nightly => (
-                        match language { Language::En => "[ Nightly (latest main) ]", Language::Pt => "[ Nightly (última build da main) ]" },
+                        match language {
+                            Language::En => "[ Nightly (latest main) ]",
+                            Language::Pt => "[ Nightly (última build da main) ]",
+                        },
                         theme.key_fg,
                     ),
                 };
-                ("󰏤", match language { Language::En => "Update Channel", Language::Pt => "Canal de Atualização" }, val, (badge, style_fg))
+                (
+                    "󰏤",
+                    match language {
+                        Language::En => "Update Channel",
+                        Language::Pt => "Canal de Atualização",
+                    },
+                    val,
+                    (badge, style_fg),
+                )
             }
-            SettingItem::Theme => {
-                ("󰔎", match language { Language::En => "Color Theme", Language::Pt => "Tema de Cores" }, config.ui.theme.as_str(), ("UI", theme.key_fg))
-            }
+            SettingItem::Theme => (
+                "󰔎",
+                match language {
+                    Language::En => "Color Theme",
+                    Language::Pt => "Tema de Cores",
+                },
+                config.ui.theme.as_str(),
+                ("UI", theme.key_fg),
+            ),
             SettingItem::DefaultView => {
                 let val = match config.ui.default_view.as_str() {
-                    "unified" => match language { Language::En => "[ Unified ]", Language::Pt => "[ Unificado ]" },
-                    _ => match language { Language::En => "[ Side-by-Side ]", Language::Pt => "[ Lado a Lado ]" },
+                    "unified" => match language {
+                        Language::En => "[ Unified ]",
+                        Language::Pt => "[ Unificado ]",
+                    },
+                    _ => match language {
+                        Language::En => "[ Side-by-Side ]",
+                        Language::Pt => "[ Lado a Lado ]",
+                    },
                 };
-                ("󰤈", match language { Language::En => "Default View Mode", Language::Pt => "Modo de Exibição Inicial" }, val, ("UI", theme.key_fg))
+                (
+                    "󰤈",
+                    match language {
+                        Language::En => "Default View Mode",
+                        Language::Pt => "Modo de Exibição Inicial",
+                    },
+                    val,
+                    ("UI", theme.key_fg),
+                )
             }
             SettingItem::LineNumbers => {
                 let val = if config.ui.show_line_numbers {
-                    match language { Language::En => "[ ✓ Yes ]", Language::Pt => "[ ✓ Sim ]" }
+                    match language {
+                        Language::En => "[ ✓ Yes ]",
+                        Language::Pt => "[ ✓ Sim ]",
+                    }
                 } else {
-                    match language { Language::En => "[ ✗ No ]", Language::Pt => "[ ✗ Não ]" }
+                    match language {
+                        Language::En => "[ ✗ No ]",
+                        Language::Pt => "[ ✗ Não ]",
+                    }
                 };
-                ("󰞋", match language { Language::En => "Show Line Numbers", Language::Pt => "Exibir Números de Linha" }, val, ("UI", theme.line_num_fg))
+                (
+                    "󰞋",
+                    match language {
+                        Language::En => "Show Line Numbers",
+                        Language::Pt => "Exibir Números de Linha",
+                    },
+                    val,
+                    ("UI", theme.line_num_fg),
+                )
             }
             SettingItem::OverviewRuler => {
                 let val = if config.ui.overview_ruler {
-                    match language { Language::En => "[ ✓ Yes ]", Language::Pt => "[ ✓ Sim ]" }
+                    match language {
+                        Language::En => "[ ✓ Yes ]",
+                        Language::Pt => "[ ✓ Sim ]",
+                    }
                 } else {
-                    match language { Language::En => "[ ✗ No ]", Language::Pt => "[ ✗ Não ]" }
+                    match language {
+                        Language::En => "[ ✗ No ]",
+                        Language::Pt => "[ ✗ Não ]",
+                    }
                 };
-                ("󰍉", match language { Language::En => "Overview Ruler Minimap", Language::Pt => "Régua Lateral de Visão Geral" }, val, ("UI", theme.line_num_fg))
+                (
+                    "󰍉",
+                    match language {
+                        Language::En => "Overview Ruler Minimap",
+                        Language::Pt => "Régua Lateral de Visão Geral",
+                    },
+                    val,
+                    ("UI", theme.line_num_fg),
+                )
             }
             SettingItem::TabWidth => {
                 let val = match config.ui.tab_width {
@@ -147,47 +249,98 @@ pub fn render_settings_popup(
                     8 => "[ 8 spaces ]",
                     _ => "[ 4 spaces ]",
                 };
-                ("󰌒", match language { Language::En => "Tab Width", Language::Pt => "Largura de Tabulação" }, val, ("UI", theme.key_fg))
+                (
+                    "󰌒",
+                    match language {
+                        Language::En => "Tab Width",
+                        Language::Pt => "Largura de Tabulação",
+                    },
+                    val,
+                    ("UI", theme.key_fg),
+                )
             }
             SettingItem::DiffAlgorithm => {
                 let val = match config.diff.algorithm.as_str() {
                     "myers" => "[ Myers ]",
                     _ => "[ Patience ]",
                 };
-                ("󰊢", match language { Language::En => "Diff Algorithm", Language::Pt => "Algoritmo de Diferenças" }, val, ("DIFF", theme.key_fg))
+                (
+                    "󰊢",
+                    match language {
+                        Language::En => "Diff Algorithm",
+                        Language::Pt => "Algoritmo de Diferenças",
+                    },
+                    val,
+                    ("DIFF", theme.key_fg),
+                )
             }
             SettingItem::IgnoreWhitespace => {
                 let val = if config.diff.ignore_whitespace {
-                    match language { Language::En => "[ ✓ Yes ]", Language::Pt => "[ ✓ Sim ]" }
+                    match language {
+                        Language::En => "[ ✓ Yes ]",
+                        Language::Pt => "[ ✓ Sim ]",
+                    }
                 } else {
-                    match language { Language::En => "[ ✗ No ]", Language::Pt => "[ ✗ Não ]" }
+                    match language {
+                        Language::En => "[ ✗ No ]",
+                        Language::Pt => "[ ✗ Não ]",
+                    }
                 };
-                ("󱁐", match language { Language::En => "Ignore Whitespace by Default", Language::Pt => "Ignorar Espaços por Padrão" }, val, ("DIFF", theme.line_num_fg))
+                (
+                    "󱁐",
+                    match language {
+                        Language::En => "Ignore Whitespace by Default",
+                        Language::Pt => "Ignorar Espaços por Padrão",
+                    },
+                    val,
+                    ("DIFF", theme.line_num_fg),
+                )
             }
             SettingItem::WatcherEnabled => {
                 let val = if config.watcher.enabled {
-                    match language { Language::En => "[ ✓ Yes ]", Language::Pt => "[ ✓ Sim ]" }
+                    match language {
+                        Language::En => "[ ✓ Yes ]",
+                        Language::Pt => "[ ✓ Sim ]",
+                    }
                 } else {
-                    match language { Language::En => "[ ✗ No ]", Language::Pt => "[ ✗ Não ]" }
+                    match language {
+                        Language::En => "[ ✗ No ]",
+                        Language::Pt => "[ ✗ Não ]",
+                    }
                 };
-                ("󰐥", match language { Language::En => "Auto Watch Git Repositories", Language::Pt => "File Watcher Automático no Git" }, val, ("WATCH", theme.key_fg))
+                (
+                    "󰐥",
+                    match language {
+                        Language::En => "Auto Watch Git Repositories",
+                        Language::Pt => "File Watcher Automático no Git",
+                    },
+                    val,
+                    ("WATCH", theme.key_fg),
+                )
             }
         };
 
         let pointer = if is_selected { " ▸ " } else { "   " };
         let pointer_style = if is_selected {
-            Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.header_fg)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.line_num_fg)
         };
 
         let label_style = if is_selected {
-            Style::default().fg(theme.text_on(theme.selected_bg)).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.text_on(theme.selected_bg))
+                .bg(theme.selected_bg)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.fg)
         };
 
-        let value_style = Style::default().fg(category_badge.1).add_modifier(Modifier::BOLD);
+        let value_style = Style::default()
+            .fg(category_badge.1)
+            .add_modifier(Modifier::BOLD);
 
         let row = Line::from(vec![
             Span::styled(pointer, pointer_style),
@@ -307,7 +460,12 @@ pub fn render_settings_popup(
         ]),
         Line::from(vec![
             Span::styled("   ", Style::default()),
-            Span::styled(tip_text, Style::default().fg(theme.key_fg).add_modifier(Modifier::ITALIC)),
+            Span::styled(
+                tip_text,
+                Style::default()
+                    .fg(theme.key_fg)
+                    .add_modifier(Modifier::ITALIC),
+            ),
         ]),
     ];
 
@@ -333,7 +491,8 @@ pub fn render_settings_popup(
     };
 
     frame.render_widget(
-        Paragraph::new(help_line(&shortcuts, footer_area.width, theme)).alignment(Alignment::Center),
+        Paragraph::new(help_line(&shortcuts, footer_area.width, theme))
+            .alignment(Alignment::Center),
         footer_area,
     );
 }

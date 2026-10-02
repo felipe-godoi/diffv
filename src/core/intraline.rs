@@ -123,7 +123,10 @@ pub fn compute_intraline_spans(
         }
     }
 
-    (merge_adjacent_spans(old_spans), merge_adjacent_spans(new_spans))
+    (
+        merge_adjacent_spans(old_spans),
+        merge_adjacent_spans(new_spans),
+    )
 }
 
 fn merge_adjacent_spans(spans: Vec<HighlightSpan>) -> Vec<HighlightSpan> {

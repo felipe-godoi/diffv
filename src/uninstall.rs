@@ -33,7 +33,11 @@ pub fn uninstall_targets(targets: &[PathBuf], config_dir: Option<&Path>) -> Resu
                         removed_count += 1;
                     }
                     Err(err) => {
-                        eprintln!("\x1b[31m✗ Error removing {}:\x1b[0m {}", target.display(), err);
+                        eprintln!(
+                            "\x1b[31m✗ Error removing {}:\x1b[0m {}",
+                            target.display(),
+                            err
+                        );
                     }
                 }
             }
@@ -44,10 +48,17 @@ pub fn uninstall_targets(targets: &[PathBuf], config_dir: Option<&Path>) -> Resu
         if dir.exists() {
             match fs::remove_dir_all(dir) {
                 Ok(_) => {
-                    println!("\x1b[32m✓\x1b[0m Removed configuration directory {}", dir.display());
+                    println!(
+                        "\x1b[32m✓\x1b[0m Removed configuration directory {}",
+                        dir.display()
+                    );
                 }
                 Err(err) => {
-                    eprintln!("\x1b[33m!\x1b[0m Note: Could not remove config directory {}: {}", dir.display(), err);
+                    eprintln!(
+                        "\x1b[33m!\x1b[0m Note: Could not remove config directory {}: {}",
+                        dir.display(),
+                        err
+                    );
                 }
             }
         }

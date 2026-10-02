@@ -17,10 +17,25 @@ pub fn search_files_fzf(files: &[String], header: &str) -> anyhow::Result<Option
 
 /// Candidates are `path:line<TAB>content`; only the content is matched.
 pub fn search_diff_text_fzf(lines: &[String], header: &str) -> anyhow::Result<Option<String>> {
-    run_fzf(lines, "󰈞 Diff Text> ", header, &["--delimiter=\t", "--nth=2", "--with-nth=1,2,3", "--tabstop=2"])
+    run_fzf(
+        lines,
+        "󰈞 Diff Text> ",
+        header,
+        &[
+            "--delimiter=\t",
+            "--nth=2",
+            "--with-nth=1,2,3",
+            "--tabstop=2",
+        ],
+    )
 }
 
-fn run_fzf(items: &[String], prompt: &str, header: &str, extra: &[&str]) -> anyhow::Result<Option<String>> {
+fn run_fzf(
+    items: &[String],
+    prompt: &str,
+    header: &str,
+    extra: &[&str],
+) -> anyhow::Result<Option<String>> {
     let mut child = Command::new("fzf")
         .args(["--layout=reverse", "--border=rounded", "--info=inline"])
         .arg(format!("--prompt={}", prompt))
@@ -38,7 +53,9 @@ fn run_fzf(items: &[String], prompt: &str, header: &str, extra: &[&str]) -> anyh
 
     let output = child.wait_with_output()?;
     if output.status.success() {
-        let sel = String::from_utf8_lossy(&output.stdout).trim_end_matches(['\r', '\n']).to_string();
+        let sel = String::from_utf8_lossy(&output.stdout)
+            .trim_end_matches(['\r', '\n'])
+            .to_string();
         if !sel.is_empty() {
             return Ok(Some(sel));
         }

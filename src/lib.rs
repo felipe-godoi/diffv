@@ -8,6 +8,6 @@ pub mod core;
 pub mod git;
 pub mod integration;
 pub mod ui;
-pub mod watcher;
-pub mod update;
 pub mod uninstall;
+pub mod update;
+pub mod watcher;

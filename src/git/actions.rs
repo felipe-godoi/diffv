@@ -1,8 +1,10 @@
+use crate::core::models::Hunk;
+use crate::git::patch::{
+    generate_hunk_patch, generate_partial_hunk_patch, generate_partial_unstage_patch,
+};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use crate::core::models::Hunk;
-use crate::git::patch::{generate_hunk_patch, generate_partial_hunk_patch, generate_partial_unstage_patch};
 
 pub fn stage_partial_hunk(
     repo_root: &Path,
@@ -11,7 +13,8 @@ pub fn stage_partial_hunk(
     selected_indices: &[usize],
 ) -> anyhow::Result<()> {
     let patch = generate_partial_hunk_patch(file_path, hunk, selected_indices);
-    apply_to_index(repo_root, &patch, &[]).map_err(|e| anyhow::anyhow!("Failed to stage partial hunk: {}", e))
+    apply_to_index(repo_root, &patch, &[])
+        .map_err(|e| anyhow::anyhow!("Failed to stage partial hunk: {}", e))
 }
 
 pub fn unstage_partial_hunk(
@@ -21,7 +24,8 @@ pub fn unstage_partial_hunk(
     selected_indices: &[usize],
 ) -> anyhow::Result<()> {
     let patch = generate_partial_unstage_patch(file_path, hunk, selected_indices);
-    apply_to_index(repo_root, &patch, &["--reverse"]).map_err(|e| anyhow::anyhow!("Failed to unstage partial hunk: {}", e))
+    apply_to_index(repo_root, &patch, &["--reverse"])
+        .map_err(|e| anyhow::anyhow!("Failed to unstage partial hunk: {}", e))
 }
 
 fn apply_to_index(repo_root: &Path, patch: &str, extra: &[&str]) -> anyhow::Result<()> {
