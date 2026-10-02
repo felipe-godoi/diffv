@@ -105,10 +105,15 @@ pub fn render_side_by_side(
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| file.display_path());
-    let (left_badge, left_style) = if active_column == ColumnSide::Left {
-        (" ◄ ORIGINAL (HEAD) ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD))
+    let left_badge_text = if left_area.width < 28 {
+        " ◄ OLD "
     } else {
-        (" ◄ ORIGINAL (HEAD) ", Style::default().fg(theme.line_num_fg).bg(theme.selected_bg))
+        " ◄ ORIGINAL (HEAD) "
+    };
+    let (left_badge, left_style) = if active_column == ColumnSide::Left {
+        (left_badge_text, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD))
+    } else {
+        (left_badge_text, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg))
     };
     let left_header = Line::from(vec![
         Span::styled(left_badge, left_style),
@@ -117,10 +122,15 @@ pub fn render_side_by_side(
     ]);
 
     // Right Column Header
-    let (right_badge, right_style) = if active_column == ColumnSide::Right {
-        (" ► MODIFIED (WORKING TREE) ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.key_fg).add_modifier(Modifier::BOLD))
+    let right_badge_text = if right_area.width < 28 {
+        " ► NEW "
     } else {
-        (" ► MODIFIED (WORKING TREE) ", Style::default().fg(theme.line_num_fg).bg(theme.selected_bg))
+        " ► MODIFIED (WORKING TREE) "
+    };
+    let (right_badge, right_style) = if active_column == ColumnSide::Right {
+        (right_badge_text, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.key_fg).add_modifier(Modifier::BOLD))
+    } else {
+        (right_badge_text, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg))
     };
     let right_header = Line::from(vec![
         Span::styled(right_badge, right_style),

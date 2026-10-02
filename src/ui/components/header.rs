@@ -17,7 +17,6 @@ pub fn render_header(
     language: Language,
     theme: &Theme,
 ) {
-    let mode_str = if is_unified { " 󰤈 Unified " } else { " 󰤉 Side-by-Side " };
     let files_label = match language {
         Language::En => "files",
         Language::Pt => "arquivos",
@@ -26,6 +25,8 @@ pub fn render_header(
         Language::En => "Mode:",
         Language::Pt => "Modo:",
     };
+
+    let width = area.width;
 
     let mut spans = vec![
         // App brand pill
@@ -37,106 +38,127 @@ pub fn render_header(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
-        // Repo and branch
-        Span::styled(
-            format!(" 󰊢 {} ", repo_stats.branch),
-            Style::default()
-                .fg(theme.key_fg)
-                .add_modifier(Modifier::BOLD),
-        ),
     ];
+
+    // Branch
+    let branch_display = if width < 60 && repo_stats.branch.len() > 10 {
+        format!(" 󰊢 {}… ", &repo_stats.branch[..8])
+    } else {
+        format!(" 󰊢 {} ", repo_stats.branch)
+    };
+    spans.push(Span::styled(
+        branch_display,
+        Style::default()
+            .fg(theme.key_fg)
+            .add_modifier(Modifier::BOLD),
+    ));
 
     // Optional worktree pill
     if let Some(wt) = worktree_name {
-        spans.push(Span::styled("· ", Style::default().fg(theme.border)));
-        spans.push(Span::styled(
-            format!("󰹹 {} [W] ", wt),
-            Style::default().fg(theme.status_u).add_modifier(Modifier::BOLD),
-        ));
+        if width >= 75 {
+            spans.push(Span::styled("· ", Style::default().fg(theme.border)));
+            let wt_str = if width < 90 && wt.len() > 10 {
+                format!("󰹹 {}… ", &wt[..8])
+            } else {
+                format!("󰹹 {} [W] ", wt)
+            };
+            spans.push(Span::styled(
+                wt_str,
+                Style::default().fg(theme.status_u).add_modifier(Modifier::BOLD),
+            ));
+        }
     }
 
     spans.push(Span::styled("│ ", Style::default().fg(theme.border)));
 
-    // Files count
-    spans.push(Span::styled(
-        format!("{} {} ", repo_stats.file_count, files_label),
-        Style::default().fg(theme.fg),
-    ));
+    // Files count (if not ultra-compact)
+    if width >= 80 {
+        spans.push(Span::styled(
+            format!("{} {} ", repo_stats.file_count, files_label),
+            Style::default().fg(theme.fg),
+        ));
+    }
 
     // Additions pill
     spans.push(Span::styled(
-        format!(" +{} ", repo_stats.total_additions),
+        format!("+{} ", repo_stats.total_additions),
         Style::default()
             .fg(theme.add_fg)
-            .bg(theme.add_bg)
             .add_modifier(Modifier::BOLD),
     ));
-    spans.push(Span::raw(" "));
 
     // Deletions pill
     spans.push(Span::styled(
-        format!(" -{} ", repo_stats.total_deletions),
+        format!("-{} ", repo_stats.total_deletions),
         Style::default()
             .fg(theme.del_fg)
-            .bg(theme.del_bg)
             .add_modifier(Modifier::BOLD),
     ));
-    spans.push(Span::raw(" "));
+
     spans.push(Span::styled("│ ", Style::default().fg(theme.border)));
 
     // Mode badge
-    spans.push(Span::styled(format!("{} ", mode_label), Style::default().fg(theme.line_num_fg)));
+    if width >= 95 {
+        spans.push(Span::styled(format!("{} ", mode_label), Style::default().fg(theme.line_num_fg)));
+    }
+    let mode_str = if is_unified {
+        if width < 80 { "󰤈 Uni [m] " } else { " 󰤈 Unified [m] " }
+    } else {
+        if width < 80 { "󰤉 SbS [m] " } else { " 󰤉 Side-by-Side [m] " }
+    };
     spans.push(Span::styled(
         mode_str,
         Style::default()
             .fg(theme.header_fg)
-            .bg(theme.selected_bg)
             .add_modifier(Modifier::BOLD),
     ));
-    spans.push(Span::styled(" [m]  ", Style::default().fg(theme.line_num_fg)));
 
-    // Watch indicator pill
-    if watch_mode {
-        spans.push(Span::styled(
-            " 󰐥 LIVE ",
-            Style::default()
-                .fg(Color::Rgb(15, 20, 25))
-                .bg(theme.status_a)
-                .add_modifier(Modifier::BOLD),
-        ));
-    } else {
-        spans.push(Span::styled(
-            " 󰏤 PAUSED ",
-            Style::default()
-                .fg(theme.line_num_fg)
-                .add_modifier(Modifier::DIM),
-        ));
+    // Watch indicator pill (if space permits)
+    if width >= 85 {
+        spans.push(Span::styled("│ ", Style::default().fg(theme.border)));
+        if watch_mode {
+            spans.push(Span::styled(
+                " 󰐥 LIVE ",
+                Style::default()
+                    .fg(Color::Rgb(15, 20, 25))
+                    .bg(theme.status_a)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                " 󰏤 PAUSED ",
+                Style::default()
+                    .fg(theme.line_num_fg)
+                    .add_modifier(Modifier::DIM),
+            ));
+        }
     }
-    spans.push(Span::styled(" [w]  ", Style::default().fg(theme.line_num_fg)));
 
     // Language switcher badge
     spans.push(Span::styled("│ ", Style::default().fg(theme.border)));
     let lang_str = match language {
-        Language::En => "󰗊 EN [L]",
-        Language::Pt => "󰗊 PT [L]",
+        Language::En => "󰗊 en [L]",
+        Language::Pt => "󰗊 pt [L]",
     };
     spans.push(Span::styled(
         format!(" {} ", lang_str),
         Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD),
     ));
 
-    // Right-aligned help hint
-    spans.push(Span::styled(" │ ", Style::default().fg(theme.border)));
-    spans.push(Span::styled("󰋖 ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
-    spans.push(Span::styled(
-        match language { Language::En => "Help [?]  ", Language::Pt => "Ajuda [?]  " },
-        Style::default().fg(theme.line_num_fg),
-    ));
-    spans.push(Span::styled("󰌌 ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
-    spans.push(Span::styled(
-        match language { Language::En => "Focus [Tab]", Language::Pt => "Foco [Tab]" },
-        Style::default().fg(theme.line_num_fg),
-    ));
+    // Right-aligned help hint (only if screen has plenty of width)
+    if width >= 110 {
+        spans.push(Span::styled("│ ", Style::default().fg(theme.border)));
+        spans.push(Span::styled("󰋖 ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(
+            match language { Language::En => "Help [?]  ", Language::Pt => "Ajuda [?]  " },
+            Style::default().fg(theme.line_num_fg),
+        ));
+        spans.push(Span::styled("󰌌 ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(
+            match language { Language::En => "Focus [Tab]", Language::Pt => "Foco [Tab]" },
+            Style::default().fg(theme.line_num_fg),
+        ));
+    }
 
     let block = Block::default()
         .borders(Borders::BOTTOM)

@@ -88,6 +88,13 @@ pub fn render_worktree_popup(
         let branch_name = wt.branch.as_deref().unwrap_or("detached");
         let path_str = wt.path.display().to_string();
 
+        let branch_pad = if list_area.width < 55 { 12 } else { 20 };
+        let branch_truncated = if branch_name.len() > branch_pad {
+            format!("{}…", &branch_name[..branch_pad.saturating_sub(1)])
+        } else {
+            branch_name.to_string()
+        };
+
         let line = Line::from(vec![
             cursor_span,
             Span::raw(" "),
@@ -95,7 +102,7 @@ pub fn render_worktree_popup(
             Span::raw(" "),
             Span::styled("󰊢 ", Style::default().fg(theme.key_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })),
             Span::styled(
-                format!("{:<20} ", branch_name),
+                format!("{:<width$} ", branch_truncated, width = branch_pad),
                 if is_selected { base_style.add_modifier(Modifier::BOLD) } else { base_style },
             ),
             Span::styled(
@@ -110,43 +117,57 @@ pub fn render_worktree_popup(
     frame.render_widget(Paragraph::new(lines), list_area);
 
     // Footer shortcuts
-    let footer_line = match language {
-        Language::En => Line::from(vec![
+    let footer_w = chunks[1].width;
+    let footer_line = if footer_w < 55 {
+        Line::from(vec![
             Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" Switch Worktree    ", Style::default().fg(theme.fg)),
-            Span::styled(" [j/k] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" Navigate    ", Style::default().fg(theme.line_num_fg)),
-            Span::styled(" [Esc / W] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" Close Switcher", Style::default().fg(theme.line_num_fg)),
-        ]),
-        Language::Pt => Line::from(vec![
-            Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" Alternar Worktree    ", Style::default().fg(theme.fg)),
-            Span::styled(" [j/k] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" Navegar    ", Style::default().fg(theme.line_num_fg)),
-            Span::styled(" [Esc / W] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-            Span::styled(" Fechar", Style::default().fg(theme.line_num_fg)),
-        ]),
+            Span::styled("Switch ", Style::default().fg(theme.fg)),
+            Span::styled("│ [j/k] ", Style::default().fg(theme.key_fg)),
+            Span::styled("Nav ", Style::default().fg(theme.line_num_fg)),
+            Span::styled("│ [Esc] ", Style::default().fg(theme.key_fg)),
+            Span::styled("Close", Style::default().fg(theme.line_num_fg)),
+        ])
+    } else {
+        match language {
+            Language::En => Line::from(vec![
+                Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(" Switch Worktree    ", Style::default().fg(theme.fg)),
+                Span::styled(" [j/k] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(" Navigate    ", Style::default().fg(theme.line_num_fg)),
+                Span::styled(" [Esc / W] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(" Close Switcher", Style::default().fg(theme.line_num_fg)),
+            ]),
+            Language::Pt => Line::from(vec![
+                Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(" Alternar Worktree    ", Style::default().fg(theme.fg)),
+                Span::styled(" [j/k] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(" Navegar    ", Style::default().fg(theme.line_num_fg)),
+                Span::styled(" [Esc / W] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(" Fechar", Style::default().fg(theme.line_num_fg)),
+            ]),
+        }
     };
     frame.render_widget(Paragraph::new(footer_line), chunks[1]);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let px = if r.width < 90 { 96 } else { percent_x };
+    let py = if r.height < 30 { 90 } else { percent_y };
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage((100 - py) / 2),
+            Constraint::Percentage(py),
+            Constraint::Percentage((100 - py) / 2),
         ])
         .split(r);
 
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage((100 - px) / 2),
+            Constraint::Percentage(px),
+            Constraint::Percentage((100 - px) / 2),
         ])
         .split(popup_layout[1])[1]
 }

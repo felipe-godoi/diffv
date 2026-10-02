@@ -51,45 +51,91 @@ pub fn render_status_bar(
             Language::Pt => ("Preparar ", "Despreparar ", "Descartar ", "Visual ", "Editar ", "Copiar ", "Histórico ", "Ajuda ", "Sair"),
         };
 
-        Line::from(vec![
+        let width = area.width;
+
+        let mut spans = vec![
             mode_pill,
             Span::raw("  "),
             Span::styled("1/2/3 ", key_style),
             Span::styled(match language { Language::En => "Tabs ", Language::Pt => "Abas " }, text_style),
             Span::styled("│ ", sep_style),
-            Span::styled("s ", key_style),
-            Span::styled(stage_txt, text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("u ", key_style),
-            Span::styled(unstage_txt, text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("d ", key_style),
-            Span::styled(discard_txt, text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("v ", key_style),
-            Span::styled(visual_txt, text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("e ", key_style),
-            Span::styled(edit_txt, text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("c ", key_style),
-            Span::styled(copy_txt, text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("H ", key_style),
-            Span::styled(hist_txt, text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("W ", key_style),
-            Span::styled("Worktrees ", text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("L ", key_style),
-            Span::styled("Lang ", text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("? ", key_style),
-            Span::styled(help_txt, text_style),
-            Span::styled("│ ", sep_style),
-            Span::styled("q ", key_style),
-            Span::styled(quit_txt, text_style),
-        ])
+        ];
+
+        if width < 75 {
+            // Very narrow terminal (< 75 cols)
+            spans.push(Span::styled("s/u ", key_style));
+            spans.push(Span::styled("Stage ", text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("b ", key_style));
+            spans.push(Span::styled("Sidebar ", text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("? ", key_style));
+            spans.push(Span::styled(help_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("q ", key_style));
+            spans.push(Span::styled(quit_txt, text_style));
+        } else if width < 110 {
+            // Half-screen / medium terminal (75 - 110 cols)
+            spans.push(Span::styled("s ", key_style));
+            spans.push(Span::styled(stage_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("v ", key_style));
+            spans.push(Span::styled(visual_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("b ", key_style));
+            spans.push(Span::styled(match language { Language::En => "Side ", Language::Pt => "Painel " }, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("W ", key_style));
+            spans.push(Span::styled(match language { Language::En => "Trees ", Language::Pt => "Trees " }, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("L ", key_style));
+            spans.push(Span::styled(match language { Language::En => "Lang ", Language::Pt => "Idioma " }, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("? ", key_style));
+            spans.push(Span::styled(help_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("q ", key_style));
+            spans.push(Span::styled(quit_txt, text_style));
+        } else {
+            // Wide terminal (>= 110 cols)
+            spans.push(Span::styled("s ", key_style));
+            spans.push(Span::styled(stage_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("u ", key_style));
+            spans.push(Span::styled(unstage_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("d ", key_style));
+            spans.push(Span::styled(discard_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("v ", key_style));
+            spans.push(Span::styled(visual_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("b ", key_style));
+            spans.push(Span::styled(match language { Language::En => "Sidebar ", Language::Pt => "Painel " }, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("e ", key_style));
+            spans.push(Span::styled(edit_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("c ", key_style));
+            spans.push(Span::styled(copy_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("H ", key_style));
+            spans.push(Span::styled(hist_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("W ", key_style));
+            spans.push(Span::styled("Worktrees ", text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("L ", key_style));
+            spans.push(Span::styled("Lang ", text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("? ", key_style));
+            spans.push(Span::styled(help_txt, text_style));
+            spans.push(Span::styled("│ ", sep_style));
+            spans.push(Span::styled("q ", key_style));
+            spans.push(Span::styled(quit_txt, text_style));
+        }
+
+        Line::from(spans)
     };
 
     let block = Block::default().style(Style::default().bg(theme.status_bg));

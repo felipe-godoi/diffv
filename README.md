@@ -94,6 +94,10 @@ diffv --theme tokyonight
 | `]` or `n` | Diff | Jump to **Next Hunk** |
 | `[` or `p` | Diff | Jump to **Previous Hunk** |
 | `Tab` | General | Switch focus between **File Tree** and **Diff View** |
+| `b` | General | **Toggle Sidebar** (show/hide file tree drawer, great for split/half terminals) |
+| `1` / `2` / `3` | General | Switch drawer tabs: **[1] Changes**, **[2] Commits**, **[3] Stashes** |
+| `W` | General | Open **Worktrees Switcher** popup |
+| `L` | General | Toggle UI language: **English** ↔ **Português** |
 | `h` / `l` or `←` / `→` | General | Tree: collapse/expand folder. Diff: switch Old/New column |
 | `Space` | File Tree | Toggle collapse/expand on current folder |
 | `<` / `>` or `,` / `.` | General | **Resize Panes**: shrink / expand File Tree width |

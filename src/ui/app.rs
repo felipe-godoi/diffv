@@ -95,6 +95,7 @@ pub struct App {
 
     // Layout resizing & viewport geometry
     pub file_tree_width: u16,
+    pub show_drawer: bool,
     pub is_dragging_divider: bool,
     pub viewport_height: usize,
     pub file_tree_height: usize,
@@ -188,6 +189,7 @@ impl App {
             history_scroll: 0,
             active_commit_view: None,
             file_tree_width: 32,
+            show_drawer: true,
             is_dragging_divider: false,
             viewport_height: 25,
             file_tree_height: 25,
@@ -547,7 +549,26 @@ impl App {
                 };
                 self.set_notification(msg);
             }
+            KeyCode::Char('b') => {
+                self.show_drawer = !self.show_drawer;
+                let msg = if self.show_drawer {
+                    match self.language {
+                        Language::En => "Sidebar visible",
+                        Language::Pt => "Painel lateral visível",
+                    }
+                } else {
+                    match self.language {
+                        Language::En => "Sidebar hidden (press 'b' to show)",
+                        Language::Pt => "Painel oculto (pressione 'b' para exibir)",
+                    }
+                };
+                self.set_notification(msg);
+                if !self.show_drawer && self.focus == Focus::FileTree {
+                    self.focus = Focus::DiffView;
+                }
+            }
             KeyCode::Char('1') => {
+                self.show_drawer = true;
                 self.drawer_tab = DrawerTab::Changes;
                 if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
                     self.files = saved_files;
@@ -563,6 +584,7 @@ impl App {
                 self.set_notification(msg);
             }
             KeyCode::Char('2') => {
+                self.show_drawer = true;
                 self.drawer_tab = DrawerTab::Commits;
                 self.focus = Focus::FileTree;
                 let msg = match self.language {
@@ -572,6 +594,7 @@ impl App {
                 self.set_notification(msg);
             }
             KeyCode::Char('3') => {
+                self.show_drawer = true;
                 self.drawer_tab = DrawerTab::Stashes;
                 self.focus = Focus::FileTree;
                 let msg = match self.language {
@@ -587,10 +610,15 @@ impl App {
                 self.show_help = true;
             }
             KeyCode::Tab => {
-                self.focus = match self.focus {
-                    Focus::FileTree => Focus::DiffView,
-                    Focus::DiffView => Focus::FileTree,
-                };
+                if !self.show_drawer {
+                    self.show_drawer = true;
+                    self.focus = Focus::FileTree;
+                } else {
+                    self.focus = match self.focus {
+                        Focus::FileTree => Focus::DiffView,
+                        Focus::DiffView => Focus::FileTree,
+                    };
+                }
             }
             KeyCode::Char('m') => {
                 self.is_unified = !self.is_unified;
@@ -603,6 +631,7 @@ impl App {
                 self.set_notification(format!("Live Watch Mode: {}", status));
             }
             KeyCode::Char('t') => {
+                self.show_drawer = true;
                 self.file_view_mode = match self.file_view_mode {
                     FileViewMode::Flat => FileViewMode::Tree,
                     FileViewMode::Tree => FileViewMode::Flat,
@@ -636,6 +665,7 @@ impl App {
                 }
             }
             KeyCode::Char('/') => {
+                self.show_drawer = true;
                 self.filter_mode = true;
                 self.focus = Focus::FileTree;
             }
@@ -1019,93 +1049,97 @@ impl App {
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseButton, MouseEventKind};
 
+        let effective_tree_width = if self.show_drawer { self.file_tree_width } else { 0 };
+
         match mouse.kind {
             MouseEventKind::ScrollDown => {
-                if mouse.column < self.file_tree_width {
+                if effective_tree_width > 0 && mouse.column < effective_tree_width {
                     self.file_tree_down(3);
                 } else {
                     self.scroll_down(3);
                 }
             }
             MouseEventKind::ScrollUp => {
-                if mouse.column < self.file_tree_width {
+                if effective_tree_width > 0 && mouse.column < effective_tree_width {
                     self.file_tree_up(3);
                 } else {
                     self.scroll_up(3);
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                let divider_col = self.file_tree_width;
-                if mouse.column >= divider_col.saturating_sub(1) && mouse.column <= divider_col + 1 {
-                    self.is_dragging_divider = true;
-                    return;
-                }
-
-                if mouse.column < self.file_tree_width {
-                    self.focus = Focus::FileTree;
-                    if mouse.row <= 2 {
-                        let col = mouse.column;
-                        let tab_w = (self.file_tree_width / 3).max(1);
-                        if col < tab_w {
-                            self.drawer_tab = DrawerTab::Changes;
-                            if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
-                                self.files = saved_files;
-                                self.repo_stats = saved_stats;
-                                self.active_commit_view = None;
-                                self.update_filter();
-                            }
-                        } else if col < tab_w * 2 {
-                            self.drawer_tab = DrawerTab::Commits;
-                        } else {
-                            self.drawer_tab = DrawerTab::Stashes;
-                        }
+                if self.show_drawer {
+                    let divider_col = effective_tree_width;
+                    if mouse.column >= divider_col.saturating_sub(1) && mouse.column <= divider_col + 1 {
+                        self.is_dragging_divider = true;
                         return;
                     }
 
-                    let item_row = (mouse.row.saturating_sub(3)) as usize;
-                    match self.drawer_tab {
-                        DrawerTab::Changes => {
-                            let target_idx = self.file_tree_scroll + item_row;
-                            if self.file_view_mode == FileViewMode::Tree {
-                                if target_idx < self.tree_items.len() {
-                                    self.selected_tree_idx = target_idx;
+                    if mouse.column < effective_tree_width {
+                        self.focus = Focus::FileTree;
+                        if mouse.row <= 2 {
+                            let col = mouse.column;
+                            let tab_w = (effective_tree_width / 3).max(1);
+                            if col < tab_w {
+                                self.drawer_tab = DrawerTab::Changes;
+                                if let Some((saved_files, saved_stats)) = self.live_snapshot.take() {
+                                    self.files = saved_files;
+                                    self.repo_stats = saved_stats;
+                                    self.active_commit_view = None;
+                                    self.update_filter();
+                                }
+                            } else if col < tab_w * 2 {
+                                self.drawer_tab = DrawerTab::Commits;
+                            } else {
+                                self.drawer_tab = DrawerTab::Stashes;
+                            }
+                            return;
+                        }
+
+                        let item_row = (mouse.row.saturating_sub(3)) as usize;
+                        match self.drawer_tab {
+                            DrawerTab::Changes => {
+                                let target_idx = self.file_tree_scroll + item_row;
+                                if self.file_view_mode == FileViewMode::Tree {
+                                    if target_idx < self.tree_items.len() {
+                                        self.selected_tree_idx = target_idx;
+                                        self.scroll_y = 0;
+                                        self.selected_row = 0;
+                                        let item = &self.tree_items[target_idx];
+                                        if item.is_dir {
+                                            if item.is_collapsed {
+                                                self.collapsed_dirs.remove(&item.path);
+                                            } else {
+                                                self.collapsed_dirs.insert(item.path.clone());
+                                            }
+                                            self.update_filter();
+                                        }
+                                    }
+                                } else if target_idx < self.filtered_indices.len() {
+                                    self.selected_filtered_idx = target_idx;
                                     self.scroll_y = 0;
                                     self.selected_row = 0;
-                                    let item = &self.tree_items[target_idx];
-                                    if item.is_dir {
-                                        if item.is_collapsed {
-                                            self.collapsed_dirs.remove(&item.path);
-                                        } else {
-                                            self.collapsed_dirs.insert(item.path.clone());
-                                        }
-                                        self.update_filter();
-                                    }
                                 }
-                            } else if target_idx < self.filtered_indices.len() {
-                                self.selected_filtered_idx = target_idx;
-                                self.scroll_y = 0;
-                                self.selected_row = 0;
+                            }
+                            DrawerTab::Commits => {
+                                let target_idx = self.repo_commit_scroll + item_row;
+                                if target_idx < self.repo_commits.len() {
+                                    self.selected_repo_commit_idx = target_idx;
+                                }
+                            }
+                            DrawerTab::Stashes => {
+                                let target_idx = self.stash_scroll + item_row;
+                                if target_idx < self.stashes.len() {
+                                    self.selected_stash_idx = target_idx;
+                                }
                             }
                         }
-                        DrawerTab::Commits => {
-                            let target_idx = self.repo_commit_scroll + item_row;
-                            if target_idx < self.repo_commits.len() {
-                                self.selected_repo_commit_idx = target_idx;
-                            }
-                        }
-                        DrawerTab::Stashes => {
-                            let target_idx = self.stash_scroll + item_row;
-                            if target_idx < self.stashes.len() {
-                                self.selected_stash_idx = target_idx;
-                            }
-                        }
+                        return;
                     }
-                    return;
                 }
 
-                if mouse.column > self.file_tree_width && mouse.row >= 1 {
+                if mouse.column > effective_tree_width && mouse.row >= 1 {
                     self.focus = Focus::DiffView;
-                    let diff_inner_x = mouse.column.saturating_sub(self.file_tree_width + 1);
+                    let diff_inner_x = mouse.column.saturating_sub(effective_tree_width + 1);
                     if diff_inner_x < (self.viewport_height.max(30) as u16) {
                         self.column_side = ColumnSide::Left;
                     } else {
@@ -1127,7 +1161,7 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if self.is_dragging_divider || (mouse.column >= self.file_tree_width.saturating_sub(2) && mouse.column <= self.file_tree_width + 2) {
+                if self.show_drawer && (self.is_dragging_divider || (mouse.column >= self.file_tree_width.saturating_sub(2) && mouse.column <= self.file_tree_width + 2)) {
                     self.file_tree_width = mouse.column.clamp(16, 80);
                 }
             }
@@ -1513,11 +1547,21 @@ impl App {
             &self.theme,
         );
 
+        // Responsive drawer width on narrow terminals (e.g. half-screen < 85 columns)
+        let effective_tree_width = if !self.show_drawer {
+            0
+        } else if size.width < 85 {
+            // Allocate at most 32% of screen to drawer, but not less than 18 cols
+            self.file_tree_width.min((size.width * 32 / 100).max(18)).min(size.width.saturating_sub(25))
+        } else {
+            self.file_tree_width.min(size.width.saturating_sub(25))
+        };
+
         // 2. Render Main Body (File Tree + Diff View + Overview Ruler)
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(self.file_tree_width), // File Tree
+                Constraint::Length(effective_tree_width), // File Tree
                 Constraint::Min(20),   // Diff View
                 Constraint::Length(if self.config.ui.overview_ruler { 1 } else { 0 }), // Ruler
             ])
@@ -1530,32 +1574,34 @@ impl App {
         self.viewport_height = diff_area.height as usize;
         self.file_tree_height = file_tree_area.height as usize;
 
-        let selected_file_idx = if self.file_view_mode == FileViewMode::Tree {
-            self.selected_tree_idx
-        } else {
-            self.selected_filtered_idx
-        };
+        if effective_tree_width > 0 {
+            let selected_file_idx = if self.file_view_mode == FileViewMode::Tree {
+                self.selected_tree_idx
+            } else {
+                self.selected_filtered_idx
+            };
 
-        render_drawer(
-            frame,
-            file_tree_area,
-            self.drawer_tab,
-            &self.tree_items,
-            selected_file_idx,
-            self.file_tree_scroll,
-            &self.repo_commits,
-            self.selected_repo_commit_idx,
-            self.repo_commit_scroll,
-            &self.stashes,
-            self.selected_stash_idx,
-            self.stash_scroll,
-            self.focus == Focus::FileTree,
-            self.filter_mode,
-            &self.filter_query,
-            self.file_view_mode,
-            self.language,
-            &self.theme,
-        );
+            render_drawer(
+                frame,
+                file_tree_area,
+                self.drawer_tab,
+                &self.tree_items,
+                selected_file_idx,
+                self.file_tree_scroll,
+                &self.repo_commits,
+                self.selected_repo_commit_idx,
+                self.repo_commit_scroll,
+                &self.stashes,
+                self.selected_stash_idx,
+                self.stash_scroll,
+                self.focus == Focus::FileTree,
+                self.filter_mode,
+                &self.filter_query,
+                self.file_view_mode,
+                self.language,
+                &self.theme,
+            );
+        }
 
         let cur_file = self.current_file();
         let syntax_enabled = self.config.ui.syntax_highlighting;
@@ -1614,7 +1660,7 @@ impl App {
 
         let mode_label = if self.visual_mode {
             "VISUAL"
-        } else if self.focus == Focus::FileTree {
+        } else if self.focus == Focus::FileTree && self.show_drawer {
             "TREE"
         } else {
             "DIFF"

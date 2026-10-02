@@ -69,60 +69,88 @@ pub fn render_history_popup(
             Span::styled(" ", base_style)
         };
 
-        let line = Line::from(vec![
+        let mut spans = vec![
             cursor_span,
             Span::styled(
                 format!(" 󰜉 {:<7} ", commit.hash),
                 Style::default().fg(theme.key_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }).add_modifier(Modifier::BOLD),
             ),
             Span::styled("● ", Style::default().fg(theme.status_a).bg(if is_selected { theme.selected_bg } else { theme.bg })),
-            Span::styled(
-                format!("{:<38} ", commit.message),
-                if is_selected { base_style.add_modifier(Modifier::BOLD) } else { base_style },
-            ),
-            Span::styled(
-                format!("· {:<14} ", commit.date),
+        ];
+
+        let msg_len = if list_area.width < 60 { 24 } else { 38 };
+        let msg_truncated = if commit.message.len() > msg_len {
+            format!("{}…", &commit.message[..msg_len.saturating_sub(1)])
+        } else {
+            commit.message.clone()
+        };
+
+        spans.push(Span::styled(
+            format!("{:<width$} ", msg_truncated, width = msg_len),
+            if is_selected { base_style.add_modifier(Modifier::BOLD) } else { base_style },
+        ));
+
+        if list_area.width >= 55 {
+            spans.push(Span::styled(
+                format!("· {:<12} ", commit.date),
                 Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }),
-            ),
-            Span::styled(
+            ));
+        }
+
+        if list_area.width >= 75 {
+            spans.push(Span::styled(
                 format!("· {}", commit.author),
                 Style::default().fg(theme.status_u).bg(if is_selected { theme.selected_bg } else { theme.bg }),
-            ),
-        ]);
+            ));
+        }
 
-        lines.push(line);
+        lines.push(Line::from(spans));
     }
 
     frame.render_widget(Paragraph::new(lines), list_area);
 
     // Footer shortcuts
-    let footer_line = Line::from(vec![
-        Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-        Span::styled(" View Commit Diff    ", Style::default().fg(theme.fg)),
-        Span::styled(" [j/k] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-        Span::styled(" Navigate    ", Style::default().fg(theme.line_num_fg)),
-        Span::styled(" [Esc / H] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
-        Span::styled(" Close History", Style::default().fg(theme.line_num_fg)),
-    ]);
+    let footer_w = chunks[1].width;
+    let footer_line = if footer_w < 55 {
+        Line::from(vec![
+            Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled("View ", Style::default().fg(theme.fg)),
+            Span::styled("│ [j/k] ", Style::default().fg(theme.key_fg)),
+            Span::styled("Nav ", Style::default().fg(theme.line_num_fg)),
+            Span::styled("│ [Esc] ", Style::default().fg(theme.key_fg)),
+            Span::styled("Close", Style::default().fg(theme.line_num_fg)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" View Commit Diff    ", Style::default().fg(theme.fg)),
+            Span::styled(" [j/k] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" Navigate    ", Style::default().fg(theme.line_num_fg)),
+            Span::styled(" [Esc / H] ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(" Close History", Style::default().fg(theme.line_num_fg)),
+        ])
+    };
     frame.render_widget(Paragraph::new(footer_line), chunks[1]);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let px = if r.width < 90 { 96 } else { percent_x };
+    let py = if r.height < 30 { 90 } else { percent_y };
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage((100 - py) / 2),
+            Constraint::Percentage(py),
+            Constraint::Percentage((100 - py) / 2),
         ])
         .split(r);
 
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage((100 - px) / 2),
+            Constraint::Percentage(px),
+            Constraint::Percentage((100 - px) / 2),
         ])
         .split(popup_layout[1])[1]
 }

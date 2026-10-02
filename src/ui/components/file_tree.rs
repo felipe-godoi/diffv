@@ -177,32 +177,165 @@ pub fn build_tree_items(
     items
 }
 
-fn file_icon(name: &str) -> (&'static str, Color) {
+pub fn file_icon(name: &str) -> (&'static str, Color) {
     let lower = name.to_lowercase();
-    if lower.ends_with(".rs") {
-        (" ", Color::Rgb(242, 143, 114)) // Soft Rust peach
-    } else if lower.ends_with(".md") || lower.ends_with(".markdown") {
-        (" ", Color::Rgb(137, 180, 250)) // Soft pastel blue
-    } else if lower.ends_with(".toml") || lower.ends_with(".yaml") || lower.ends_with(".yml") || lower.ends_with(".json") {
-        (" ", Color::Rgb(249, 226, 175)) // Soft pastel cream
-    } else if lower.ends_with(".ts") || lower.ends_with(".tsx") {
-        (" ", Color::Rgb(137, 180, 250))
-    } else if lower.ends_with(".js") || lower.ends_with(".jsx") {
-        (" ", Color::Rgb(249, 226, 175))
-    } else if lower.ends_with(".py") {
-        (" ", Color::Rgb(116, 199, 236)) // Soft sky
-    } else if lower.ends_with(".sh") || lower.ends_with(".bash") || lower.ends_with(".zsh") {
-        (" ", Color::Rgb(166, 227, 161)) // Soft mint
-    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
-        (" ", Color::Rgb(242, 143, 114))
-    } else if lower.ends_with(".css") || lower.ends_with(".scss") {
-        (" ", Color::Rgb(180, 190, 254))
-    } else if lower.ends_with(".lock") {
-        ("󰌾 ", Color::Rgb(147, 153, 178))
-    } else if lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".svg") || lower.ends_with(".gif") {
-        ("󰈟 ", Color::Rgb(203, 166, 247)) // Soft lavender
-    } else {
-        ("󰈚 ", Color::Rgb(186, 194, 222)) // Soft file
+    let basename = lower.rsplit('/').next().unwrap_or(&lower);
+
+    // 1. Exact / Special filename matches
+    match basename {
+        "dockerfile" | "dockerfile.dev" | "dockerfile.prod" | "containerfile" => {
+            return ("󰡨 ", Color::Rgb(116, 199, 236));
+        }
+        "docker-compose.yml" | "docker-compose.yaml" | "compose.yml" | "compose.yaml" => {
+            return ("󰡨 ", Color::Rgb(116, 199, 236));
+        }
+        "makefile" | "gnumakefile" => {
+            return (" ", Color::Rgb(249, 226, 175));
+        }
+        "justfile" | "taskfile.yml" | "taskfile.yaml" => {
+            return ("󰑮 ", Color::Rgb(242, 205, 172));
+        }
+        "cmakelists.txt" => {
+            return (" ", Color::Rgb(137, 180, 250));
+        }
+        ".gitignore" | ".gitattributes" | ".gitmodules" | ".gitconfig" => {
+            return ("󰊢 ", Color::Rgb(243, 139, 168));
+        }
+        ".env" | ".env.local" | ".env.example" | ".env.development" | ".env.production" | ".env.test" => {
+            return (" ", Color::Rgb(249, 226, 175));
+        }
+        "cargo.toml" | "cargo.lock" => {
+            return (" ", Color::Rgb(242, 143, 114));
+        }
+        "package.json" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "bun.lockb" => {
+            return (" ", Color::Rgb(166, 227, 161));
+        }
+        "tsconfig.json" | "jsconfig.json" => {
+            return (" ", Color::Rgb(137, 180, 250));
+        }
+        "go.mod" | "go.sum" | "go.work" => {
+            return (" ", Color::Rgb(116, 199, 236));
+        }
+        "gemfile" | "gemfile.lock" | "rakefile" => {
+            return (" ", Color::Rgb(243, 139, 168));
+        }
+        "readme" | "readme.md" | "readme.txt" | "readme.markdown" => {
+            return (" ", Color::Rgb(137, 180, 250));
+        }
+        "license" | "license.md" | "license.txt" | "licence" | "copying" => {
+            return ("󰌆 ", Color::Rgb(249, 226, 175));
+        }
+        "changelog" | "changelog.md" | "history.md" => {
+            return ("󰮏 ", Color::Rgb(166, 227, 161));
+        }
+        _ => {}
+    }
+
+    // 2. Extension matches
+    let ext = basename.rsplit('.').next().unwrap_or("");
+
+    match ext {
+        // Rust
+        "rs" => (" ", Color::Rgb(242, 143, 114)),
+        // Go
+        "go" => (" ", Color::Rgb(116, 199, 236)),
+        // Python
+        "py" | "pyi" | "pyw" | "ipynb" => (" ", Color::Rgb(116, 199, 236)),
+        // JavaScript / Node
+        "js" | "mjs" | "cjs" => (" ", Color::Rgb(249, 226, 175)),
+        // TypeScript
+        "ts" | "mts" | "cts" => (" ", Color::Rgb(137, 180, 250)),
+        // React
+        "jsx" => (" ", Color::Rgb(116, 199, 236)),
+        "tsx" => (" ", Color::Rgb(137, 180, 250)),
+        // Vue / Svelte
+        "vue" => (" ", Color::Rgb(166, 227, 161)),
+        "svelte" => (" ", Color::Rgb(243, 139, 168)),
+        // C / C++
+        "c" | "h" => (" ", Color::Rgb(137, 180, 250)),
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => (" ", Color::Rgb(137, 180, 250)),
+        // C# / .NET
+        "cs" | "csx" => ("󰌛 ", Color::Rgb(203, 166, 247)),
+        "fs" | "fsi" | "fsx" => (" ", Color::Rgb(116, 199, 236)),
+        // Java / JVM
+        "java" | "class" | "jar" => (" ", Color::Rgb(242, 143, 114)),
+        "kt" | "kts" => (" ", Color::Rgb(203, 166, 247)),
+        "scala" | "sc" => (" ", Color::Rgb(243, 139, 168)),
+        "clj" | "cljs" | "cljc" | "edn" => (" ", Color::Rgb(166, 227, 161)),
+        // Swift
+        "swift" => (" ", Color::Rgb(242, 143, 114)),
+        // PHP
+        "php" => (" ", Color::Rgb(180, 190, 254)),
+        // Ruby
+        "rb" | "erb" | "gemspec" => (" ", Color::Rgb(243, 139, 168)),
+        // Lua
+        "lua" => (" ", Color::Rgb(137, 180, 250)),
+        // Zig
+        "zig" => (" ", Color::Rgb(249, 226, 175)),
+        // Dart / Flutter
+        "dart" => (" ", Color::Rgb(116, 199, 236)),
+        // Elixir / Erlang
+        "ex" | "exs" => (" ", Color::Rgb(203, 166, 247)),
+        "erl" | "hrl" => (" ", Color::Rgb(243, 139, 168)),
+        // Haskell
+        "hs" | "lhs" => (" ", Color::Rgb(203, 166, 247)),
+        // R / Julia
+        "r" | "rmd" => ("󰟔 ", Color::Rgb(137, 180, 250)),
+        "jl" => (" ", Color::Rgb(203, 166, 247)),
+        // OCaml
+        "ml" | "mli" => (" ", Color::Rgb(242, 143, 114)),
+        // Perl
+        "pl" | "pm" => (" ", Color::Rgb(137, 180, 250)),
+        // Shell & Terminal
+        "sh" | "bash" | "zsh" => (" ", Color::Rgb(166, 227, 161)),
+        "fish" => ("󰈺 ", Color::Rgb(249, 226, 175)),
+        "ps1" | "psm1" | "psd1" => ("󰨊 ", Color::Rgb(137, 180, 250)),
+        "bat" | "cmd" => (" ", Color::Rgb(147, 153, 178)),
+        // Databases & Queries
+        "sql" | "pgsql" | "mysql" | "plsql" => (" ", Color::Rgb(249, 226, 175)),
+        "graphql" | "gql" => ("󰡪 ", Color::Rgb(243, 139, 168)),
+        "proto" => ("󰒍 ", Color::Rgb(116, 199, 236)),
+        // Low-level & Assembly
+        "asm" | "s" => ("󰒍 ", Color::Rgb(147, 153, 178)),
+        "wasm" | "wat" => (" ", Color::Rgb(203, 166, 247)),
+        // Cloud & Infra
+        "nix" => (" ", Color::Rgb(116, 199, 236)),
+        "tf" | "tfvars" | "hcl" => ("󱁢 ", Color::Rgb(203, 166, 247)),
+        // Web & Markup
+        "html" | "htm" | "xhtml" => (" ", Color::Rgb(242, 143, 114)),
+        "css" => (" ", Color::Rgb(180, 190, 254)),
+        "scss" | "sass" => (" ", Color::Rgb(243, 139, 168)),
+        "less" => (" ", Color::Rgb(137, 180, 250)),
+        "styl" => (" ", Color::Rgb(166, 227, 161)),
+        // Config & Data Serialization
+        "json" | "jsonc" | "json5" => (" ", Color::Rgb(249, 226, 175)),
+        "yaml" | "yml" => (" ", Color::Rgb(243, 139, 168)),
+        "toml" => (" ", Color::Rgb(242, 205, 172)),
+        "ini" | "conf" | "cfg" | "properties" => (" ", Color::Rgb(147, 153, 178)),
+        "xml" | "plist" => ("󰗀 ", Color::Rgb(249, 226, 175)),
+        "csv" | "tsv" => ("󰈙 ", Color::Rgb(166, 227, 161)),
+        // Documentation & Writing
+        "md" | "markdown" | "mdx" => (" ", Color::Rgb(137, 180, 250)),
+        "txt" | "text" => ("󰈙 ", Color::Rgb(186, 194, 222)),
+        "pdf" => ("󰈦 ", Color::Rgb(243, 139, 168)),
+        "tex" | "latex" | "bib" => ("󰙩 ", Color::Rgb(116, 199, 236)),
+        "org" => (" ", Color::Rgb(116, 199, 236)),
+        "rst" | "adoc" => ("󰈙 ", Color::Rgb(186, 194, 222)),
+        // Images & Media
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" => ("󰈟 ", Color::Rgb(203, 166, 247)),
+        "svg" => ("󰈟 ", Color::Rgb(249, 226, 175)),
+        "mp3" | "wav" | "ogg" | "flac" | "m4a" => ("󰎈 ", Color::Rgb(249, 226, 175)),
+        "mp4" | "mkv" | "webm" | "avi" | "mov" => ("󰕧 ", Color::Rgb(243, 139, 168)),
+        // Fonts
+        "ttf" | "otf" | "woff" | "woff2" => (" ", Color::Rgb(243, 139, 168)),
+        // Archives & Compressed
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" => (" ", Color::Rgb(249, 226, 175)),
+        // Lockfiles
+        "lock" => ("󰌾 ", Color::Rgb(147, 153, 178)),
+        // Binaries & Executables
+        "bin" | "exe" | "dll" | "so" | "dylib" | "o" | "a" => ("󰜎 ", Color::Rgb(147, 153, 178)),
+        // Default
+        _ => ("󰈚 ", Color::Rgb(186, 194, 222)),
     }
 }
 
@@ -226,12 +359,19 @@ pub fn render_drawer(
     language: Language,
     theme: &Theme,
 ) {
-    let tab_changes_title = match language {
-        Language::En => "󰈚 Changes",
-        Language::Pt => "󰈚 Mudanças",
+    let is_compact = area.width < 34;
+
+    let (tab_changes_title, tab_commits_title, tab_stashes_title) = if is_compact {
+        match language {
+            Language::En => ("󰈚 Chg", "󰜉 Cmt", "󰮎 Stsh"),
+            Language::Pt => ("󰈚 Mud", "󰜉 Cmt", "󰮎 Stsh"),
+        }
+    } else {
+        match language {
+            Language::En => ("󰈚 Changes", "󰜉 Commits", "󰮎 Stashes"),
+            Language::Pt => ("󰈚 Mudanças", "󰜉 Commits", "󰮎 Stashes"),
+        }
     };
-    let tab_commits_title = "󰜉 Commits";
-    let tab_stashes_title = "󰮎 Stashes";
 
     let border_style = if filter_mode {
         Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)
@@ -354,11 +494,15 @@ fn render_changes_tab(
         (FileViewMode::Flat, Language::Pt) => "󰈚 Lista [t]",
     };
 
+    let show_stats = area.width >= 28;
+
     let sub_header = if filter_mode {
         match language {
             Language::En => format!(" 󰍉 Filter: {}_ ", filter_query),
             Language::Pt => format!(" 󰍉 Filtro: {}_ ", filter_query),
         }
+    } else if area.width < 28 {
+        format!(" {} ({})", mode_str, items.len())
     } else {
         format!(" Mode: {} · ({} files)", mode_str, items.len())
     };
@@ -399,7 +543,7 @@ fn render_changes_tab(
             };
             let stats_str = format!(" +{} -{}", item.additions, item.deletions);
 
-            let line = Line::from(vec![
+            let mut spans = vec![
                 cursor_span,
                 Span::styled(indent, base_style),
                 Span::styled(dir_icon, Style::default().fg(dir_color).bg(if is_selected { theme.selected_bg } else { theme.bg })),
@@ -407,9 +551,11 @@ fn render_changes_tab(
                     format!("{}/", item.name),
                     base_style.add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(stats_str, Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })),
-            ]);
-            lines.push(line);
+            ];
+            if show_stats {
+                spans.push(Span::styled(stats_str, Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })));
+            }
+            lines.push(Line::from(spans));
         } else {
             let (status_badge, status_color) = match item.status.unwrap_or(FileStatus::Modified) {
                 FileStatus::Modified => ("● ", theme.status_m),
@@ -444,16 +590,18 @@ fn render_changes_tab(
                 base_style
             };
 
-            let line = Line::from(vec![
+            let mut spans = vec![
                 cursor_span,
                 Span::styled(indent, base_style),
                 Span::styled(status_badge, Style::default().fg(status_color).bg(if is_selected { theme.selected_bg } else { theme.bg })),
                 stage_span,
                 Span::styled(icon_str, Style::default().fg(icon_color).bg(if is_selected { theme.selected_bg } else { theme.bg })),
                 Span::styled(&item.name, name_style),
-                Span::styled(stats_str, Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })),
-            ]);
-            lines.push(line);
+            ];
+            if show_stats {
+                spans.push(Span::styled(stats_str, Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })));
+            }
+            lines.push(Line::from(spans));
         }
     }
 
@@ -482,8 +630,8 @@ fn render_commits_tab(
 
     let mut lines = Vec::new();
     let header_msg = match language {
-        Language::En => format!(" Recent Commits ({}) · [Enter] View", commits.len()),
-        Language::Pt => format!(" Commits Recentes ({}) · [Enter] Ver", commits.len()),
+        Language::En => if area.width < 28 { format!(" Commits ({})", commits.len()) } else { format!(" Recent Commits ({}) · [Enter] View", commits.len()) },
+        Language::Pt => if area.width < 28 { format!(" Commits ({})", commits.len()) } else { format!(" Commits Recentes ({}) · [Enter] Ver", commits.len()) },
     };
     lines.push(Line::from(Span::styled(
         header_msg,
@@ -493,6 +641,7 @@ fn render_commits_tab(
     let max_rows = area.height.saturating_sub(1) as usize;
     let start_idx = scroll_offset;
     let end_idx = (scroll_offset + max_rows).min(commits.len());
+    let show_date = area.width >= 32;
 
     for idx in start_idx..end_idx {
         let commit = &commits[idx];
@@ -510,22 +659,27 @@ fn render_commits_tab(
             Span::styled(" ", base_style)
         };
 
-        let line = Line::from(vec![
+        let short_hash = &commit.hash[..7.min(commit.hash.len())];
+        let mut spans = vec![
             cursor_span,
             Span::styled(
-                format!(" 󰜉 {:<7} ", commit.hash),
+                format!(" 󰜉 {:<7} ", short_hash),
                 Style::default().fg(theme.key_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 &commit.message,
                 if is_selected { base_style.add_modifier(Modifier::BOLD) } else { base_style },
             ),
-            Span::styled(
+        ];
+
+        if show_date {
+            spans.push(Span::styled(
                 format!(" ({})", commit.date),
                 Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }),
-            ),
-        ]);
-        lines.push(line);
+            ));
+        }
+
+        lines.push(Line::from(spans));
     }
 
     let paragraph = Paragraph::new(lines);
@@ -553,8 +707,8 @@ fn render_stashes_tab(
 
     let mut lines = Vec::new();
     let header_msg = match language {
-        Language::En => format!(" Git Stashes ({}) · [Enter] View", stashes.len()),
-        Language::Pt => format!(" Stashes Git ({}) · [Enter] Ver", stashes.len()),
+        Language::En => if area.width < 28 { format!(" Stashes ({})", stashes.len()) } else { format!(" Git Stashes ({}) · [Enter] View", stashes.len()) },
+        Language::Pt => if area.width < 28 { format!(" Stashes ({})", stashes.len()) } else { format!(" Stashes Git ({}) · [Enter] Ver", stashes.len()) },
     };
     lines.push(Line::from(Span::styled(
         header_msg,
@@ -564,6 +718,7 @@ fn render_stashes_tab(
     let max_rows = area.height.saturating_sub(1) as usize;
     let start_idx = scroll_offset;
     let end_idx = (scroll_offset + max_rows).min(stashes.len());
+    let show_date = area.width >= 32;
 
     for idx in start_idx..end_idx {
         let stash = &stashes[idx];
@@ -581,24 +736,68 @@ fn render_stashes_tab(
             Span::styled(" ", base_style)
         };
 
-        let line = Line::from(vec![
+        let mut spans = vec![
             cursor_span,
             Span::styled(
-                format!(" 󰮎 {:<10} ", stash.selector),
+                format!(" 󰮎 {:<9} ", stash.selector),
                 Style::default().fg(theme.key_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 &stash.message,
                 if is_selected { base_style.add_modifier(Modifier::BOLD) } else { base_style },
             ),
-            Span::styled(
+        ];
+
+        if show_date {
+            spans.push(Span::styled(
                 format!(" ({})", stash.date),
                 Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }),
-            ),
-        ]);
-        lines.push(line);
+            ));
+        }
+
+        lines.push(Line::from(spans));
     }
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_file_icon_catalog() {
+        assert_eq!(file_icon("Dockerfile").0, "󰡨 ");
+        assert_eq!(file_icon("docker-compose.yml").0, "󰡨 ");
+        assert_eq!(file_icon("Cargo.toml").0, " ");
+        assert_eq!(file_icon("package.json").0, " ");
+        assert_eq!(file_icon("tsconfig.json").0, " ");
+        assert_eq!(file_icon("go.mod").0, " ");
+        assert_eq!(file_icon(".gitignore").0, "󰊢 ");
+        assert_eq!(file_icon(".env.local").0, " ");
+        assert_eq!(file_icon("README.md").0, " ");
+        assert_eq!(file_icon("LICENSE").0, "󰌆 ");
+
+        // Extensions
+        assert_eq!(file_icon("main.rs").0, " ");
+        assert_eq!(file_icon("server.go").0, " ");
+        assert_eq!(file_icon("script.py").0, " ");
+        assert_eq!(file_icon("index.js").0, " ");
+        assert_eq!(file_icon("types.ts").0, " ");
+        assert_eq!(file_icon("App.tsx").0, " ");
+        assert_eq!(file_icon("Component.vue").0, " ");
+        assert_eq!(file_icon("main.cpp").0, " ");
+        assert_eq!(file_icon("Program.cs").0, "󰌛 ");
+        assert_eq!(file_icon("App.java").0, " ");
+        assert_eq!(file_icon("App.kt").0, " ");
+        assert_eq!(file_icon("Main.swift").0, " ");
+        assert_eq!(file_icon("run.sh").0, " ");
+        assert_eq!(file_icon("schema.sql").0, " ");
+        assert_eq!(file_icon("styles.css").0, " ");
+        assert_eq!(file_icon("infra.tf").0, "󱁢 ");
+        assert_eq!(file_icon("photo.png").0, "󰈟 ");
+        assert_eq!(file_icon("archive.zip").0, " ");
+    }
+}
+

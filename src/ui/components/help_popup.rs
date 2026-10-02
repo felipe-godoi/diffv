@@ -50,6 +50,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
             ]),
             ("󰈚  View & File Tree", vec![
                 ("1 / 2 / 3", "Switch Drawer Tab: [1] Changes  [2] Commits  [3] Stashes"),
+                ("b", "Toggle File Drawer sidebar visible ↔ hidden"),
                 ("t", "Toggle Folders (Tree) ↔ Flat List"),
                 ("< / > or , / .", "Resize File Drawer width"),
                 ("/", "Filter files by path or extension (fuzzy search)"),
@@ -84,6 +85,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
             ]),
             ("󰈚  Visualização & Árvore", vec![
                 ("1 / 2 / 3", "Alternar Abas: [1] Mudanças  [2] Commits  [3] Stashes"),
+                ("b", "Exibir ↔ ocultar painel lateral (sidebar)"),
                 ("t", "Alternar entre Pastas (Tree) ↔ Lista Plana"),
                 ("< / > ou , / .", "Redimensionar largura do painel lateral"),
                 ("/", "Filtrar arquivos por caminho ou extensão (busca rápida)"),
@@ -101,6 +103,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
     };
 
     let mut lines = Vec::new();
+    let key_pad = if inner.width < 75 { 18 } else { 26 };
 
     for (sec_title, bindings) in sections {
         lines.push(Line::from(vec![
@@ -112,7 +115,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
 
         for (key, desc) in bindings {
             lines.push(Line::from(vec![
-                Span::styled(format!("    {:26}", key), Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("    {:<width$}", key, width = key_pad), Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)),
                 Span::styled(desc, Style::default().fg(theme.fg)),
             ]));
         }
@@ -173,21 +176,23 @@ pub fn render_confirm_popup(
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let px = if r.width < 90 { 96 } else { percent_x };
+    let py = if r.height < 30 { 92 } else { percent_y };
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage((100 - py) / 2),
+            Constraint::Percentage(py),
+            Constraint::Percentage((100 - py) / 2),
         ])
         .split(r);
 
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage((100 - px) / 2),
+            Constraint::Percentage(px),
+            Constraint::Percentage((100 - px) / 2),
         ])
         .split(popup_layout[1])[1]
 }
