@@ -3,3 +3,12 @@
 *.swp
 *.swo
 .DS_Store
+
+# Local credentials and machine-specific state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.ai-memory.toml
+.codegraph/

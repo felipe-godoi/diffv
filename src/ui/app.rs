@@ -24,10 +24,8 @@ use crate::ui::components::file_tree::{
 use crate::ui::components::details_popup::{render_details_popup, DetailsContent};
 use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
-use crate::ui::components::history_popup::render_history_popup;
 use crate::ui::components::ruler::render_ruler;
 use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
-use crate::ui::components::status_bar::render_status_bar;
 use crate::ui::components::toast::render_toast;
 use crate::ui::components::unified::render_unified;
 use crate::ui::components::worktree_popup::{render_worktree_popup, WorktreeCreationState};
@@ -90,6 +88,11 @@ pub struct App {
     pub visual_mode: bool,
     pub visual_anchor: usize,
     pub column_side: ColumnSide,
+    pub scroll_x: [usize; 2],
+    pub diff_width: u16,
+    pub wrap_lines: bool,
+    pub wrap_skip: usize,
+    pub diff_row_map: Vec<usize>,
 
     // File tree mode & directory collapsing
     pub file_view_mode: FileViewMode,
@@ -100,6 +103,7 @@ pub struct App {
     // File commit history (popup for single file history 'H')
     pub show_history: bool,
     pub history_commits: Vec<CommitEntry>,
+    pub history_file_path: Option<PathBuf>,
     pub selected_history_idx: usize,
     pub history_scroll: usize,
     pub active_commit_view: Option<(String, FileDiff)>,
@@ -210,12 +214,18 @@ impl App {
             visual_mode: false,
             visual_anchor: 0,
             column_side: ColumnSide::Right,
+            scroll_x: [0, 0],
+            diff_width: 0,
+            wrap_lines: true,
+            wrap_skip: 0,
+            diff_row_map: Vec::new(),
             file_view_mode: FileViewMode::Tree, // Folders ("Pastas") is default!
             collapsed_dirs: HashSet::new(),
             tree_items: Vec::new(),
             selected_tree_idx: 0,
             show_history: false,
             history_commits: Vec::new(),
+            history_file_path: None,
             selected_history_idx: 0,
             history_scroll: 0,
             active_commit_view: None,
@@ -269,6 +279,7 @@ impl App {
         if let Some((_, commit_diff)) = &self.active_commit_view {
             return Some(commit_diff);
         }
+        if self.show_history { return None; }
         self.get_underlying_file()
     }
 
@@ -313,6 +324,7 @@ impl App {
     }
 
     pub fn switch_drawer_tab(&mut self, new_tab: DrawerTab) {
+        if self.show_history || self.active_commit_info.is_some() { return; }
         self.show_drawer = true;
         if (self.active_commit_info.is_some() || self.active_stash_info.is_some() || self.active_commit_view.is_some())
             && new_tab == DrawerTab::Changes
@@ -362,6 +374,14 @@ impl App {
     }
 
     pub fn scroll_viewport_down(&mut self, amount: usize) {
+        if self.wrap_lines {
+            let remaining = self.diff_row_map.iter().filter(|&&idx| idx == self.scroll_y).count();
+            if remaining > amount {
+                self.wrap_skip += amount;
+                return;
+            }
+            self.wrap_skip = 0;
+        }
         let total = self.total_diff_rows();
         if total > 0 {
             let max_scroll = total.saturating_sub(1);
@@ -374,6 +394,10 @@ impl App {
 
 
     pub fn scroll_viewport_up(&mut self, amount: usize) {
+        if self.wrap_lines && self.wrap_skip > 0 {
+            self.wrap_skip = self.wrap_skip.saturating_sub(amount);
+            return;
+        }
         let vp = self.viewport_height.saturating_sub(3).max(1);
         self.scroll_y = self.scroll_y.saturating_sub(amount);
         if self.selected_row >= self.scroll_y + vp {
@@ -398,7 +422,7 @@ impl App {
                 self.selected_filtered_idx = filt_idx;
             }
             self.selected_row = 0;
-            self.scroll_y = 0;
+            self.wrap_skip = 0; self.scroll_y = 0;
             self.focus = Focus::DiffView;
             return true;
         }
@@ -605,7 +629,7 @@ impl App {
                 self.scroll_y = prev_scroll.min(max_rows - 1);
             } else {
                 self.selected_row = 0;
-                self.scroll_y = 0;
+                self.wrap_skip = 0; self.scroll_y = 0;
             }
         }
 
@@ -646,6 +670,46 @@ impl App {
         }
     }
 
+    fn return_to_changes(&mut self) {
+        self.show_history = false;
+        self.active_commit_info = None;
+        self.active_stash_info = None;
+        self.active_commit_view = None;
+        self.visual_mode = false;
+        self.filter_mode = false;
+        self.filter_query.clear();
+        if let Some((files, stats)) = self.live_snapshot.take() {
+            self.files = files;
+            self.repo_stats = stats;
+        }
+        self.drawer_tab = DrawerTab::Changes;
+        self.focus = Focus::FileTree;
+        self.show_drawer = true;
+        self.scroll_x = [0, 0];
+        self.wrap_skip = 0;
+        self.update_filter();
+    }
+
+    fn horizontal_index(&self) -> usize {
+        if self.is_unified || self.column_side == ColumnSide::Right { 1 } else { 0 }
+    }
+
+    fn horizontal_limit(&self) -> usize {
+        use unicode_width::UnicodeWidthStr;
+        let idx = self.horizontal_index();
+        let max_width = self.current_file().map(|f| {
+            if self.is_unified {
+                f.hunks.iter().flat_map(|h| &h.lines).map(|l| l.content.width()).max().unwrap_or(0)
+            } else {
+                f.aligned_rows.iter().filter_map(|r| if idx == 0 { r.left.as_ref() } else { r.right.as_ref() })
+                    .map(|l| l.content.width()).max().unwrap_or(0)
+            }
+        }).unwrap_or(0);
+        let width = self.diff_width.saturating_sub(2) as usize;
+        let content_width = if self.is_unified { width.saturating_sub(16) } else { (width.saturating_sub(1) / 2).saturating_sub(10) };
+        max_width.saturating_sub(content_width.max(1))
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) {
         // Clear old notification if older than 1800ms
         if let Some((_, time)) = self.notification {
@@ -657,7 +721,7 @@ impl App {
         // 0. Details Modal Active
         if self.show_details_popup {
             match key.code {
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') => {
+                KeyCode::Esc | KeyCode::Char('q' | 'Q') | KeyCode::Char('i') => {
                     self.show_details_popup = false;
                     self.details_popup_scroll = 0;
                 }
@@ -674,11 +738,11 @@ impl App {
                     self.details_popup_scroll = self.details_popup_scroll.saturating_sub(10);
                 }
                 KeyCode::Enter => {
-                    if self.drawer_tab == DrawerTab::Commits && self.active_commit_info.is_none() {
+                    if self.drawer_tab == DrawerTab::Commits && self.active_commit_info.is_none() && !self.show_history {
                         self.show_details_popup = false;
                         self.details_popup_scroll = 0;
                         self.load_selected_repo_commit();
-                    } else if self.drawer_tab == DrawerTab::Stashes && self.active_stash_info.is_none() {
+                    } else if self.drawer_tab == DrawerTab::Stashes && self.active_stash_info.is_none() && !self.show_history {
                         self.show_details_popup = false;
                         self.details_popup_scroll = 0;
                         self.load_selected_stash();
@@ -687,6 +751,24 @@ impl App {
                 _ => {}
             }
             return;
+        }
+
+        // Search shortcuts also work from temporary drawers and while filtering.
+        if !self.show_worktrees && !self.show_help && self.confirm_action.is_none()
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            let request = match key.code {
+                KeyCode::Char('p' | 'P') => Some(FzfRequest::Files),
+                KeyCode::Char('s' | 'S') => Some(FzfRequest::Text),
+                _ => None,
+            };
+            if let Some(request) = request {
+                self.pending_key = None;
+                self.pending_key_time = None;
+                self.filter_mode = false;
+                self.fzf_request = Some(request);
+                return;
+            }
         }
 
         // Check pending key sequence timeout (1 second)
@@ -705,7 +787,7 @@ impl App {
                         // gg: jump to top of view
                         if self.focus == Focus::DiffView {
                             self.selected_row = 0;
-                            self.scroll_y = 0;
+                            self.wrap_skip = 0; self.scroll_y = 0;
                         } else if self.drawer_tab == DrawerTab::Changes || self.active_commit_info.is_some() || self.active_stash_info.is_some() {
                             if self.file_view_mode == FileViewMode::Tree {
                                 self.selected_tree_idx = 0;
@@ -778,21 +860,35 @@ impl App {
                     KeyCode::Esc => {
                         self.worktree_creation = None;
                     }
-                    KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up => {
+                    KeyCode::Tab => {
+                        if creation.active_field == 1 { creation.complete_branch(); }
                         creation.active_field = 1 - creation.active_field;
+                    }
+                    KeyCode::BackTab => { creation.active_field = 1 - creation.active_field; }
+                    KeyCode::Down | KeyCode::Up => {
+                        let count = creation.candidates().len();
+                        if creation.active_field == 1 && count > 0 {
+                            creation.selected_candidate = if key.code == KeyCode::Down {
+                                (creation.selected_candidate + 1) % count
+                            } else { (creation.selected_candidate + count - 1) % count };
+                        } else { creation.active_field = 1 - creation.active_field; }
                     }
                     KeyCode::Backspace => {
                         if creation.active_field == 0 {
                             creation.path_input.pop();
+                            creation.path_manual = true;
                         } else {
                             creation.branch_input.pop();
+                            creation.update_branch();
                         }
                     }
                     KeyCode::Char(c) => {
                         if creation.active_field == 0 {
                             creation.path_input.push(c);
+                            creation.path_manual = true;
                         } else {
                             creation.branch_input.push(c);
+                            creation.update_branch();
                         }
                     }
                     KeyCode::Enter => {
@@ -831,11 +927,16 @@ impl App {
             }
 
             match key.code {
-                KeyCode::Esc | KeyCode::Char('W') | KeyCode::Char('q') => {
+                KeyCode::Esc | KeyCode::Char('W') | KeyCode::Char('q' | 'Q') => {
                     self.show_worktrees = false;
                 }
                 KeyCode::Char('a') | KeyCode::Char('n') | KeyCode::Char('c') => {
-                    self.worktree_creation = Some(WorktreeCreationState::default());
+                    if let AppMode::Git { git_provider, .. } = &self.mode {
+                        let base = if git_provider.repo_root.join(".worktree").is_dir() {
+                            ".worktree/".to_string()
+                        } else { "../".to_string() };
+                        self.worktree_creation = Some(WorktreeCreationState::new(base, git_provider.get_branches()));
+                    }
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     if self.selected_worktree_idx + 1 < self.worktrees.len() {
@@ -864,7 +965,7 @@ impl App {
 
         // 2. Help Modal Active
         if self.show_help {
-            if key.code == KeyCode::Esc || key.code == KeyCode::Char('?') || key.code == KeyCode::Char('q') {
+            if key.code == KeyCode::Esc || key.code == KeyCode::Char('?') || matches!(key.code, KeyCode::Char('q' | 'Q')) {
                 self.show_help = false;
             }
             return;
@@ -883,30 +984,45 @@ impl App {
             return;
         }
 
-        // 3. History Modal Active
-        if self.show_history {
+        if matches!(key.code, KeyCode::Char('q' | 'Q')) {
+            if self.show_history || self.active_commit_info.is_some() || self.active_stash_info.is_some()
+                || self.active_commit_view.is_some() || self.live_snapshot.is_some()
+                || self.drawer_tab != DrawerTab::Changes || self.focus != Focus::FileTree
+                || self.visual_mode || self.filter_mode || !self.filter_query.is_empty()
+            { self.return_to_changes(); } else { self.should_quit = true; }
+            return;
+        }
+
+        // Temporary file history drawer
+        if self.show_history && (self.focus == Focus::FileTree || key.code == KeyCode::Esc) {
             match key.code {
+                KeyCode::Tab | KeyCode::BackTab if self.active_commit_view.is_some() => self.focus = Focus::DiffView,
+                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => self.file_tree_down(1),
+                KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => self.file_tree_up(1),
+                KeyCode::PageDown => self.file_tree_down(self.file_tree_height.saturating_sub(4).max(1)),
+                KeyCode::PageUp => self.file_tree_up(self.file_tree_height.saturating_sub(4).max(1)),
+                KeyCode::Char('G') => self.file_tree_down(self.history_commits.len()),
+                KeyCode::Home => self.file_tree_up(self.history_commits.len()),
                 KeyCode::Esc | KeyCode::Char('H') | KeyCode::Char('q') => {
                     self.show_history = false;
+                    self.active_commit_view = None;
+                    self.focus = Focus::FileTree;
                 }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if self.selected_history_idx + 1 < self.history_commits.len() {
-                        self.selected_history_idx += 1;
-                        if self.selected_history_idx >= self.history_scroll + 12 {
-                            self.history_scroll = self.selected_history_idx.saturating_sub(11);
-                        }
-                    }
+                KeyCode::Char('j') | KeyCode::Down => self.file_tree_down(1),
+                KeyCode::Char('k') | KeyCode::Up => self.file_tree_up(1),
+                KeyCode::Char('i') => {
+                    self.show_details_popup = true;
+                    self.details_popup_scroll = 0;
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if self.selected_history_idx > 0 {
-                        self.selected_history_idx -= 1;
-                        if self.selected_history_idx < self.history_scroll {
-                            self.history_scroll = self.selected_history_idx;
-                        }
-                    }
+                KeyCode::Char('r') => {
+                    self.wrap_lines = !self.wrap_lines;
+                    self.wrap_skip = 0;
+                    self.scroll_x = [0, 0];
                 }
+                KeyCode::Char('?') => self.show_help = true,
                 KeyCode::Enter => {
                     self.load_selected_commit_diff();
+                    self.focus = Focus::DiffView;
                 }
                 _ => {}
             }
@@ -1119,6 +1235,12 @@ impl App {
             KeyCode::Char('3') => {
                 self.switch_drawer_tab(DrawerTab::Stashes);
             }
+            KeyCode::Tab | KeyCode::BackTab if self.focus == Focus::DiffView => {
+                self.column_side = if self.column_side == ColumnSide::Left { ColumnSide::Right } else { ColumnSide::Left };
+            }
+            KeyCode::Tab | KeyCode::BackTab if self.show_history || self.active_commit_info.is_some() => {
+                self.focus = if self.focus == Focus::FileTree { Focus::DiffView } else { Focus::FileTree };
+            }
             KeyCode::Tab => {
                 let next = match self.drawer_tab {
                     DrawerTab::Changes => DrawerTab::Commits,
@@ -1165,6 +1287,11 @@ impl App {
                 self.show_help = true;
             }
 
+            KeyCode::Char('r') => {
+                self.wrap_lines = !self.wrap_lines;
+                self.wrap_skip = 0;
+                self.scroll_x = [0, 0];
+            }
             KeyCode::Char('m') => {
                 self.is_unified = !self.is_unified;
                 let mode = if self.is_unified { "Unified" } else { "Side-by-Side" };
@@ -1202,6 +1329,13 @@ impl App {
                 self.filter_mode = true;
                 self.focus = Focus::FileTree;
             }
+            KeyCode::Char('0') | KeyCode::Home if self.focus == Focus::DiffView => {
+                let idx = self.horizontal_index(); self.scroll_x[idx] = 0;
+            }
+            KeyCode::Char('$') | KeyCode::End if self.focus == Focus::DiffView => {
+                let idx = self.horizontal_index();
+                self.scroll_x[idx] = self.horizontal_limit();
+            }
             KeyCode::Char('h') | KeyCode::Left => {
                 if self.focus == Focus::FileTree && self.drawer_tab == DrawerTab::Changes && self.file_view_mode == FileViewMode::Tree {
                     // Collapse directory
@@ -1212,12 +1346,8 @@ impl App {
                         }
                     }
                 } else if self.focus == Focus::DiffView {
-                    self.column_side = ColumnSide::Left;
-                    let msg = match self.language {
-                        Language::En => "Focus: OLD version (left)",
-                        Language::Pt => "Foco: versão ANTIGA (esquerda)",
-                    };
-                    self.set_notification(msg);
+                    let idx = self.horizontal_index();
+                    self.scroll_x[idx] = self.scroll_x[idx].saturating_sub(4);
                 }
             }
             KeyCode::Char('l') | KeyCode::Right => {
@@ -1230,12 +1360,8 @@ impl App {
                         }
                     }
                 } else if self.focus == Focus::DiffView {
-                    self.column_side = ColumnSide::Right;
-                    let msg = match self.language {
-                        Language::En => "Focus: NEW version (right)",
-                        Language::Pt => "Foco: versão NOVA (direita)",
-                    };
-                    self.set_notification(msg);
+                    let idx = self.horizontal_index();
+                    self.scroll_x[idx] = self.scroll_x[idx].saturating_add(4).min(self.horizontal_limit());
                 }
             }
             KeyCode::Char('<') | KeyCode::Char(',') => {
@@ -1449,6 +1575,16 @@ impl App {
     }
 
     pub fn file_tree_down(&mut self, amount: usize) {
+        if self.show_history {
+            let previous = self.selected_history_idx;
+            self.selected_history_idx = (self.selected_history_idx + amount).min(self.history_commits.len().saturating_sub(1));
+            let rows = self.file_tree_height.saturating_sub(4).max(1);
+            if self.selected_history_idx < self.history_scroll { self.history_scroll = self.selected_history_idx; }
+            if self.selected_history_idx >= self.history_scroll + rows { self.history_scroll = self.selected_history_idx.saturating_sub(rows - 1); }
+            if self.selected_history_idx != previous { self.load_selected_commit_diff(); }
+            return;
+        }
+
         let tree_vp = self.file_tree_height.saturating_sub(4).max(1);
         if self.drawer_tab == DrawerTab::Changes || self.active_commit_info.is_some() || self.active_stash_info.is_some() {
             if self.file_view_mode == FileViewMode::Tree {
@@ -1457,7 +1593,7 @@ impl App {
                     if self.selected_tree_idx >= self.file_tree_scroll + tree_vp {
                         self.file_tree_scroll = self.selected_tree_idx.saturating_sub(tree_vp - 1);
                     }
-                    self.scroll_y = 0;
+                    self.wrap_skip = 0; self.scroll_y = 0;
                     self.selected_row = 0;
                 }
             } else if !self.filtered_indices.is_empty() {
@@ -1465,7 +1601,7 @@ impl App {
                 if self.selected_filtered_idx >= self.file_tree_scroll + tree_vp {
                     self.file_tree_scroll = self.selected_filtered_idx.saturating_sub(tree_vp - 1);
                 }
-                self.scroll_y = 0;
+                self.wrap_skip = 0; self.scroll_y = 0;
                 self.selected_row = 0;
             }
             return;
@@ -1493,20 +1629,30 @@ impl App {
     }
 
     pub fn file_tree_up(&mut self, amount: usize) {
+        if self.show_history {
+            let previous = self.selected_history_idx;
+            self.selected_history_idx = self.selected_history_idx.saturating_sub(amount);
+            let rows = self.file_tree_height.saturating_sub(4).max(1);
+            if self.selected_history_idx < self.history_scroll { self.history_scroll = self.selected_history_idx; }
+            if self.selected_history_idx >= self.history_scroll + rows { self.history_scroll = self.selected_history_idx.saturating_sub(rows - 1); }
+            if self.selected_history_idx != previous { self.load_selected_commit_diff(); }
+            return;
+        }
+
         if self.drawer_tab == DrawerTab::Changes || self.active_commit_info.is_some() || self.active_stash_info.is_some() {
             if self.file_view_mode == FileViewMode::Tree {
                 self.selected_tree_idx = self.selected_tree_idx.saturating_sub(amount);
                 if self.selected_tree_idx < self.file_tree_scroll {
                     self.file_tree_scroll = self.selected_tree_idx;
                 }
-                self.scroll_y = 0;
+                self.wrap_skip = 0; self.scroll_y = 0;
                 self.selected_row = 0;
             } else {
                 self.selected_filtered_idx = self.selected_filtered_idx.saturating_sub(amount);
                 if self.selected_filtered_idx < self.file_tree_scroll {
                     self.file_tree_scroll = self.selected_filtered_idx;
                 }
-                self.scroll_y = 0;
+                self.wrap_skip = 0; self.scroll_y = 0;
                 self.selected_row = 0;
             }
             return;
@@ -1530,6 +1676,7 @@ impl App {
     }
 
     pub fn scroll_down(&mut self, amount: usize) {
+        self.wrap_skip = 0;
         if let Some(file) = self.current_file() {
             let total = if self.is_unified {
                 file.hunks.iter().map(|h| h.lines.len() + 1).sum()
@@ -1547,6 +1694,7 @@ impl App {
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
+        self.wrap_skip = 0;
         self.selected_row = self.selected_row.saturating_sub(amount);
         if self.selected_row < self.scroll_y {
             self.scroll_y = self.selected_row;
@@ -1608,7 +1756,7 @@ impl App {
                             self.update_filter();
                             self.selected_filtered_idx = 0;
                             self.selected_tree_idx = 0;
-                            self.scroll_y = 0;
+                            self.wrap_skip = 0; self.scroll_y = 0;
                             self.selected_row = 0;
                             self.focus = Focus::FileTree;
                             let msg = match self.language {
@@ -1653,7 +1801,7 @@ impl App {
                             self.update_filter();
                             self.selected_filtered_idx = 0;
                             self.selected_tree_idx = 0;
-                            self.scroll_y = 0;
+                            self.wrap_skip = 0; self.scroll_y = 0;
                             self.selected_row = 0;
                             self.focus = Focus::FileTree;
                             let msg = match self.language {
@@ -1697,6 +1845,33 @@ impl App {
             self.file_tree_width
         };
 
+        if self.show_history && mouse.column < effective_tree_width {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.file_tree_down(3),
+                MouseEventKind::ScrollUp => self.file_tree_up(3),
+                MouseEventKind::Down(MouseButton::Left) if mouse.row >= 4 => {
+                    let idx = self.history_scroll + mouse.row.saturating_sub(4) as usize;
+                    if idx < self.history_commits.len() {
+                        self.selected_history_idx = idx;
+                        self.load_selected_commit_diff();
+                    }
+                }
+                _ => {}
+            }
+            self.focus = Focus::FileTree;
+            return;
+        }
+
+        if mouse.column >= effective_tree_width &&
+            (matches!(mouse.kind, MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight) ||
+             (mouse.modifiers.contains(KeyModifiers::SHIFT) && matches!(mouse.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown))) {
+            let idx = self.horizontal_index();
+            self.scroll_x[idx] = if matches!(mouse.kind, MouseEventKind::ScrollLeft | MouseEventKind::ScrollUp) {
+                self.scroll_x[idx].saturating_sub(4)
+            } else { self.scroll_x[idx].saturating_add(4).min(self.horizontal_limit()) };
+            return;
+        }
+
         match mouse.kind {
             MouseEventKind::ScrollDown => {
                 if effective_tree_width > 0 && mouse.column < effective_tree_width {
@@ -1724,6 +1899,7 @@ impl App {
                     if mouse.column < effective_tree_width {
                         self.focus = Focus::FileTree;
                         if mouse.row <= 2 {
+                            if self.active_commit_info.is_some() { return; }
                             let col = mouse.column;
                             let tab_w = (effective_tree_width / 3).max(1);
                             if col < tab_w {
@@ -1762,7 +1938,7 @@ impl App {
                             if self.file_view_mode == FileViewMode::Tree {
                                 if target_idx < self.tree_items.len() {
                                     self.selected_tree_idx = target_idx;
-                                    self.scroll_y = 0;
+                                    self.wrap_skip = 0; self.scroll_y = 0;
                                     self.selected_row = 0;
                                     let item = &self.tree_items[target_idx];
                                     if item.is_dir {
@@ -1776,7 +1952,7 @@ impl App {
                                 }
                             } else if target_idx < self.filtered_indices.len() {
                                 self.selected_filtered_idx = target_idx;
-                                self.scroll_y = 0;
+                                self.wrap_skip = 0; self.scroll_y = 0;
                                 self.selected_row = 0;
                             }
                             return;
@@ -1802,7 +1978,7 @@ impl App {
                             if self.file_view_mode == FileViewMode::Tree {
                                 if target_idx < self.tree_items.len() {
                                     self.selected_tree_idx = target_idx;
-                                    self.scroll_y = 0;
+                                    self.wrap_skip = 0; self.scroll_y = 0;
                                     self.selected_row = 0;
                                     let item = &self.tree_items[target_idx];
                                     if item.is_dir {
@@ -1816,7 +1992,7 @@ impl App {
                                 }
                             } else if target_idx < self.filtered_indices.len() {
                                 self.selected_filtered_idx = target_idx;
-                                self.scroll_y = 0;
+                                self.wrap_skip = 0; self.scroll_y = 0;
                                 self.selected_row = 0;
                             }
                             return;
@@ -1836,7 +2012,7 @@ impl App {
                                 if self.file_view_mode == FileViewMode::Tree {
                                     if target_idx < self.tree_items.len() {
                                         self.selected_tree_idx = target_idx;
-                                        self.scroll_y = 0;
+                                        self.wrap_skip = 0; self.scroll_y = 0;
                                         self.selected_row = 0;
                                         let item = &self.tree_items[target_idx];
                                         if item.is_dir {
@@ -1850,7 +2026,7 @@ impl App {
                                     }
                                 } else if target_idx < self.filtered_indices.len() {
                                     self.selected_filtered_idx = target_idx;
-                                    self.scroll_y = 0;
+                                    self.wrap_skip = 0; self.scroll_y = 0;
                                     self.selected_row = 0;
                                 }
                             }
@@ -1880,18 +2056,18 @@ impl App {
                 }
 
                 if mouse.column > effective_tree_width && mouse.row >= 1 {
-                    if self.drawer_tab == DrawerTab::Commits && self.active_commit_info.is_none() {
+                    if self.drawer_tab == DrawerTab::Commits && self.active_commit_info.is_none() && !self.show_history {
                         self.load_selected_repo_commit();
                         return;
                     }
-                    if self.drawer_tab == DrawerTab::Stashes && self.active_stash_info.is_none() {
+                    if self.drawer_tab == DrawerTab::Stashes && self.active_stash_info.is_none() && !self.show_history {
                         self.load_selected_stash();
                         return;
                     }
 
                     self.focus = Focus::DiffView;
                     let diff_inner_x = mouse.column.saturating_sub(effective_tree_width + 1);
-                    if diff_inner_x < (self.viewport_height.max(30) as u16) {
+                    if diff_inner_x < self.diff_width.saturating_sub(3) / 2 {
                         self.column_side = ColumnSide::Left;
                     } else {
                         self.column_side = ColumnSide::Right;
@@ -1901,7 +2077,7 @@ impl App {
                         return;
                     }
                     let line_row = (mouse.row.saturating_sub(3)) as usize;
-                    let target_row = self.scroll_y + line_row;
+                    let target_row = self.diff_row_map.get(line_row).copied().unwrap_or(usize::MAX);
                     if let Some(file) = self.current_file() {
                         let total = if self.is_unified {
                             file.hunks.iter().map(|h| h.lines.len() + 1).sum()
@@ -2225,12 +2401,17 @@ impl App {
     pub fn open_file_history(&mut self) {
         if let AppMode::Git { git_provider, .. } = &self.mode {
             if let Some(file) = self.get_underlying_file() {
-                match git_provider.get_file_history(&file.new_path, 50) {
+                let path = file.new_path.clone();
+                match git_provider.get_file_history(&path, 50) {
                     Ok(commits) if !commits.is_empty() => {
+                        self.history_file_path = Some(path);
                         self.history_commits = commits;
                         self.selected_history_idx = 0;
                         self.history_scroll = 0;
                         self.show_history = true;
+                        self.show_drawer = true;
+                        self.focus = Focus::FileTree;
+                        self.load_selected_commit_diff();
                     }
                     _ => {
                         self.set_notification(format!("No git history found for {}", file.display_path()));
@@ -2245,25 +2426,23 @@ impl App {
     }
 
     pub fn load_selected_commit_diff(&mut self) {
-        if let Some(commit) = self.history_commits.get(self.selected_history_idx) {
-            let hash = commit.hash.clone();
-            let msg = commit.message.clone();
-
-            if let AppMode::Git { git_provider, .. } = &self.mode {
-                if let Some(file) = self.get_underlying_file() {
-                    match git_provider.load_commit_diff_for_file(&hash, &file.new_path) {
-                        Ok(Some(commit_diff)) => {
-                            self.active_commit_view = Some((hash.clone(), commit_diff));
-                            self.show_history = false;
-                            self.scroll_y = 0;
-                            self.selected_row = 0;
-                            self.set_notification(format!("Viewing commit {} - {} (Press Esc/H to return)", hash, msg));
-                        }
-                        _ => {
-                            self.set_notification(format!("No diff changes in commit {} for this file", hash));
-                        }
-                    }
-                }
+        let Some(commit) = self.history_commits.get(self.selected_history_idx) else { return; };
+        let hash = commit.hash.clone();
+        if self.active_commit_view.as_ref().map(|(active, _)| active == &hash).unwrap_or(false) { return; }
+        let path = self.history_file_path.clone().or_else(|| self.get_underlying_file().map(|f| f.new_path.clone()));
+        self.active_commit_view = None;
+        self.scroll_x = [0, 0];
+        self.wrap_skip = 0;
+        self.scroll_y = 0;
+        self.selected_row = 0;
+        if let (AppMode::Git { git_provider, .. }, Some(path)) = (&self.mode, path) {
+            match git_provider.load_commit_diff_for_file(&hash, &path) {
+                Ok(Some(diff)) => self.active_commit_view = Some((hash, diff)),
+                Ok(None) => self.set_notification(match self.language {
+                    Language::En => "No text diff for this file in the selected commit",
+                    Language::Pt => "Sem diff de texto para este arquivo no commit selecionado",
+                }),
+                Err(err) => self.set_notification(format!("Error loading history diff: {}", err)),
             }
         }
     }
@@ -2278,7 +2457,6 @@ impl App {
             .constraints([
                 Constraint::Length(2), // Header
                 Constraint::Min(5),    // Main
-                Constraint::Length(1), // Status Bar
             ])
             .split(size);
 
@@ -2329,6 +2507,7 @@ impl App {
 
         let file_tree_area = main_chunks[0];
         let diff_area = main_chunks[1];
+        self.diff_width = diff_area.width;
         let ruler_area = main_chunks[2];
 
         self.viewport_height = diff_area.height as usize;
@@ -2345,31 +2524,32 @@ impl App {
 
                 frame,
                 file_tree_area,
-                self.drawer_tab,
+                if self.show_history { DrawerTab::Commits } else { self.drawer_tab },
                 &self.tree_items,
                 selected_file_idx,
                 self.file_tree_scroll,
-                &self.repo_commits,
-                self.selected_repo_commit_idx,
-                self.repo_commit_scroll,
+                if self.show_history { &self.history_commits } else { &self.repo_commits },
+                if self.show_history { self.selected_history_idx } else { self.selected_repo_commit_idx },
+                if self.show_history { self.history_scroll } else { self.repo_commit_scroll },
                 &self.stashes,
                 self.selected_stash_idx,
                 self.stash_scroll,
-                self.active_commit_info.as_ref(),
-                self.active_stash_info.as_ref(),
+                if self.show_history { None } else { self.active_commit_info.as_ref() },
+                if self.show_history { None } else { self.active_stash_info.as_ref() },
                 self.focus == Focus::FileTree,
                 self.filter_mode,
                 &self.filter_query,
                 self.file_view_mode,
                 self.language,
                 &self.theme,
+                if self.show_history { Some(match self.language { Language::En => "File history", Language::Pt => "Histórico do arquivo" }) } else { None },
             );
         }
 
         let is_commits_overview = self.drawer_tab == DrawerTab::Commits && self.active_commit_info.is_none();
         let is_stashes_overview = self.drawer_tab == DrawerTab::Stashes && self.active_stash_info.is_none();
 
-        if is_commits_overview {
+        if is_commits_overview && !self.show_history {
             if let Some(commit) = self.repo_commits.get(self.selected_repo_commit_idx) {
                 crate::ui::components::commit_view::render_commit_overview(
                     frame,
@@ -2379,7 +2559,7 @@ impl App {
                     &self.theme,
                 );
             }
-        } else if is_stashes_overview {
+        } else if is_stashes_overview && !self.show_history {
             if let Some(stash) = self.stashes.get(self.selected_stash_idx) {
                 crate::ui::components::commit_view::render_stash_overview(
                     frame,
@@ -2390,6 +2570,23 @@ impl App {
                 );
             }
         } else {
+            if self.wrap_lines && self.selected_row >= self.scroll_y {
+                use unicode_width::UnicodeWidthStr;
+                let width = if self.is_unified { diff_area.width.saturating_sub(18) } else { (diff_area.width.saturating_sub(3) / 2).saturating_sub(10) }.max(1) as usize;
+                let height = self.current_file().map(|f| {
+                    if self.is_unified {
+                        f.hunks.iter().flat_map(|h| std::iter::once(1usize).chain(h.lines.iter().map(|l| l.content.width().max(1).div_ceil(width))))
+                            .skip(self.scroll_y).take(self.selected_row - self.scroll_y + 1).sum::<usize>()
+                    } else {
+                        f.aligned_rows.iter().skip(self.scroll_y).take(self.selected_row - self.scroll_y + 1).map(|r| {
+                            let len = r.left.as_ref().map(|l| l.content.width()).unwrap_or(0).max(r.right.as_ref().map(|l| l.content.width()).unwrap_or(0));
+                            len.max(1).div_ceil(width)
+                        }).sum::<usize>()
+                    }
+                }).unwrap_or(0);
+                if height > diff_area.height.saturating_sub(3) as usize { self.scroll_y = self.selected_row; }
+            }
+            let mut row_map = Vec::new();
             let cur_file = self.current_file();
             let syntax_enabled = self.config.ui.syntax_highlighting;
 
@@ -2405,6 +2602,10 @@ impl App {
                     diff_area,
                     cur_file,
                     self.scroll_y,
+                    self.scroll_x[1],
+                    self.wrap_lines,
+                    self.wrap_skip,
+                    &mut row_map,
                     self.selected_row,
                     visual_range,
                     self.focus == Focus::DiffView,
@@ -2417,6 +2618,10 @@ impl App {
                     diff_area,
                     cur_file,
                     self.scroll_y,
+                    self.scroll_x,
+                    self.wrap_lines,
+                    self.wrap_skip,
+                    &mut row_map,
                     self.selected_row,
                     visual_range,
                     self.column_side,
@@ -2430,27 +2635,17 @@ impl App {
                 let vp_height = diff_area.height as usize;
                 render_ruler(frame, ruler_area, cur_file, self.scroll_y, vp_height, &self.theme);
             }
+            self.diff_row_map = row_map;
         }
-
-        // 3. Render Status Bar (always shows dedicated contextual shortcuts)
-        render_status_bar(
-            frame,
-            chunks[2],
-            self.focus,
-            self.drawer_tab,
-            self.visual_mode,
-            self.active_commit_info.is_some(),
-            self.active_stash_info.is_some(),
-            self.language,
-            &self.theme,
-        );
 
         // 4. Overlays
         if self.show_help {
             render_help_popup(frame, size, self.language, &self.theme);
         } else if self.show_details_popup {
             let cur_file = self.current_file();
-            let content = if let Some(commit) = &self.active_commit_info {
+            let content = if self.show_history && !self.history_commits.is_empty() {
+                DetailsContent::Commit(&self.history_commits[self.selected_history_idx], cur_file.map(std::slice::from_ref).unwrap_or(&[]))
+            } else if let Some(commit) = &self.active_commit_info {
                 DetailsContent::Commit(commit, &self.files)
             } else if self.drawer_tab == DrawerTab::Commits && !self.repo_commits.is_empty() {
                 DetailsContent::Commit(&self.repo_commits[self.selected_repo_commit_idx], &[])
@@ -2480,20 +2675,6 @@ impl App {
                 self.language,
                 &self.theme,
             );
-        } else if self.show_history {
-            let path_str = self
-                .get_underlying_file()
-                .map(|f| f.display_path())
-                .unwrap_or_default();
-            render_history_popup(
-                frame,
-                size,
-                &path_str,
-                &self.history_commits,
-                self.selected_history_idx,
-                self.history_scroll,
-                &self.theme,
-            );
         } else if let Some((_, msg)) = &self.confirm_action {
             render_confirm_popup(frame, size, msg, self.language, &self.theme);
         }
@@ -2519,7 +2700,7 @@ impl App {
             );
         }
 
-        // 6. Floating Toast Notification (does not overwrite status bar shortcuts)
+        // Floating notification styled with the active theme
         if let Some((msg, _)) = &self.notification {
             render_toast(frame, size, msg, &self.theme);
         }

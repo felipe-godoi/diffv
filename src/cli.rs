@@ -12,6 +12,10 @@ use std::path::PathBuf;
     and support for arbitrary file/dir comparison and stdin pipes."
 )]
 pub struct Cli {
+    /// Skip the automatic update check on startup
+    #[arg(long)]
+    pub no_update: bool,
+
     /// Positional targets: can be a git ref (HEAD~1, branch), two files, two directories, or '-' for stdin
     #[arg(value_name = "TARGET")]
     pub targets: Vec<String>,

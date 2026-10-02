@@ -215,7 +215,7 @@ use_nvr = true                 # Usa nvr (neovim-remote) se disponível no tmux
 ## 7. Arquitetura Técnica Sugerida
 
 ### 7.1 Stack Tecnológica Adotada: **Rust**
-Conforme detalhado no [docs/architecture.md](file:///Users/felipegodoi/Documents/repos/cli-diffviewer/docs/architecture.md), a ferramenta é implementada em **Rust** utilizando:
+Conforme detalhado no [docs/architecture.md](architecture.md), a ferramenta é implementada em **Rust** utilizando:
 - **`ratatui` + `crossterm`**: Renderização em TUI de altíssima performance, double buffering por célula e zero flickering em side-by-side.
 - **`similar`**: Motor de Myers/Patience diffing e Levenshtein token diffing para realce intra-linha.
 - **`notify` + `notify-debouncer-mini`**: File watcher em background thread com debounce para acompanhamento de agentes de IA.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # diffv Installer for macOS and Linux
-# https://github.com/felipegodoi/cli-diffviewer
+# https://github.com/felipe-godoi/diffv
 # ==============================================================================
 
 set -e
@@ -151,18 +151,35 @@ if [ "$IS_LOCAL_REPO" -eq 1 ]; then
     cp "$BINARY_SOURCE" "$INSTALL_DIR/diffv"
     chmod +x "$INSTALL_DIR/diffv"
 else
-    # Remote install (e.g. curl -fsSL https://... | bash)
-    if [ "$HAS_CARGO" -eq 1 ]; then
-        info "Installing diffv via Cargo..."
-        cargo install --git https://github.com/felipegodoi/cli-diffviewer.git --force
-        if [ -f "$HOME/.cargo/bin/diffv" ]; then
-            ln -sf "$HOME/.cargo/bin/diffv" "$INSTALL_DIR/diffv"
+    # Public release install: Rust and GitHub authentication are not required.
+    case "$OS" in
+        Darwin) TARGET_OS="apple-darwin" ;;
+        Linux) TARGET_OS="unknown-linux-gnu" ;;
+    esac
+    TARGET_ARCH="$ARCH_NAME"
+    [ "$TARGET_ARCH" = "arm64" ] && TARGET_ARCH="aarch64"
+    ASSET="diffv-$TARGET_ARCH-$TARGET_OS"
+    RELEASE_URL="https://github.com/felipe-godoi/diffv/releases/latest/download/$ASSET"
+    DOWNLOAD_DIR=$(mktemp -d)
+    trap 'rm -rf "$DOWNLOAD_DIR"' EXIT
+    info "Downloading latest diffv release..."
+    if curl --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 90 -fsSL "$RELEASE_URL" -o "$DOWNLOAD_DIR/$ASSET"; then
+        curl --proto '=https' --proto-redir '=https' --connect-timeout 5 --max-time 15 -fsSL "$RELEASE_URL.sha256" -o "$DOWNLOAD_DIR/$ASSET.sha256"
+        if command -v sha256sum >/dev/null 2>&1; then
+            (cd "$DOWNLOAD_DIR" && sha256sum -c "$ASSET.sha256")
+        else
+            (cd "$DOWNLOAD_DIR" && shasum -a 256 -c "$ASSET.sha256")
         fi
+        STAGED_BINARY=$(mktemp "$INSTALL_DIR/.diffv-install.XXXXXX")
+        cp "$DOWNLOAD_DIR/$ASSET" "$STAGED_BINARY"
+        chmod +x "$STAGED_BINARY"
+        mv -f "$STAGED_BINARY" "$INSTALL_DIR/diffv"
     else
-        warn "Cargo not found. Installing Rust toolchain via rustup..."
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        source "$HOME/.cargo/env"
-        cargo install --git https://github.com/felipegodoi/cli-diffviewer.git --force
+        warn "No prebuilt release available for this platform; building from source."
+        if [ "$HAS_CARGO" -eq 0 ]; then
+            error "Install Rust from https://rustup.rs or choose a supported release binary."
+        fi
+        cargo install --git https://github.com/felipe-godoi/diffv.git --locked --force
         ln -sf "$HOME/.cargo/bin/diffv" "$INSTALL_DIR/diffv"
     fi
 fi

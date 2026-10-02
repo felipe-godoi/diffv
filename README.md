@@ -28,13 +28,13 @@ You can install `diffv` with a single command:
 
 ```bash
 # Via curl
-curl -fsSL https://raw.githubusercontent.com/felipegodoi/cli-diffviewer/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/felipe-godoi/diffv/main/install.sh | bash
 
 # Or from a cloned repository
 ./install.sh
 ```
 
-The installer detects your OS and architecture, compiles an optimized release build, copies the executable to `~/.local/bin/diffv`, and ensures it is available in your `$PATH`.
+The installer detects your OS and architecture, downloads the latest release binary, verifies its SHA-256 checksum, and installs it to `~/.local/bin/diffv`. Remote installation needs no Rust toolchain or GitHub login. Running the installer from a source checkout builds the local code.
 
 To uninstall:
 ```bash
@@ -44,7 +44,7 @@ To uninstall:
 ### Manual Install via Cargo
 
 ```bash
-cargo install --git https://github.com/felipegodoi/cli-diffviewer.git
+cargo install --git https://github.com/felipe-godoi/diffv.git
 ```
 
 ---
@@ -184,3 +184,11 @@ All unit tests for side-by-side alignment, fillers, code tokenization intra-line
 ## 📄 License
 
 MIT OR Apache-2.0
+
+## Automatic updates
+
+At startup, diffv checks the latest stable GitHub release, downloads a newer binary for the current OS/architecture, verifies its SHA-256 digest, replaces the executable atomically, and restarts with the same arguments. Offline checks and failed downloads leave the existing installation available. The check has a short timeout; updates do not require Rust.
+
+Use `diffv --no-update` or `DIFFV_NO_UPDATE=1 diffv` to skip the check. Help and version commands do not make network requests. Installation and updates use public HTTPS downloads; no GitHub account or authentication is required.
+
+Maintainers: bump the version in `Cargo.toml`, run `cargo test`, commit and push, then create and push the matching `vX.Y.Z` tag. The release workflow tests and builds macOS and Linux binaries for Intel and ARM, and publishes the release only after all builds succeed. Keep `Cargo.lock` committed and updated. Development builds can use `--no-update`.

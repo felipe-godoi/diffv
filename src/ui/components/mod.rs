@@ -6,7 +6,7 @@ pub mod help_popup;
 pub mod history_popup;
 pub mod ruler;
 pub mod side_by_side;
-pub mod status_bar;
 pub mod toast;
 pub mod unified;
 pub mod worktree_popup;
+pub mod horizontal;

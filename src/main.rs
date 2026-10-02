@@ -33,6 +33,23 @@ enum AppEvent {
 
 fn main() -> Result<()> {
     let args = Cli::parse();
+    if !args.no_update && std::env::var_os("DIFFV_NO_UPDATE").is_none()
+        && std::env::var_os("DIFFV_UPDATE_RESTART").is_none() {
+        match diffv::update::check_and_install() {
+            Ok(Some(path)) => {
+                eprintln!("diffv updated. Restarting…");
+                #[cfg(unix)] {
+                    use std::os::unix::process::CommandExt;
+                    let error = std::process::Command::new(path)
+                        .args(std::env::args_os().skip(1))
+                        .env("DIFFV_UPDATE_RESTART", "1").exec();
+                    eprintln!("Could not restart diffv: {}. Reopen to use the update.", error);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("Update skipped: {}. Continuing with the installed version.", error),
+        }
+    }
     let config = Config::load();
 
     // Setup custom panic hook to restore terminal

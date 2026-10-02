@@ -517,7 +517,14 @@ impl GitProvider {
                 .map(|o| o.status.success())
                 .unwrap_or(false);
 
-            if branch_exists {
+            let remote_exists = Command::new("git")
+                .args(["show-ref", "--verify", &format!("refs/remotes/{}", trimmed_branch)])
+                .current_dir(&self.repo_root).output()
+                .map(|o| o.status.success()).unwrap_or(false);
+            if remote_exists {
+                let local_name = trimmed_branch.split_once('/').map(|(_, name)| name).unwrap_or(trimmed_branch);
+                cmd.arg("--track").arg("-b").arg(local_name).arg(trimmed_path).arg(trimmed_branch);
+            } else if branch_exists {
                 cmd.arg(trimmed_path).arg(trimmed_branch);
             } else {
                 cmd.arg("-b").arg(trimmed_branch).arg(trimmed_path);
@@ -537,6 +544,46 @@ impl GitProvider {
         };
 
         Ok(resolved)
+    }
+
+    pub fn get_branches(&self) -> Vec<String> {
+        let mut branches = Vec::new();
+        if let Ok(out) = Command::new("git")
+            .args(["branch", "--format=%(refname:short)"])
+            .current_dir(&self.repo_root)
+            .output()
+        {
+            if out.status.success() {
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    let b = line.trim();
+                    if !b.is_empty() && !branches.contains(&b.to_string()) {
+                        branches.push(b.to_string());
+                    }
+                }
+            }
+        }
+
+        if let Ok(out) = Command::new("git")
+            .args(["branch", "-r", "--format=%(refname:short)"])
+            .current_dir(&self.repo_root)
+            .output()
+        {
+            if out.status.success() {
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    let b = line.trim();
+                    if !b.is_empty() && !b.ends_with("/HEAD") {
+                        let clean = b;
+                        if !branches.contains(&clean.to_string()) {
+                            branches.push(clean.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        branches.sort();
+        branches.dedup();
+        branches
     }
 }
 

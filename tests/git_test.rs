@@ -324,6 +324,65 @@ fn test_tab_esc_worktree_fzf_features() {
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Changes);
 
+    // History temporarily replaces the drawer and returns without changing tabs.
+    app.open_file_history();
+    assert!(app.show_history);
+    app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+    assert!(matches!(app.fzf_request.take(), Some(diffv::ui::app::FzfRequest::Files)));
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(matches!(app.fzf_request.take(), Some(diffv::ui::app::FzfRequest::Text)));
+    app.load_selected_commit_diff();
+    assert!(app.show_history);
+    assert!(app.active_commit_view.is_some());
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    assert!(content.contains("File history") || content.contains("Histórico do arquivo"));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.show_history);
+    assert!(app.active_commit_view.is_none());
+    assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Changes);
+
+    // Tab switches columns inside a diff; horizontal scrolling preserves access to long lines.
+    app.is_unified = false;
+    app.wrap_lines = false;
+    app.focus = diffv::ui::app::Focus::DiffView;
+    app.column_side = diffv::ui::components::side_by_side::ColumnSide::Right;
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.column_side, diffv::ui::components::side_by_side::ColumnSide::Left);
+    assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Changes);
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    let row = app.files[0].aligned_rows.iter_mut().find(|r| r.right.is_some()).unwrap();
+    row.right.as_mut().unwrap().content = format!("{}TAIL_MARKER", "x".repeat(160));
+    app.handle_key(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE));
+    assert!(app.scroll_x[1] > 0);
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    assert!(content.contains("TAIL_MARKER"));
+    app.handle_key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
+    assert_eq!(app.scroll_x[1], 0);
+    app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    assert!(app.wrap_lines);
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    assert!(content.contains("AIL_MARKER"));
+    assert!(app.diff_row_map.iter().filter(|&&idx| idx == 0).count() > 1);
+    app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    assert!(!app.wrap_lines);
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+    assert!(!app.should_quit);
+    assert_eq!(app.focus, diffv::ui::app::Focus::FileTree);
+    app.switch_drawer_tab(diffv::core::models::DrawerTab::Commits);
+    app.load_selected_repo_commit();
+    assert!(app.active_commit_info.is_some());
+    app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE));
+    assert!(app.active_commit_info.is_none());
+    assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Changes);
+    assert!(!app.should_quit);
+    app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+    assert!(app.should_quit);
+
     // 4. Test Esc NEVER quits app
     app.should_quit = false;
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -335,6 +394,8 @@ fn test_tab_esc_worktree_fzf_features() {
     assert_eq!(app.focus, diffv::ui::app::Focus::FileTree, "Esc should return focus to FileTree");
     assert!(!app.should_quit);
 
+    app.viewport_height = 0;
+    app.is_unified = true;
     // 5. Test Ctrl+e and Ctrl+y scrolling
     app.focus = diffv::ui::app::Focus::DiffView;
     app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
@@ -377,6 +438,7 @@ fn test_tab_esc_worktree_fzf_features() {
     });
     assert_eq!(app.selected_filtered_idx, 0);
 
+    terminal.draw(|frame| app.render(frame)).unwrap();
     // Clicking diff view at row 3 selects line 0 of diff
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -397,4 +459,55 @@ fn test_tab_esc_worktree_fzf_features() {
     assert_eq!(app.selected_row, 1);
 
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn history_previews_selected_diff_and_opens_commit_details() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::ui::app::{App, AppMode, Focus};
+    let dir = std::env::temp_dir().join(format!("diffv_history_preview_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git").args(args).current_dir(&dir).output().unwrap().status.success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "History Tester"]);
+    git(&["config", "user.email", "history@example.com"]);
+    fs::write(dir.join("file.txt"), "original_value\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "First history commit"]);
+    fs::write(dir.join("file.txt"), "updated_value\n").unwrap();
+    git(&["commit", "-am", "Second history commit"]);
+    fs::write(dir.join("file.txt"), "working_value\n").unwrap();
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
+        diffv::config::Config::load(), false, false, false, None, false, false).unwrap();
+    app.language = diffv::core::models::Language::En;
+    app.open_file_history();
+    assert_eq!(app.focus, Focus::FileTree);
+    assert_eq!(app.history_commits.len(), 2);
+    assert_eq!(app.active_commit_view.as_ref().unwrap().0, app.history_commits[0].hash);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    assert!(text.contains("updated_value"));
+    assert!(text.contains("original_value"));
+    assert!(!text.contains("working_value"));
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.focus, Focus::FileTree);
+    assert_eq!(app.active_commit_view.as_ref().unwrap().0, app.history_commits[1].hash);
+    app.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    assert!(app.show_details_popup);
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    assert!(text.contains("Commit Details"));
+    assert!(text.contains("First history commit"));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.show_history);
+    assert!(!app.show_details_popup);
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.show_history);
+    assert!(app.active_commit_view.is_none());
+    assert!(app.current_file().unwrap().hunks.iter().flat_map(|h| &h.lines).any(|l| l.content.contains("working_value")));
+    fs::remove_dir_all(dir).unwrap();
 }

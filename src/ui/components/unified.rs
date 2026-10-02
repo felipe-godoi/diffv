@@ -14,12 +14,17 @@ pub fn render_unified(
     area: Rect,
     file_diff: Option<&FileDiff>,
     scroll_y: usize,
+    scroll_x: usize,
+    wrap: bool,
+    wrap_skip: usize,
+    row_map: &mut Vec<usize>,
     selected_row: usize,
     visual_range: Option<(usize, usize)>,
     is_focused: bool,
     syntax_enabled: bool,
     theme: &Theme,
 ) {
+    row_map.clear();
     let title = if let Some((start, end)) = visual_range {
         let count = end.saturating_sub(start) + 1;
         format!(" 󰒅 [VISUAL MODE: {} lines selected (s: stage, u: unstage, d: discard, Esc: exit)] ", count)
@@ -30,7 +35,7 @@ pub fn render_unified(
     };
 
     let border_style = if visual_range.is_some() {
-        Style::default().fg(Color::Rgb(215, 130, 255)).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD)
     } else if is_focused {
         Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)
     } else {
@@ -39,6 +44,8 @@ pub fn render_unified(
 
     let block = Block::default()
         .title(title)
+        .title_bottom(format!(" ←/→ h/l Scroll · 0 Start · $ End · x:{} ", scroll_x))
+        .title_top(if wrap { " Wrap ON [r] " } else { " Wrap OFF [r] " })
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(border_style)
@@ -76,6 +83,7 @@ pub fn render_unified(
 
     'outer: for hunk in &file.hunks {
         if current_idx >= start_idx && current_idx < end_idx {
+            row_map.push(current_idx);
             rendered_lines.push(Line::from(vec![
                 Span::styled(
                     format!(" 󰦨 @@ {} @@ ", &hunk.header),
@@ -93,6 +101,7 @@ pub fn render_unified(
                 let is_cursor = current_idx == selected_row;
                 let is_in_visual = visual_range.map(|(s, e)| current_idx >= s && current_idx <= e).unwrap_or(false);
 
+                row_map.push(current_idx);
                 rendered_lines.push(render_unified_line(
                     line.old_line_no,
                     line.new_line_no,
@@ -112,7 +121,18 @@ pub fn render_unified(
         }
     }
 
-    let paragraph = Paragraph::new(rendered_lines);
+    let logical_rows = std::mem::take(row_map);
+    let mut output = Vec::new();
+    for (line, idx) in rendered_lines.into_iter().zip(logical_rows) {
+        let gutter = if line.spans.len() >= 3 { 3 } else { 0 };
+        let lines = if wrap { crate::ui::components::horizontal::wrap_line(line, gutter, inner_area.width as usize) }
+            else { vec![crate::ui::components::horizontal::scroll_line(line, 3, scroll_x)] };
+        let skip = if wrap && idx == start_idx { wrap_skip.min(lines.len().saturating_sub(1)) } else { 0 };
+        row_map.extend(std::iter::repeat(idx).take(lines.len() - skip));
+        output.extend(lines.into_iter().skip(skip));
+        if output.len() >= max_lines { break; }
+    }
+    let paragraph = Paragraph::new(output);
     frame.render_widget(paragraph, inner_area);
 }
 
@@ -137,19 +157,19 @@ fn render_unified_line<'a>(
     };
 
     let indicator = if is_cursor && is_in_visual {
-        Span::styled("█", Style::default().fg(Color::Rgb(203, 166, 247)).add_modifier(Modifier::BOLD))
+        Span::styled("█", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
     } else if is_cursor {
         Span::styled("▎", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
     } else if is_in_visual {
-        Span::styled("▌", Style::default().fg(Color::Rgb(180, 140, 220)).add_modifier(Modifier::BOLD))
+        Span::styled("▌", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
     } else {
         Span::styled(" ", Style::default().fg(theme.line_num_fg))
     };
 
     let num_style = if is_cursor && is_in_visual {
-        Style::default().fg(Color::Rgb(255, 255, 255)).bg(Color::Rgb(75, 58, 100)).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
     } else if is_in_visual {
-        Style::default().fg(Color::Rgb(220, 205, 250)).bg(Color::Rgb(58, 48, 80)).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
     } else if is_cursor {
         Style::default().fg(theme.key_fg).bg(theme.line_num_bg).add_modifier(Modifier::BOLD)
     } else {
@@ -161,7 +181,7 @@ fn render_unified_line<'a>(
     match kind {
         DiffKind::Context | DiffKind::Virtual => {
             let line_bg = if is_in_visual {
-                Color::Rgb(48, 42, 68)
+                theme.selected_bg
             } else {
                 theme.bg
             };
@@ -188,14 +208,14 @@ fn render_unified_line<'a>(
         }
         DiffKind::Deletion => {
             let (bg_color, num_bg) = if is_in_visual {
-                (Color::Rgb(78, 32, 50), Color::Rgb(98, 38, 62))
+                (theme.selected_bg, theme.selected_bg)
             } else {
                 (theme.del_bg, theme.del_bg)
             };
             let num_span_del = Span::styled(
                 format!("{} {} │ ", old_str, new_str),
                 if is_in_visual {
-                    Style::default().fg(Color::Rgb(255, 230, 240)).bg(num_bg).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.selected_fg).bg(num_bg).add_modifier(Modifier::BOLD)
                 } else {
                     num_style
                 },
@@ -210,14 +230,14 @@ fn render_unified_line<'a>(
         }
         DiffKind::Addition => {
             let (bg_color, num_bg) = if is_in_visual {
-                (Color::Rgb(32, 72, 52), Color::Rgb(40, 92, 65))
+                (theme.selected_bg, theme.selected_bg)
             } else {
                 (theme.add_bg, theme.add_bg)
             };
             let num_span_add = Span::styled(
                 format!("{} {} │ ", old_str, new_str),
                 if is_in_visual {
-                    Style::default().fg(Color::Rgb(230, 255, 240)).bg(num_bg).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.selected_fg).bg(num_bg).add_modifier(Modifier::BOLD)
                 } else {
                     num_style
                 },

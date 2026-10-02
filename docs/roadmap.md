@@ -1,6 +1,6 @@
 # Roadmap de Implementação — CLI Diff Viewer (`diffv`)
 
-Este roadmap decompõe as especificações do [docs/spec.md](file:///Users/felipegodoi/Documents/repos/cli-diffviewer/docs/spec.md) em marcos e tarefas atômicas acompanháveis via checkboxes.
+Este roadmap decompõe as especificações do [docs/spec.md](spec.md) em marcos e tarefas atômicas acompanháveis via checkboxes.
 
 ---
 

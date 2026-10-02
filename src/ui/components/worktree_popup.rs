@@ -13,17 +13,41 @@ pub struct WorktreeCreationState {
     pub branch_input: String,
     pub active_field: usize, // 0 = Path, 1 = Branch
     pub error_msg: Option<String>,
+    pub base: String,
+    pub branches: Vec<String>,
+    pub selected_candidate: usize,
+    pub path_manual: bool,
+}
+
+impl WorktreeCreationState {
+    pub fn new(base: String, branches: Vec<String>) -> Self {
+        Self { path_input: base.clone(), branch_input: String::new(), active_field: 1,
+            error_msg: None, base, branches, selected_candidate: 0, path_manual: false }
+    }
+
+    pub fn candidates(&self) -> Vec<&str> {
+        self.branches.iter().filter(|b| b.to_lowercase().contains(&self.branch_input.to_lowercase()))
+            .map(String::as_str).collect()
+    }
+
+    pub fn update_branch(&mut self) {
+        self.selected_candidate = 0;
+        self.error_msg = None;
+        if !self.path_manual {
+            self.path_input = format!("{}{}", self.base, self.branch_input.replace('/', "-"));
+        }
+    }
+
+    pub fn complete_branch(&mut self) {
+        if let Some(branch) = self.candidates().get(self.selected_candidate) {
+            self.branch_input = branch.to_string();
+            self.update_branch();
+        }
+    }
 }
 
 impl Default for WorktreeCreationState {
-    fn default() -> Self {
-        Self {
-            path_input: String::new(),
-            branch_input: String::new(),
-            active_field: 0,
-            error_msg: None,
-        }
-    }
+    fn default() -> Self { Self::new(String::new(), Vec::new()) }
 }
 
 pub fn render_worktree_popup(
@@ -116,7 +140,7 @@ pub fn render_worktree_popup(
 
         let branch_pad = if list_area.width < 55 { 12 } else { 20 };
         let branch_truncated = if branch_name.len() > branch_pad {
-            format!("{}…", &branch_name[..branch_pad.saturating_sub(1)])
+            format!("{}…", branch_name.chars().take(branch_pad.saturating_sub(1)).collect::<String>())
         } else {
             branch_name.to_string()
         };
@@ -148,7 +172,7 @@ pub fn render_worktree_popup(
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(theme.border))
-            .style(Style::default().bg(Color::Rgb(24, 25, 36)));
+            .style(Style::default().bg(theme.bg));
 
         let detail_inner = detail_block.inner(chunks[1]);
         frame.render_widget(detail_block, chunks[1]);
@@ -218,14 +242,15 @@ fn render_creation_form(
             Constraint::Length(2), // Help text
             Constraint::Length(3), // Path Input box
             Constraint::Length(3), // Branch Input box
+            Constraint::Min(1), // Branch suggestions
             Constraint::Length(2), // Error message if any
             Constraint::Length(1), // Footer shortcuts
         ])
         .split(inner);
 
     let desc = match language {
-        Language::En => "Enter target folder path and optional branch name:",
-        Language::Pt => "Informe o diretório de destino e nome opcional da branch:",
+        Language::En => "Choose an existing branch or type a new name.",
+        Language::Pt => "Escolha uma branch existente ou digite um novo nome.",
     };
     frame.render_widget(Paragraph::new(desc).style(Style::default().fg(theme.line_num_fg)), chunks[0]);
 
@@ -236,15 +261,15 @@ fn render_creation_form(
         Style::default().fg(theme.border)
     };
     let path_title = match language {
-        Language::En => " 📁 Directory Path (e.g. ../feat-worktree) ",
-        Language::Pt => " 📁 Diretório (ex: ../feat-worktree) ",
+        Language::En => " Directory ",
+        Language::Pt => " Diretório ",
     };
     let path_block = Block::default()
         .title(path_title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(path_border_style)
-        .style(Style::default().bg(Color::Rgb(24, 25, 36)));
+        .style(Style::default().bg(theme.bg));
     let path_inner = path_block.inner(chunks[1]);
     frame.render_widget(path_block, chunks[1]);
     let path_cursor = if state.active_field == 0 { "█" } else { "" };
@@ -261,15 +286,15 @@ fn render_creation_form(
         Style::default().fg(theme.border)
     };
     let branch_title = match language {
-        Language::En => " 󰊢 Branch (e.g. feature/my-branch - leave empty for default) ",
-        Language::Pt => " 󰊢 Branch (ex: feature/minha-branch - deixe vazio para padrão) ",
+        Language::En => " Branch ",
+        Language::Pt => " Branch ",
     };
     let branch_block = Block::default()
         .title(branch_title)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(branch_border_style)
-        .style(Style::default().bg(Color::Rgb(24, 25, 36)));
+        .style(Style::default().bg(theme.bg));
     let branch_inner = branch_block.inner(chunks[2]);
     frame.render_widget(branch_block, chunks[2]);
     let branch_cursor = if state.active_field == 1 { "█" } else { "" };
@@ -279,20 +304,36 @@ fn render_creation_form(
     ]);
     frame.render_widget(Paragraph::new(branch_line), branch_inner);
 
+    let candidates = state.candidates();
+    let height = chunks[3].height as usize;
+    let start = state.selected_candidate.saturating_sub(height.saturating_sub(1));
+    let mut suggestions: Vec<Line> = candidates.iter().enumerate().skip(start).take(height)
+        .map(|(idx, branch)| Line::styled(format!(" {} {}", if idx == state.selected_candidate { "›" } else { " " }, branch),
+            if idx == state.selected_candidate && state.active_field == 1 {
+                Style::default().fg(theme.selected_fg).bg(theme.selected_bg)
+            } else { Style::default().fg(theme.line_num_fg) })).collect();
+    if !state.branch_input.is_empty() && !state.branches.contains(&state.branch_input) && suggestions.len() < height {
+        suggestions.push(Line::styled(match language {
+            Language::En => format!(" + New branch: {}", state.branch_input),
+            Language::Pt => format!(" + Nova branch: {}", state.branch_input),
+        }, Style::default().fg(theme.status_a)));
+    }
+    frame.render_widget(Paragraph::new(suggestions), chunks[3]);
+
     // Error display
     if let Some(err) = &state.error_msg {
         let err_line = Line::from(vec![
             Span::styled(format!(" ✖ {}", err), Style::default().fg(theme.del_fg).add_modifier(Modifier::BOLD)),
         ]);
 
-        frame.render_widget(Paragraph::new(err_line), chunks[3]);
+        frame.render_widget(Paragraph::new(err_line), chunks[4]);
     }
 
     // Footer actions
     let footer_line = match language {
         Language::En => Line::from(vec![
             Span::styled(" [Tab] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled("Next Field  ", Style::default().fg(theme.fg)),
+            Span::styled("Complete / field  ", Style::default().fg(theme.fg)),
             Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
             Span::styled("Create & Switch  ", Style::default().fg(theme.fg)),
             Span::styled(" [Esc] ", Style::default().fg(theme.key_fg)),
@@ -300,14 +341,20 @@ fn render_creation_form(
         ]),
         Language::Pt => Line::from(vec![
             Span::styled(" [Tab] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
-            Span::styled("Próximo Campo  ", Style::default().fg(theme.fg)),
+            Span::styled("Completar / campo  ", Style::default().fg(theme.fg)),
             Span::styled(" [Enter] ", Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.status_a).add_modifier(Modifier::BOLD)),
             Span::styled("Criar e Alternar  ", Style::default().fg(theme.fg)),
             Span::styled(" [Esc] ", Style::default().fg(theme.key_fg)),
             Span::styled("Cancelar", Style::default().fg(theme.line_num_fg)),
         ]),
     };
-    frame.render_widget(Paragraph::new(footer_line), chunks[4]);
+    let footer_line = if chunks[5].width < 80 {
+        Line::from(match language {
+            Language::En => "↑↓ Select · Tab Complete · Enter Create · Esc Cancel",
+            Language::Pt => "↑↓ Seleção · Tab Completar · Enter Criar · Esc Cancelar",
+        })
+    } else { footer_line };
+    frame.render_widget(Paragraph::new(footer_line), chunks[5]);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -330,4 +377,38 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - px) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autocomplete_preserves_manual_path() {
+        let mut state = WorktreeCreationState::new(".worktree/".into(), vec!["main".into(), "feature/ui".into()]);
+        state.branch_input = "ui".into();
+        state.update_branch();
+        assert_eq!(state.candidates(), vec!["feature/ui"]);
+        state.complete_branch();
+        assert_eq!(state.path_input, ".worktree/feature-ui");
+        state.path_manual = true;
+        state.path_input = "../custom".into();
+        state.branch_input = "new-branch".into();
+        state.update_branch();
+        assert!(state.candidates().is_empty());
+        assert_eq!(state.path_input, "../custom");
+    }
+
+    #[test]
+    fn creation_renders_in_small_terminal() {
+        let backend = ratatui::backend::TestBackend::new(60, 20);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let state = WorktreeCreationState::new(".worktree/".into(), vec!["main".into()]);
+        let theme = crate::ui::theme::Theme::vscode_dark();
+        terminal.draw(|frame| render_worktree_popup(frame, frame.area(), &[], 0, 0, Some(&state), Language::Pt, &theme)).unwrap();
+        let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+        assert!(content.contains("main"));
+        assert!(content.contains(".worktree/"));
+        assert!(content.contains("Cancelar"));
+    }
 }

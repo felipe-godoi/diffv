@@ -15,7 +15,6 @@ pub fn search_files_fzf(files: &[String]) -> anyhow::Result<Option<String>> {
     let mut child = Command::new("fzf")
         .args([
             "--prompt=󰈞 Files> ",
-            "--height=45%",
             "--layout=reverse",
             "--border=rounded",
             "--info=inline",
@@ -38,6 +37,9 @@ pub fn search_files_fzf(files: &[String]) -> anyhow::Result<Option<String>> {
             return Ok(Some(sel));
         }
     }
+    if !matches!(output.status.code(), Some(0 | 1 | 130)) {
+        anyhow::bail!("fzf exited with {}", output.status);
+    }
     Ok(None)
 }
 
@@ -45,7 +47,6 @@ pub fn search_diff_text_fzf(lines: &[String]) -> anyhow::Result<Option<String>> 
     let mut child = Command::new("fzf")
         .args([
             "--prompt=󰈞 Diff Text> ",
-            "--height=50%",
             "--layout=reverse",
             "--border=rounded",
             "--info=inline",
@@ -67,6 +68,9 @@ pub fn search_diff_text_fzf(lines: &[String]) -> anyhow::Result<Option<String>> 
         if !sel.is_empty() {
             return Ok(Some(sel));
         }
+    }
+    if !matches!(output.status.code(), Some(0 | 1 | 130)) {
+        anyhow::bail!("fzf exited with {}", output.status);
     }
     Ok(None)
 }

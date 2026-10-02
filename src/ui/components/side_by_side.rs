@@ -19,6 +19,10 @@ pub fn render_side_by_side(
     area: Rect,
     file_diff: Option<&FileDiff>,
     scroll_y: usize,
+    scroll_x: [usize; 2],
+    wrap: bool,
+    wrap_skip: usize,
+    row_map: &mut Vec<usize>,
     selected_row: usize,
     visual_range: Option<(usize, usize)>,
     active_column: ColumnSide,
@@ -26,6 +30,7 @@ pub fn render_side_by_side(
     syntax_enabled: bool,
     theme: &Theme,
 ) {
+    row_map.clear();
     let title = if let Some((start, end)) = visual_range {
         let count = end.saturating_sub(start) + 1;
         format!(" 󰒅 [VISUAL MODE: {} lines selected (s: stage, u: unstage, d: discard, Esc: exit)] ", count)
@@ -36,7 +41,7 @@ pub fn render_side_by_side(
     };
 
     let border_style = if visual_range.is_some() {
-        Style::default().fg(Color::Rgb(215, 130, 255)).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD)
     } else if is_focused {
         Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)
     } else {
@@ -45,6 +50,8 @@ pub fn render_side_by_side(
 
     let block = Block::default()
         .title(title)
+        .title_bottom(format!(" ←/→ h/l Scroll · 0 Start · $ End · Tab OLD/NEW · x:{} / {} ", scroll_x[0], scroll_x[1]))
+        .title_top(if wrap { " Wrap ON [r] " } else { " Wrap OFF [r] " })
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(border_style)
@@ -112,7 +119,7 @@ pub fn render_side_by_side(
         " ◄ ORIGINAL (HEAD) "
     };
     let (left_badge, left_style) = if active_column == ColumnSide::Left {
-        (left_badge_text, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.header_fg).add_modifier(Modifier::BOLD))
+        (left_badge_text, Style::default().fg(theme.bg).bg(theme.header_fg).add_modifier(Modifier::BOLD))
     } else {
         (left_badge_text, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg))
     };
@@ -129,7 +136,7 @@ pub fn render_side_by_side(
         " ► MODIFIED (WORKING TREE) "
     };
     let (right_badge, right_style) = if active_column == ColumnSide::Right {
-        (right_badge_text, Style::default().fg(Color::Rgb(15, 20, 25)).bg(theme.key_fg).add_modifier(Modifier::BOLD))
+        (right_badge_text, Style::default().fg(theme.bg).bg(theme.key_fg).add_modifier(Modifier::BOLD))
     } else {
         (right_badge_text, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg))
     };
@@ -141,13 +148,14 @@ pub fn render_side_by_side(
 
     let mut left_lines = vec![left_header];
     let mut right_lines = vec![right_header];
+    row_map.push(usize::MAX);
 
     for idx in start_idx..end_idx {
         let row = &rows[idx];
         let is_cursor = idx == selected_row;
         let is_in_visual = visual_range.map(|(s, e)| idx >= s && idx <= e).unwrap_or(false);
 
-        left_lines.push(render_side_line(
+        let left = render_side_line(
             row.left.as_ref(),
             is_cursor,
             is_in_visual,
@@ -156,9 +164,9 @@ pub fn render_side_by_side(
             &file.new_path,
             theme,
             left_area.width as usize,
-        ));
+        );
 
-        right_lines.push(render_side_line(
+        let right = render_side_line(
             row.right.as_ref(),
             is_cursor,
             is_in_visual,
@@ -167,7 +175,19 @@ pub fn render_side_by_side(
             &file.new_path,
             theme,
             right_area.width as usize,
-        ));
+        );
+        let mut left = if wrap { crate::ui::components::horizontal::wrap_line(left, 2, left_area.width as usize) }
+            else { vec![crate::ui::components::horizontal::scroll_line(left, 2, scroll_x[0])] };
+        let mut right = if wrap { crate::ui::components::horizontal::wrap_line(right, 2, right_area.width as usize) }
+            else { vec![crate::ui::components::horizontal::scroll_line(right, 2, scroll_x[1])] };
+        let height = left.len().max(right.len());
+        left.resize(height, Line::default());
+        right.resize(height, Line::default());
+        let skip = if wrap && idx == start_idx { wrap_skip.min(height.saturating_sub(1)) } else { 0 };
+        row_map.extend(std::iter::repeat(idx).take(height - skip));
+        left_lines.extend(left.into_iter().skip(skip));
+        right_lines.extend(right.into_iter().skip(skip));
+        if left_lines.len() >= max_lines { break; }
     }
 
     frame.render_widget(Paragraph::new(left_lines), left_area);
@@ -186,7 +206,7 @@ fn render_side_line<'a>(
 ) -> Line<'a> {
     match line_opt {
         None => {
-            let bg = if is_in_visual { Color::Rgb(45, 38, 58) } else { theme.virtual_bg };
+            let bg = if is_in_visual { theme.selected_bg } else { theme.virtual_bg };
             Line::from(vec![
                 Span::styled("   · │", Style::default().fg(theme.virtual_fg).bg(bg)),
                 Span::styled(" ·", Style::default().fg(theme.virtual_fg).bg(bg)),
@@ -194,7 +214,7 @@ fn render_side_line<'a>(
         }
         Some(diff_line) => match diff_line.kind {
             DiffKind::Virtual => {
-                let bg = if is_in_visual { Color::Rgb(45, 38, 58) } else { theme.virtual_bg };
+                let bg = if is_in_visual { theme.selected_bg } else { theme.virtual_bg };
                 Line::from(vec![
                     Span::styled("   · │", Style::default().fg(theme.virtual_fg).bg(bg)),
                     Span::styled(" ·", Style::default().fg(theme.virtual_fg).bg(bg)),
@@ -209,20 +229,20 @@ fn render_side_line<'a>(
 
                 let mut spans = Vec::new();
                 let indicator = if is_cursor && is_in_visual {
-                    Span::styled("█", Style::default().fg(Color::Rgb(203, 166, 247)).add_modifier(Modifier::BOLD))
+                    Span::styled("█", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
                 } else if is_cursor {
                     Span::styled("▎", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
                 } else if is_in_visual {
-                    Span::styled("▌", Style::default().fg(Color::Rgb(180, 140, 220)).add_modifier(Modifier::BOLD))
+                    Span::styled("▌", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
                 } else {
                     Span::styled(" ", Style::default().fg(theme.line_num_fg))
                 };
                 spans.push(indicator);
 
                 let num_style = if is_cursor && is_in_visual {
-                    Style::default().fg(Color::Rgb(255, 255, 255)).bg(Color::Rgb(75, 58, 100)).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
                 } else if is_in_visual {
-                    Style::default().fg(Color::Rgb(220, 205, 250)).bg(Color::Rgb(58, 48, 80)).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)
                 } else if is_cursor {
                     Style::default().fg(theme.key_fg).bg(theme.line_num_bg).add_modifier(Modifier::BOLD)
                 } else {
@@ -231,7 +251,7 @@ fn render_side_line<'a>(
                 spans.push(Span::styled(format_gutter_no(line_no, " │ "), num_style));
 
                 let line_bg = if is_in_visual {
-                    Color::Rgb(48, 42, 68)
+                    theme.selected_bg
                 } else {
                     theme.bg
                 };
@@ -255,7 +275,7 @@ fn render_side_line<'a>(
             }
             DiffKind::Deletion => {
                 let (bg_color, num_bg) = if is_in_visual {
-                    (Color::Rgb(78, 32, 50), Color::Rgb(98, 38, 62))
+                    (theme.selected_bg, theme.selected_bg)
                 } else {
                     (theme.del_bg, theme.del_bg)
                 };
@@ -264,18 +284,18 @@ fn render_side_line<'a>(
 
                 let mut spans = Vec::new();
                 let indicator = if is_cursor && is_in_visual {
-                    Span::styled("█", Style::default().fg(Color::Rgb(203, 166, 247)).add_modifier(Modifier::BOLD))
+                    Span::styled("█", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
                 } else if is_cursor {
                     Span::styled("▎", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
                 } else if is_in_visual {
-                    Span::styled("▌", Style::default().fg(Color::Rgb(243, 139, 168)).add_modifier(Modifier::BOLD))
+                    Span::styled("▌", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
                 } else {
                     Span::styled(" ", Style::default().fg(fg_color).bg(bg_color))
                 };
                 spans.push(indicator);
 
                 let num_style = if is_in_visual {
-                    Style::default().fg(Color::Rgb(255, 230, 240)).bg(num_bg).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.selected_fg).bg(num_bg).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(fg_color).bg(bg_color).add_modifier(Modifier::BOLD)
                 };
@@ -290,7 +310,7 @@ fn render_side_line<'a>(
             }
             DiffKind::Addition => {
                 let (bg_color, num_bg) = if is_in_visual {
-                    (Color::Rgb(32, 72, 52), Color::Rgb(40, 92, 65))
+                    (theme.selected_bg, theme.selected_bg)
                 } else {
                     (theme.add_bg, theme.add_bg)
                 };
@@ -299,18 +319,18 @@ fn render_side_line<'a>(
 
                 let mut spans = Vec::new();
                 let indicator = if is_cursor && is_in_visual {
-                    Span::styled("█", Style::default().fg(Color::Rgb(203, 166, 247)).add_modifier(Modifier::BOLD))
+                    Span::styled("█", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
                 } else if is_cursor {
                     Span::styled("▎", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD))
                 } else if is_in_visual {
-                    Span::styled("▌", Style::default().fg(Color::Rgb(166, 227, 161)).add_modifier(Modifier::BOLD))
+                    Span::styled("▌", Style::default().fg(theme.selected_fg).add_modifier(Modifier::BOLD))
                 } else {
                     Span::styled(" ", Style::default().fg(fg_color).bg(bg_color))
                 };
                 spans.push(indicator);
 
                 let num_style = if is_in_visual {
-                    Style::default().fg(Color::Rgb(230, 255, 240)).bg(num_bg).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.selected_fg).bg(num_bg).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(fg_color).bg(bg_color).add_modifier(Modifier::BOLD)
                 };
@@ -364,7 +384,7 @@ fn render_highlighted_spans<'a>(
             out.push(Span::styled(
                 &content[span_start..span_end],
                 Style::default()
-                    .fg(Color::Rgb(255, 255, 255))
+                    .fg(base_fg)
                     .bg(highlight_bg)
                     .add_modifier(Modifier::BOLD),
             ));

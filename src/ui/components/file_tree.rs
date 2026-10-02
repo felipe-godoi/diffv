@@ -360,6 +360,7 @@ pub fn render_drawer(
     view_mode: FileViewMode,
     language: Language,
     theme: &Theme,
+    transient_title: Option<&str>,
 ) {
     let is_compact = area.width < 34;
 
@@ -411,6 +412,12 @@ pub fn render_drawer(
         title_spans.push(Span::styled(format!(" [3] {} ", tab_stashes_title), norm_tab_style));
     }
     title_spans.push(Span::raw(" "));
+
+    if let Some(title) = transient_title {
+        title_spans = vec![Span::styled(format!(" {} · Esc ", title), sel_tab_style)];
+    } else if let Some(commit) = active_commit_info {
+        title_spans = vec![Span::styled(format!(" Commit {} · Esc ", commit.hash.chars().take(7).collect::<String>()), sel_tab_style)];
+    }
 
     let block = Block::default()
         .title(Line::from(title_spans))
@@ -958,7 +965,7 @@ pub fn render_drawer_line_overlay(
 
             if item.is_dir {
                 let dir_icon = if item.is_collapsed { " " } else { " " };
-                let path_text = format!("{}/", item.path.display());
+                let path_text = format!("{}/", item.name);
                 let stats = format!(" +{} -{}", item.additions, item.deletions);
                 s.push(Span::styled(dir_icon, Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
                 s.push(Span::styled(path_text, Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
@@ -979,7 +986,7 @@ pub fn render_drawer_line_overlay(
                     StageStatus::Unstaged => ("  ", theme.line_num_fg),
                 };
                 let (file_ico, ico_color) = file_icon(&item.name);
-                let path_text = item.path.display().to_string();
+                let path_text = item.name.clone();
                 let stats = format!(" +{} -{}", item.additions, item.deletions);
 
                 s.push(Span::styled(status_badge, Style::default().fg(status_color).bg(theme.selected_bg)));
@@ -1011,7 +1018,7 @@ pub fn render_drawer_line_overlay(
                 ];
                 let (file_ico, ico_color) = file_icon(&item.name);
                 s.push(Span::styled(file_ico, Style::default().fg(ico_color).bg(theme.selected_bg)));
-                s.push(Span::styled(item.path.display().to_string(), Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
+                s.push(Span::styled(item.name.clone(), Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
                 s.push(Span::styled(format!(" +{} -{}", item.additions, item.deletions), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
                 s.push(Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
                 let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
@@ -1048,7 +1055,7 @@ pub fn render_drawer_line_overlay(
                 ];
                 let (file_ico, ico_color) = file_icon(&item.name);
                 s.push(Span::styled(file_ico, Style::default().fg(ico_color).bg(theme.selected_bg)));
-                s.push(Span::styled(item.path.display().to_string(), Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
+                s.push(Span::styled(item.name.clone(), Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
                 s.push(Span::styled(format!(" +{} -{}", item.additions, item.deletions), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
                 s.push(Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
                 let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
