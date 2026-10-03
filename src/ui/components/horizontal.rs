@@ -3,18 +3,28 @@ use unicode_width::UnicodeWidthChar;
 
 // Scroll styled text by terminal columns, keeping the gutter and diff markers fixed.
 pub fn scroll_line(mut line: Line<'_>, gutter_spans: usize, mut offset: usize) -> Line<'_> {
-    if offset == 0 { return line; }
+    if offset == 0 {
+        return line;
+    }
     let mut spans = Vec::new();
     for (idx, span) in line.spans.into_iter().enumerate() {
-        if idx < gutter_spans { spans.push(span); continue; }
+        if idx < gutter_spans {
+            spans.push(span);
+            continue;
+        }
         let mut text = String::new();
         for ch in span.content.chars() {
             let width = ch.width().unwrap_or(0);
-            if offset >= width && offset > 0 { offset -= width; continue; }
+            if offset >= width && offset > 0 {
+                offset -= width;
+                continue;
+            }
             if offset > 0 {
                 text.push_str(&" ".repeat(width - offset));
                 offset = 0;
-            } else { text.push(ch); }
+            } else {
+                text.push(ch);
+            }
         }
         spans.push(Span::styled(text, span.style));
     }
@@ -42,17 +52,29 @@ pub fn wrap_line(line: Line<'_>, gutter_spans: usize, width: usize) -> Vec<Line<
     let mut used = 0;
     for span in line.spans.into_iter().skip(gutter_spans) {
         for ch in span.content.chars() {
-            let text = if ch == '\t' { "    ".to_string() } else { ch.to_string() };
+            let text = if ch == '\t' {
+                "    ".to_string()
+            } else {
+                ch.to_string()
+            };
             for ch in text.chars() {
                 let cells = ch.width().unwrap_or(0);
                 if used + cells > available && used > 0 {
                     result.push(Line::from(spans));
-                    spans = gutter.iter().map(|s| Span::styled(" ".repeat(s.width()), s.style)).collect();
+                    spans = gutter
+                        .iter()
+                        .map(|s| Span::styled(" ".repeat(s.width()), s.style))
+                        .collect();
                     used = 0;
                 }
-                if let Some(last) = spans.last_mut().filter(|s| s.style == span.style && used > 0) {
+                if let Some(last) = spans
+                    .last_mut()
+                    .filter(|s| s.style == span.style && used > 0)
+                {
                     last.content.to_mut().push(ch);
-                } else { spans.push(Span::styled(ch.to_string(), span.style)); }
+                } else {
+                    spans.push(Span::styled(ch.to_string(), span.style));
+                }
                 used += cells;
             }
         }

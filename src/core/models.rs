@@ -155,8 +155,7 @@ pub struct WorktreeEntry {
     pub is_current: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DrawerTab {
     #[default]
     Changes,
@@ -164,9 +163,7 @@ pub enum DrawerTab {
     Stashes,
 }
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
     #[default]
     En,
@@ -177,7 +174,10 @@ pub enum Language {
 pub enum WatcherScanState {
     #[default]
     Idle,
-    Scanning { scanned_dirs: usize },
-    Ready { total_dirs: usize },
+    Scanning {
+        scanned_dirs: usize,
+    },
+    Ready {
+        total_dirs: usize,
+    },
 }
-

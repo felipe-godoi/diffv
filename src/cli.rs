@@ -55,6 +55,15 @@ pub struct Cli {
     #[arg(value_name = "TARGET")]
     pub targets: Vec<String>,
 
+    /// Branch or git ref to compare the current worktree against (e.g. main, develop, origin/main)
+    #[arg(
+        short = 'B',
+        long = "compare",
+        visible_alias = "branch",
+        value_name = "BRANCH"
+    )]
+    pub compare: Option<String>,
+
     /// Enable live file watching mode (auto-reload on disk changes)
     #[arg(short = 'w', long = "watch")]
     pub watch: bool,

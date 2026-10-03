@@ -1,8 +1,8 @@
-use std::fs;
-use std::process::Command;
 use diffv::core::models::{FileStatus, StageStatus};
 use diffv::git::actions::{stage_file, stage_hunk, unstage_file, unstage_hunk};
 use diffv::git::provider::GitProvider;
+use std::fs;
+use std::process::Command;
 
 #[test]
 fn test_git_provider_lifecycle() {
@@ -31,7 +31,11 @@ fn test_git_provider_lifecycle() {
     run(&["commit", "-m", "Initial commit"]);
 
     // Modify file
-    fs::write(&test_file, "line 1\nline 2 modified\nline 3\nline 4 added\n").unwrap();
+    fs::write(
+        &test_file,
+        "line 1\nline 2 modified\nline 3\nline 4 added\n",
+    )
+    .unwrap();
 
     let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
     let (files, stats) = provider.load_diffs(None, false, true, false).unwrap();
@@ -110,7 +114,9 @@ fn test_file_history() {
     run(&["commit", "-m", "Third commit on doc"]);
 
     let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
-    let commits = provider.get_file_history(std::path::Path::new("history_doc.txt"), 10).unwrap();
+    let commits = provider
+        .get_file_history(std::path::Path::new("history_doc.txt"), 10)
+        .unwrap();
 
     assert_eq!(commits.len(), 3);
     assert_eq!(commits[0].message, "Third commit on doc");
@@ -119,7 +125,9 @@ fn test_file_history() {
     assert_eq!(commits[0].author, "HistoryTester");
 
     // Test load commit diff
-    let diff = provider.load_commit_diff_for_file(&commits[0].hash, std::path::Path::new("history_doc.txt")).unwrap();
+    let diff = provider
+        .load_commit_diff_for_file(&commits[0].hash, std::path::Path::new("history_doc.txt"))
+        .unwrap();
     assert!(diff.is_some());
     let diff = diff.unwrap();
     assert_eq!(diff.new_path, std::path::PathBuf::from("history_doc.txt"));
@@ -230,8 +238,12 @@ fn test_commit_inspection() {
 
     let commit_diff = provider.load_commit_full_diff(&commits[0].hash).unwrap();
     assert_eq!(commit_diff.len(), 2);
-    assert!(commit_diff.iter().any(|f| f.display_path().contains("file1.rs")));
-    assert!(commit_diff.iter().any(|f| f.display_path().contains("file2.py")));
+    assert!(commit_diff
+        .iter()
+        .any(|f| f.display_path().contains("file1.rs")));
+    assert!(commit_diff
+        .iter()
+        .any(|f| f.display_path().contains("file2.py")));
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -290,7 +302,9 @@ fn test_tab_esc_worktree_fzf_features() {
     assert!(res.is_ok(), "Worktree creation should succeed");
     let wts = provider.get_worktrees(&temp_dir).unwrap();
     assert_eq!(wts.len(), 2);
-    assert!(wts.iter().any(|w| w.branch.as_deref() == Some("feat-branch")));
+    assert!(wts
+        .iter()
+        .any(|w| w.branch.as_deref() == Some("feat-branch")));
 
     // 2. Modify file in main repo to test diffs and fzf search collection
     fs::write(&f1, "fn main() { println!(\"world\"); }\n").unwrap();
@@ -309,7 +323,8 @@ fn test_tab_esc_worktree_fzf_features() {
         None,
         false,
         false,
-    ).unwrap();
+    )
+    .unwrap();
 
     assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Changes);
 
@@ -328,15 +343,27 @@ fn test_tab_esc_worktree_fzf_features() {
     app.open_file_history();
     assert!(app.show_history);
     app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
-    assert!(matches!(app.fzf_request.take(), Some(diffv::ui::app::FzfRequest::Files)));
+    assert!(matches!(
+        app.fzf_request.take(),
+        Some(diffv::ui::app::FzfRequest::Files)
+    ));
     app.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
-    assert!(matches!(app.fzf_request.take(), Some(diffv::ui::app::FzfRequest::Text)));
+    assert!(matches!(
+        app.fzf_request.take(),
+        Some(diffv::ui::app::FzfRequest::Text)
+    ));
     app.load_selected_commit_diff();
     assert!(app.show_history);
     assert!(app.active_commit_view.is_some());
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
     terminal.draw(|frame| app.render(frame)).unwrap();
-    let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
     assert!(content.contains("File history") || content.contains("Histórico do arquivo"));
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(!app.show_history);
@@ -349,22 +376,41 @@ fn test_tab_esc_worktree_fzf_features() {
     app.focus = diffv::ui::app::Focus::DiffView;
     app.column_side = diffv::ui::components::side_by_side::ColumnSide::Right;
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(app.column_side, diffv::ui::components::side_by_side::ColumnSide::Left);
+    assert_eq!(
+        app.column_side,
+        diffv::ui::components::side_by_side::ColumnSide::Left
+    );
     assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Changes);
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let row = app.files[0].aligned_rows.iter_mut().find(|r| r.right.is_some()).unwrap();
+    let row = app.files[0]
+        .aligned_rows
+        .iter_mut()
+        .find(|r| r.right.is_some())
+        .unwrap();
     row.right.as_mut().unwrap().content = format!("{}TAIL_MARKER", "x".repeat(160));
     app.handle_key(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE));
     assert!(app.scroll_x[1] > 0);
     terminal.draw(|frame| app.render(frame)).unwrap();
-    let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
     assert!(content.contains("TAIL_MARKER"));
     app.handle_key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
     assert_eq!(app.scroll_x[1], 0);
     app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
     assert!(app.wrap_lines);
     terminal.draw(|frame| app.render(frame)).unwrap();
-    let content: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
     assert!(content.contains("AIL_MARKER"));
     assert!(app.diff_row_map.iter().filter(|&&idx| idx == 0).count() > 1);
     app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
@@ -376,12 +422,24 @@ fn test_tab_esc_worktree_fzf_features() {
     app.switch_drawer_tab(diffv::core::models::DrawerTab::Commits);
     app.load_selected_repo_commit();
     assert!(app.active_commit_info.is_some());
-    app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE));
+    // Lowercase 'q' returns to changes from deep navigation
+    app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
     assert!(app.active_commit_info.is_none());
     assert_eq!(app.drawer_tab, diffv::core::models::DrawerTab::Changes);
     assert!(!app.should_quit);
-    app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
-    assert!(app.should_quit);
+
+    // Shift+Q unconditionally quits the program regardless of navigation state
+    app.switch_drawer_tab(diffv::core::models::DrawerTab::Commits);
+    app.load_selected_repo_commit();
+    assert!(app.active_commit_info.is_some());
+    app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE));
+    assert!(
+        app.should_quit,
+        "Shift+Q must unconditionally quit from any navigation state"
+    );
+    app.should_quit = false;
+    app.switch_drawer_tab(diffv::core::models::DrawerTab::Changes);
+    app.return_to_changes();
 
     // 4. Test Esc NEVER quits app
     app.should_quit = false;
@@ -391,7 +449,11 @@ fn test_tab_esc_worktree_fzf_features() {
     // Switch focus to DiffView and verify Esc returns to FileTree
     app.focus = diffv::ui::app::Focus::DiffView;
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.focus, diffv::ui::app::Focus::FileTree, "Esc should return focus to FileTree");
+    assert_eq!(
+        app.focus,
+        diffv::ui::app::Focus::FileTree,
+        "Esc should return focus to FileTree"
+    );
     assert!(!app.should_quit);
 
     app.viewport_height = 0;
@@ -403,7 +465,6 @@ fn test_tab_esc_worktree_fzf_features() {
     app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
     assert_eq!(app.scroll_y, 0);
 
-
     // 6. Test fzf search line collection
     app.focus = diffv::ui::app::Focus::FileTree;
     let files = app.prepare_fzf(diffv::ui::app::FzfRequest::Files).items;
@@ -411,7 +472,9 @@ fn test_tab_esc_worktree_fzf_features() {
 
     let text_lines = app.prepare_fzf(diffv::ui::app::FzfRequest::Text).items;
     assert!(!text_lines.is_empty());
-    assert!(text_lines.iter().all(|l| l.starts_with("main.rs:") && l.contains('\t')));
+    assert!(text_lines
+        .iter()
+        .all(|l| l.starts_with("main.rs:") && l.contains('\t')));
 
     app.focus = diffv::ui::app::Focus::DiffView;
     let query = app.prepare_fzf(diffv::ui::app::FzfRequest::Text);
@@ -427,14 +490,20 @@ fn test_tab_esc_worktree_fzf_features() {
     // 8. Test mouse click coordinates and row mapping
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     // Clicking row 3 toggles file view mode between Tree and Flat
-    assert_eq!(app.file_view_mode, diffv::ui::components::file_tree::FileViewMode::Tree);
+    assert_eq!(
+        app.file_view_mode,
+        diffv::ui::components::file_tree::FileViewMode::Tree
+    );
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 5,
         row: 3,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!(app.file_view_mode, diffv::ui::components::file_tree::FileViewMode::Flat);
+    assert_eq!(
+        app.file_view_mode,
+        diffv::ui::components::file_tree::FileViewMode::Flat
+    );
 
     // Clicking row 4 selects item 0 (first file)
     app.handle_mouse(MouseEvent {
@@ -475,7 +544,13 @@ fn history_previews_selected_diff_and_opens_commit_details() {
     let dir = std::env::temp_dir().join(format!("diffv_history_preview_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let git = |args: &[&str]| {
-        assert!(Command::new("git").args(args).current_dir(&dir).output().unwrap().status.success());
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
     };
     git(&["init"]);
     git(&["config", "user.name", "History Tester"]);
@@ -487,26 +562,56 @@ fn history_previews_selected_diff_and_opens_commit_details() {
     git(&["commit", "-am", "Second history commit"]);
     fs::write(dir.join("file.txt"), "working_value\n").unwrap();
     let provider = GitProvider::discover(Some(&dir)).unwrap();
-    let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-        diffv::config::Config::default(), false, false, false, None, false, false).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
     app.language = diffv::core::models::Language::En;
     app.open_file_history();
     assert_eq!(app.focus, Focus::FileTree);
     assert_eq!(app.history_commits.len(), 2);
-    assert_eq!(app.active_commit_view.as_ref().unwrap().0, app.history_commits[0].hash);
+    assert_eq!(
+        app.active_commit_view.as_ref().unwrap().0,
+        app.history_commits[0].hash
+    );
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
     terminal.draw(|frame| app.render(frame)).unwrap();
-    let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
     assert!(text.contains("updated_value"));
     assert!(text.contains("original_value"));
     assert!(!text.contains("working_value"));
     app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.focus, Focus::FileTree);
-    assert_eq!(app.active_commit_view.as_ref().unwrap().0, app.history_commits[1].hash);
+    assert_eq!(
+        app.active_commit_view.as_ref().unwrap().0,
+        app.history_commits[1].hash
+    );
     app.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
     assert!(app.show_details_popup);
     terminal.draw(|frame| app.render(frame)).unwrap();
-    let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
     assert!(text.contains("Commit Details"));
     assert!(text.contains("First history commit"));
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -526,13 +631,22 @@ fn history_previews_selected_diff_and_opens_commit_details() {
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(!app.show_history);
     assert!(app.active_commit_view.is_none());
-    assert!(app.current_file().unwrap().hunks.iter().flat_map(|h| &h.lines).any(|l| l.content.contains("working_value")));
+    assert!(app
+        .current_file()
+        .unwrap()
+        .hunks
+        .iter()
+        .flat_map(|h| &h.lines)
+        .any(|l| l.content.contains("working_value")));
     // Commit and stash inspection each retain their file list until a second Escape.
     use diffv::core::models::DrawerTab;
     for tab in [DrawerTab::Commits, DrawerTab::Stashes] {
         if tab == DrawerTab::Stashes {
             git(&["stash", "push", "-m", "navigation stash"]);
-            app.stashes = GitProvider::discover(Some(&dir)).unwrap().get_stashes().unwrap();
+            app.stashes = GitProvider::discover(Some(&dir))
+                .unwrap()
+                .get_stashes()
+                .unwrap();
         }
         app.switch_drawer_tab(tab);
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
@@ -551,7 +665,7 @@ fn history_previews_selected_diff_and_opens_commit_details() {
         app.handle_key(key(KeyCode::Esc));
         assert_eq!(app.focus, Focus::DiffView);
         app.handle_key(key(KeyCode::Char('W')));
-        app.handle_key(key(KeyCode::Char('a')));
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
         assert!(app.worktree_creation.is_some());
         app.handle_key(key(KeyCode::Esc));
         assert!(app.worktree_creation.is_none());
@@ -575,7 +689,13 @@ fn history_previews_selected_diff_and_opens_commit_details() {
         app.handle_key(key(KeyCode::Esc));
         assert_eq!(app.focus, Focus::FileTree);
         assert!(app.show_drawer);
-        assert_eq!(paths, app.files.iter().map(|f| f.new_path.clone()).collect::<Vec<_>>());
+        assert_eq!(
+            paths,
+            app.files
+                .iter()
+                .map(|f| f.new_path.clone())
+                .collect::<Vec<_>>()
+        );
         assert!(app.live_snapshot.is_some());
         app.handle_key(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::DiffView);
@@ -598,7 +718,13 @@ fn full_context_toggle_expands_whole_file_and_keeps_cursor() {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let git = |args: &[&str]| {
-        assert!(Command::new("git").args(args).current_dir(&dir).output().unwrap().status.success());
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
     };
     git(&["init"]);
     git(&["config", "user.name", "Context Tester"]);
@@ -607,15 +733,38 @@ fn full_context_toggle_expands_whole_file_and_keeps_cursor() {
     fs::write(dir.join("file.txt"), &original).unwrap();
     git(&["add", "."]);
     git(&["commit", "-m", "base"]);
-    fs::write(dir.join("file.txt"), original.replace("line 15\n", "line 15 changed\n")).unwrap();
+    fs::write(
+        dir.join("file.txt"),
+        original.replace("line 15\n", "line 15 changed\n"),
+    )
+    .unwrap();
 
     let provider = GitProvider::discover(Some(&dir)).unwrap();
-    let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-        diffv::config::Config::default(), false, false, false, None, false, false).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
     app.config.diff.context_lines = 3;
     app.is_unified = true;
     app.reload_diffs();
-    let visible_lines = |app: &App| app.current_file().unwrap().hunks.iter().map(|h| h.lines.len()).sum::<usize>();
+    let visible_lines = |app: &App| {
+        app.current_file()
+            .unwrap()
+            .hunks
+            .iter()
+            .map(|h| h.lines.len())
+            .sum::<usize>()
+    };
     assert_eq!(visible_lines(&app), 8);
 
     app.focus = Focus::DiffView;
@@ -641,7 +790,13 @@ fn live_reload_keeps_open_commit_and_its_selection() {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let git = |args: &[&str]| {
-        assert!(Command::new("git").args(args).current_dir(&dir).output().unwrap().status.success());
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
     };
     git(&["init"]);
     git(&["config", "user.name", "Live Tester"]);
@@ -655,8 +810,20 @@ fn live_reload_keeps_open_commit_and_its_selection() {
     fs::write(dir.join("a.txt"), "one edited\n").unwrap();
 
     let provider = GitProvider::discover(Some(&dir)).unwrap();
-    let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-        diffv::config::Config::default(), true, false, false, None, false, false).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        true,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
     app.drawer_tab = DrawerTab::Commits;
     app.selected_repo_commit_idx = 1;
     app.load_selected_repo_commit();
@@ -666,7 +833,10 @@ fn live_reload_keeps_open_commit_and_its_selection() {
     fs::write(dir.join("c.txt"), "new\n").unwrap();
     app.reload_diffs();
     let after: Vec<String> = app.files.iter().map(|f| f.display_path()).collect();
-    assert_eq!(after, commit_files, "live reload must not replace the open commit's files");
+    assert_eq!(
+        after, commit_files,
+        "live reload must not replace the open commit's files"
+    );
     assert_eq!(app.selected_repo_commit_idx, 1);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -676,11 +846,19 @@ fn stage_hunk_under_cursor_in_both_view_modes() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use diffv::ui::app::{App, AppMode, Focus};
     for unified in [false, true] {
-        let dir = std::env::temp_dir().join(format!("diffv_stage_hunk_{}_{}", unified, std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "diffv_stage_hunk_{}_{}",
+            unified,
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let git = |args: &[&str]| -> String {
-            let out = Command::new("git").args(args).current_dir(&dir).output().unwrap();
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
             assert!(out.status.success(), "{:?}", args);
             String::from_utf8_lossy(&out.stdout).to_string()
         };
@@ -701,8 +879,20 @@ fn stage_hunk_under_cursor_in_both_view_modes() {
         fs::write(dir.join("file.txt"), modified).unwrap();
 
         let provider = GitProvider::discover(Some(&dir)).unwrap();
-        let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-            diffv::config::Config::default(), false, false, false, None, false, false).unwrap();
+        let mut app = App::new(
+            AppMode::Git {
+                target_ref: None,
+                git_provider: provider,
+            },
+            diffv::config::Config::default(),
+            false,
+            false,
+            false,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
         app.config.diff.context_lines = 3;
         app.is_unified = unified;
         app.reload_diffs();
@@ -711,15 +901,31 @@ fn stage_hunk_under_cursor_in_both_view_modes() {
         app.jump_to_line(105);
         app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
         let cached = git(&["diff", "--cached"]);
-        assert!(cached.contains("+line 105 changed"), "unified={} cached:\n{}", unified, cached);
-        assert_eq!(cached.matches("changed").count(), 1, "unified={} staged extra hunks:\n{}", unified, cached);
+        assert!(
+            cached.contains("+line 105 changed"),
+            "unified={} cached:\n{}",
+            unified,
+            cached
+        );
+        assert_eq!(
+            cached.matches("changed").count(),
+            1,
+            "unified={} staged extra hunks:\n{}",
+            unified,
+            cached
+        );
 
         app.selected_row = 0;
         app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
         let cached = git(&["diff", "--cached"]);
-        assert!(cached.contains("+line 45 changed"), "unified={} hunk navigation:\n{}", unified, cached);
+        assert!(
+            cached.contains("+line 45 changed"),
+            "unified={} hunk navigation:\n{}",
+            unified,
+            cached
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }
@@ -733,7 +939,11 @@ fn unstage_after_stage_round_trips() {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let git = |args: &[&str]| -> String {
-        let out = Command::new("git").args(args).current_dir(&dir).output().unwrap();
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
         assert!(out.status.success(), "{:?}", args);
         String::from_utf8_lossy(&out.stdout).to_string()
     };
@@ -744,11 +954,29 @@ fn unstage_after_stage_round_trips() {
     fs::write(dir.join("file.txt"), &original).unwrap();
     git(&["add", "."]);
     git(&["commit", "-m", "base"]);
-    fs::write(dir.join("file.txt"), original.replace("line 10\n", "line 10 a\n").replace("line 40\n", "line 40 b\n")).unwrap();
+    fs::write(
+        dir.join("file.txt"),
+        original
+            .replace("line 10\n", "line 10 a\n")
+            .replace("line 40\n", "line 40 b\n"),
+    )
+    .unwrap();
 
     let provider = GitProvider::discover(Some(&dir)).unwrap();
-    let mut app = App::new(AppMode::Git { target_ref: None, git_provider: provider },
-        diffv::config::Config::default(), false, false, false, None, false, false).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
     app.config.diff.context_lines = 3;
     app.reload_diffs();
     app.focus = Focus::DiffView;
@@ -764,13 +992,26 @@ fn unstage_after_stage_round_trips() {
 
     // Editing the staged region afterwards used to break unstage
     let current = fs::read_to_string(dir.join("file.txt")).unwrap();
-    fs::write(dir.join("file.txt"), current.replace("line 10 a\n", "line 10 a edited again\n")).unwrap();
+    fs::write(
+        dir.join("file.txt"),
+        current.replace("line 10 a\n", "line 10 a edited again\n"),
+    )
+    .unwrap();
     app.reload_diffs();
     assert!(app.jump_to_file_in("file.txt", DiffSection::Staged));
     app.jump_to_line(10);
     app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
-    let note = app.notification.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
-    assert_eq!(git(&["diff", "--cached"]), "", "unstage failed, notification: {}", note);
+    let note = app
+        .notification
+        .as_ref()
+        .map(|(m, _)| m.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        git(&["diff", "--cached"]),
+        "",
+        "unstage failed, notification: {}",
+        note
+    );
 
     // Partial (visual) stage, then partial unstage of the same lines
     app.reload_diffs();
@@ -781,15 +1022,28 @@ fn unstage_after_stage_round_trips() {
     app.selected_row = row + 1;
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
     let cached = git(&["diff", "--cached"]);
-    assert!(cached.contains("+line 40 b") && !cached.contains("line 10 a"), "{}", cached);
+    assert!(
+        cached.contains("+line 40 b") && !cached.contains("line 10 a"),
+        "{}",
+        cached
+    );
     assert!(app.jump_to_file_in("file.txt", DiffSection::Staged));
     app.jump_to_line(40);
     let row = app.selected_row;
     app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
     app.selected_row = row + 1;
     app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
-    let note = app.notification.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
-    assert_eq!(git(&["diff", "--cached"]), "", "partial unstage failed: {}", note);
+    let note = app
+        .notification
+        .as_ref()
+        .map(|(m, _)| m.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        git(&["diff", "--cached"]),
+        "",
+        "partial unstage failed: {}",
+        note
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -800,7 +1054,17 @@ fn paths_with_spaces_unicode_and_renames() {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let git = |args: &[&str]| {
-        assert!(Command::new("git").args(args).current_dir(&dir).output().unwrap().status.success(), "{:?}", args);
+        assert!(
+            Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "{:?}",
+            args
+        );
     };
     git(&["init"]);
     git(&["config", "user.name", "Paths Tester"]);
@@ -817,9 +1081,21 @@ fn paths_with_spaces_unicode_and_renames() {
 
     let provider = GitProvider::discover(Some(&dir)).unwrap();
     let (files, _) = provider.load_diffs(None, false, true, false).unwrap();
-    let find = |name: &str, section: DiffSection| files.iter().find(|f| f.display_path() == name && f.section == section);
-    assert!(find("my file.txt", DiffSection::Changes).is_some(), "{:#?}", files.iter().map(|f| f.display_path()).collect::<Vec<_>>());
-    assert!(find("café.txt", DiffSection::Changes).is_some(), "{:#?}", files.iter().map(|f| f.display_path()).collect::<Vec<_>>());
+    let find = |name: &str, section: DiffSection| {
+        files
+            .iter()
+            .find(|f| f.display_path() == name && f.section == section)
+    };
+    assert!(
+        find("my file.txt", DiffSection::Changes).is_some(),
+        "{:#?}",
+        files.iter().map(|f| f.display_path()).collect::<Vec<_>>()
+    );
+    assert!(
+        find("café.txt", DiffSection::Changes).is_some(),
+        "{:#?}",
+        files.iter().map(|f| f.display_path()).collect::<Vec<_>>()
+    );
     let renamed = find("new name.txt", DiffSection::Staged).expect("rename staged");
     assert_eq!(renamed.status, FileStatus::Renamed);
     let untracked = find("untracked é.txt", DiffSection::Changes).expect("untracked with unicode");
@@ -828,12 +1104,17 @@ fn paths_with_spaces_unicode_and_renames() {
 
     for name in ["my file.txt", "café.txt"] {
         let file = find(name, DiffSection::Changes).unwrap();
-        stage_hunk(&dir, &file.new_path, &file.hunks[0]).unwrap_or_else(|e| panic!("stage {}: {}", name, e));
+        stage_hunk(&dir, &file.new_path, &file.hunks[0])
+            .unwrap_or_else(|e| panic!("stage {}: {}", name, e));
     }
     let (files, _) = provider.load_diffs(None, false, true, false).unwrap();
     for name in ["my file.txt", "café.txt"] {
-        let file = files.iter().find(|f| f.display_path() == name && f.section == DiffSection::Staged).expect(name);
-        unstage_hunk(&dir, &file.new_path, &file.hunks[0]).unwrap_or_else(|e| panic!("unstage {}: {}", name, e));
+        let file = files
+            .iter()
+            .find(|f| f.display_path() == name && f.section == DiffSection::Staged)
+            .expect(name);
+        unstage_hunk(&dir, &file.new_path, &file.hunks[0])
+            .unwrap_or_else(|e| panic!("unstage {}: {}", name, e));
     }
     let _ = fs::remove_dir_all(&dir);
 }
@@ -860,13 +1141,551 @@ fn test_watcher_scan_state_transitions() {
     .unwrap();
 
     assert!(app.is_watcher_scanning());
-    assert_eq!(app.watcher_state, WatcherScanState::Scanning { scanned_dirs: 0 });
+    assert_eq!(
+        app.watcher_state,
+        WatcherScanState::Scanning { scanned_dirs: 0 }
+    );
 
     app.update_watcher_progress(50, None);
     assert!(app.is_watcher_scanning());
-    assert_eq!(app.watcher_state, WatcherScanState::Scanning { scanned_dirs: 50 });
+    assert_eq!(
+        app.watcher_state,
+        WatcherScanState::Scanning { scanned_dirs: 50 }
+    );
 
     app.update_watcher_progress(120, Some(120));
     assert!(!app.is_watcher_scanning());
-    assert_eq!(app.watcher_state, WatcherScanState::Ready { total_dirs: 120 });
+    assert_eq!(
+        app.watcher_state,
+        WatcherScanState::Ready { total_dirs: 120 }
+    );
+}
+
+#[test]
+fn test_branch_comparison_selector_and_cli() {
+    use clap::Parser;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::cli::Cli;
+    use diffv::config::Config;
+    use diffv::core::models::Language;
+    use diffv::git::provider::GitProvider;
+    use diffv::ui::app::{App, AppMode};
+
+    // 1. Verify CLI argument parsing for --compare and --branch alias
+    let cli1 = Cli::try_parse_from(["diffv", "--compare", "main"]).unwrap();
+    assert_eq!(cli1.compare, Some("main".to_string()));
+
+    let cli2 = Cli::try_parse_from(["diffv", "--branch", "feature-x"]).unwrap();
+    assert_eq!(cli2.compare, Some("feature-x".to_string()));
+
+    let cli3 = Cli::try_parse_from(["diffv", "-B", "develop"]).unwrap();
+    assert_eq!(cli3.compare, Some("develop".to_string()));
+
+    // 2. Setup temporary git repo with two branches
+    let temp_dir = std::env::temp_dir().join("diffv_test_branch_selector");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&temp_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "Git command failed: {:?}", args);
+    };
+
+    run(&["init", "-b", "main"]);
+    run(&["config", "user.name", "BranchTester"]);
+    run(&["config", "user.email", "branch@example.com"]);
+
+    let file_a = temp_dir.join("shared.txt");
+    fs::write(&file_a, "version 1 on main\n").unwrap();
+    run(&["add", "shared.txt"]);
+    run(&["commit", "-m", "Initial commit on main"]);
+
+    // Create and commit on feature-test
+    run(&["checkout", "-b", "feature-test"]);
+    fs::write(&file_a, "version 2 on feature-test\n").unwrap();
+    let file_feat = temp_dir.join("feat_only.txt");
+    fs::write(&file_feat, "new feature file\n").unwrap();
+    run(&["add", "shared.txt", "feat_only.txt"]);
+    run(&["commit", "-m", "Feature commit"]);
+
+    // Switch back to main
+    run(&["checkout", "main"]);
+
+    // 3. Test GitProvider::is_ref
+    let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
+    assert!(provider.is_ref("main"));
+    assert!(provider.is_ref("feature-test"));
+    assert!(!provider.is_ref("nonexistent_branch"));
+    assert!(!provider.is_ref("shared.txt"));
+
+    // 4. Test App with default worktree diff (HEAD)
+    let mode = AppMode::Git {
+        target_ref: None,
+        git_provider: provider,
+    };
+
+    let mut app = App::new(
+        mode,
+        Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(app.current_comparison_branch(), None);
+    assert!(
+        app.files.is_empty(),
+        "On main with clean worktree, 0 diffs against HEAD"
+    );
+
+    // 5. Open Branch Selector using 'B' key
+    assert!(!app.show_branch_selector);
+    app.handle_key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+    assert!(app.show_branch_selector);
+    assert!(app.branch_selector.is_some());
+
+    let selector = app.branch_selector.as_ref().unwrap();
+    let items = selector.filtered_items(Language::En);
+    // Should contain Default (HEAD), feature-test, main
+    assert!(items.iter().any(|it| it.is_default));
+    assert!(items.iter().any(|it| it.label == "feature-test"));
+    assert!(items.iter().any(|it| it.label == "main"));
+
+    // 6. Filter for "feature"
+    for c in "feature".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let filtered_items = app
+        .branch_selector
+        .as_ref()
+        .unwrap()
+        .filtered_items(Language::En);
+    assert_eq!(filtered_items.len(), 1);
+    assert_eq!(filtered_items[0].label, "feature-test");
+
+    // 7. Press Enter to select feature-test
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!app.show_branch_selector);
+    assert_eq!(app.current_comparison_branch(), Some("feature-test"));
+
+    // Verify diffs are now loaded comparing worktree on main against feature-test
+    assert!(
+        !app.files.is_empty(),
+        "Should have diffs when comparing main against feature-test"
+    );
+    assert!(app
+        .files
+        .iter()
+        .any(|f| f.new_path.to_string_lossy().contains("feat_only.txt")));
+
+    // 8. Staging should be blocked with notification while comparing branches
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    assert!(app
+        .notification
+        .as_ref()
+        .is_some_and(|(n, _)| n.contains("disabled while comparing")));
+
+    // 9. Open branch selector again, cancel with Esc
+    app.handle_key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+    assert!(app.show_branch_selector);
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.show_branch_selector);
+    assert_eq!(app.current_comparison_branch(), Some("feature-test"));
+
+    // 10. Open branch selector, filter "head" (default), select it
+    app.handle_key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+    for c in "head".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!app.show_branch_selector);
+    assert_eq!(app.current_comparison_branch(), None);
+    assert!(
+        app.files.is_empty(),
+        "Back to default: clean worktree has 0 diffs"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_shift_q_unconditional_quit_and_footer_visual_and_wrap() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::config::Config;
+    use diffv::git::provider::GitProvider;
+    use diffv::ui::app::{App, AppMode, Focus};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let temp_dir = std::env::temp_dir().join("diffv_test_shift_q_and_footer");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&temp_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    };
+
+    run(&["init"]);
+    run(&["config", "user.name", "Tester"]);
+    run(&["config", "user.email", "test@example.com"]);
+    let file = temp_dir.join("test.txt");
+    fs::write(&file, "line 1\n").unwrap();
+    run(&["add", "test.txt"]);
+    run(&["commit", "-m", "init"]);
+    fs::write(
+        &file,
+        "line 1 modified with very long content to test diff pane and scrolling\n",
+    )
+    .unwrap();
+
+    let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
+    let mode = AppMode::Git {
+        target_ref: None,
+        git_provider: provider,
+    };
+    let mut app = App::new(
+        mode,
+        Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+
+    // 1. Verify Shift+Q quits from settings modal
+    app.show_settings = true;
+    app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE));
+    assert!(app.should_quit, "Shift+Q must quit from settings modal");
+
+    // 2. Verify Shift+Q quits from worktree modal
+    app.should_quit = false;
+    app.show_worktrees = true;
+    app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE));
+    assert!(app.should_quit, "Shift+Q must quit from worktree modal");
+
+    // 3. Verify Shift+Q quits from branch selector modal
+    app.should_quit = false;
+    app.open_branch_selector();
+    assert!(app.show_branch_selector);
+    app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE));
+    assert!(
+        app.should_quit,
+        "Shift+Q must quit from branch selector modal"
+    );
+
+    // 4. Verify Shift+Q quits from help modal
+    app.should_quit = false;
+    app.show_help = true;
+    app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE));
+    assert!(app.should_quit, "Shift+Q must quit from help modal");
+
+    // 5. Verify Shift+Q quits from DiffView
+    app.should_quit = false;
+    app.focus = Focus::DiffView;
+    app.handle_key(KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::NONE));
+    assert!(app.should_quit, "Shift+Q must quit from DiffView");
+
+    // 6. Test footer help line when wrapped (default)
+    app.should_quit = false;
+    app.wrap_lines = true;
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        content.contains("visual"),
+        "Footer must contain 'visual' option (v)"
+    );
+    assert!(
+        !content.contains("h/l"),
+        "Footer must NOT contain horizontal scroll 'h/l' when wrapped"
+    );
+
+    // 7. Test footer help line when unwrapped (wrap_lines = false)
+    app.wrap_lines = false;
+    terminal.draw(|f| app.render(f)).unwrap();
+    let content_unwrapped: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        content_unwrapped.contains("visual"),
+        "Footer must contain 'visual' option (v)"
+    );
+    assert!(
+        content_unwrapped.contains("h/l"),
+        "Footer must contain horizontal scroll 'h/l' when unwrapped"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_details_popup_folder_path_and_header_repo_base() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::config::Config;
+    use diffv::ui::app::{App, AppMode};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let temp_dir = std::env::temp_dir().join("diffv_test_details_folder");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(&temp_dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(&temp_dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(&temp_dir)
+        .output()
+        .unwrap();
+
+    let file_path = temp_dir.join("main.rs");
+    fs::write(&file_path, "fn main() {}\n").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(&temp_dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "init commit"])
+        .current_dir(&temp_dir)
+        .output()
+        .unwrap();
+
+    fs::write(&file_path, "fn main() { println!(\"hello\"); }\n").unwrap();
+
+    let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
+    let mode = AppMode::Git {
+        target_ref: None,
+        git_provider: provider,
+    };
+    let mut app = App::new(
+        mode,
+        Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+
+    let backend = TestBackend::new(140, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let header_content: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        header_content.contains("diffv_test_details_folder"),
+        "Header must show repo base folder name"
+    );
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    assert!(
+        app.show_details_popup,
+        "Pressing 'i' must open details modal"
+    );
+
+    terminal.draw(|f| app.render(f)).unwrap();
+    let modal_content: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        modal_content.contains(&temp_dir.display().to_string()),
+        "Details modal must display full folder path"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_worktree_selector_live_filter_and_modifier_commands() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::config::Config;
+    use diffv::git::provider::GitProvider;
+    use diffv::ui::app::{App, AppMode};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let temp_dir = std::env::temp_dir().join("diffv_test_wt_filter");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&temp_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    };
+
+    run(&["init", "-b", "main"]);
+    run(&["config", "user.name", "Tester"]);
+    run(&["config", "user.email", "test@example.com"]);
+    fs::write(temp_dir.join("readme.md"), "# Diffv\n").unwrap();
+    run(&["add", "readme.md"]);
+    run(&["commit", "-m", "initial"]);
+
+    // Create two extra branches and worktrees
+    let wt1_dir = std::env::temp_dir().join("diffv_test_wt_filter_alpha");
+    let wt2_dir = std::env::temp_dir().join("diffv_test_wt_filter_beta");
+    let _ = fs::remove_dir_all(&wt1_dir);
+    let _ = fs::remove_dir_all(&wt2_dir);
+
+    run(&[
+        "worktree",
+        "add",
+        "-b",
+        "feature-alpha",
+        wt1_dir.to_str().unwrap(),
+    ]);
+    run(&[
+        "worktree",
+        "add",
+        "-b",
+        "bugfix-beta",
+        wt2_dir.to_str().unwrap(),
+    ]);
+
+    let provider = GitProvider::discover(Some(&temp_dir)).unwrap();
+    let mode = AppMode::Git {
+        target_ref: None,
+        git_provider: provider,
+    };
+    let mut app = App::new(
+        mode,
+        Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(app.worktrees.len(), 3);
+
+    // 1. Press W to open worktrees modal
+    app.handle_key(KeyEvent::new(KeyCode::Char('W'), KeyModifiers::NONE));
+    assert!(app.show_worktrees);
+    assert_eq!(app.worktree_filter, "");
+    assert_eq!(app.filtered_worktrees().len(), 3);
+
+    // 2. Typing characters without modifiers filters the worktree list
+    for c in "alpha".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(app.worktree_filter, "alpha");
+    assert_eq!(app.filtered_worktrees().len(), 1);
+    assert_eq!(
+        app.filtered_worktrees()[0].1.branch.as_deref(),
+        Some("feature-alpha")
+    );
+
+    // Verify rendering of the search input and filtered result
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("alpha"));
+    assert!(screen.contains("feature-alpha"));
+    assert!(!screen.contains("bugfix-beta"));
+
+    // 3. Backspace removes last character
+    app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert_eq!(app.worktree_filter, "alph");
+    assert_eq!(app.filtered_worktrees().len(), 1);
+
+    // 4. Ctrl+u clears filter
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    assert_eq!(app.worktree_filter, "");
+    assert_eq!(app.filtered_worktrees().len(), 3);
+
+    // 5. Ctrl+n opens worktree creation form (does NOT type 'n' into filter)
+    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(app.worktree_creation.is_some());
+    // Esc cancels creation form back to worktrees modal
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.worktree_creation.is_none());
+    assert!(app.show_worktrees);
+
+    // 6. Filter for "beta"
+    for c in "beta".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(app.worktree_filter, "beta");
+    assert_eq!(app.filtered_worktrees().len(), 1);
+    assert_eq!(
+        app.filtered_worktrees()[0].1.branch.as_deref(),
+        Some("bugfix-beta")
+    );
+
+    // 7. Press Enter to switch to the filtered worktree
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!app.show_worktrees);
+    assert_eq!(app.worktree_filter, "");
+    if let AppMode::Git { git_provider, .. } = &app.mode {
+        let expected = wt2_dir.canonicalize().unwrap_or(wt2_dir.clone());
+        let actual = git_provider
+            .repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| git_provider.repo_root.clone());
+        assert_eq!(actual, expected);
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    let _ = fs::remove_dir_all(&wt1_dir);
+    let _ = fs::remove_dir_all(&wt2_dir);
 }

@@ -43,11 +43,17 @@ fn platform_asset() -> Option<String> {
 // Redirect into a file rather than a pipe so large downloads cannot deadlock.
 fn fetch(mut command: Command, destination: &Path, timeout: Duration) -> Result<()> {
     let file = File::create(destination)?;
-    let mut child = command.stdin(Stdio::null()).stdout(file).stderr(Stdio::null()).spawn()?;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(file)
+        .stderr(Stdio::null())
+        .spawn()?;
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
-            if !status.success() { bail!("GitHub request failed ({})", status); }
+            if !status.success() {
+                bail!("GitHub request failed ({})", status);
+            }
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -61,23 +67,46 @@ fn fetch(mut command: Command, destination: &Path, timeout: Duration) -> Result<
 
 fn curl(url: &str) -> Command {
     let mut command = Command::new("curl");
-    command.args(["--fail", "--silent", "--location", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "2", "--max-time", "90", "--user-agent", "diffv-updater", url]);
+    command.args([
+        "--fail",
+        "--silent",
+        "--location",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--connect-timeout",
+        "2",
+        "--max-time",
+        "90",
+        "--user-agent",
+        "diffv-updater",
+        url,
+    ]);
     command
 }
 
 fn newer_release(release: &Release, current: &str) -> Result<bool> {
     let version = Version::parse(release.tag_name.trim_start_matches('v'))?;
-    Ok(!release.draft && !release.prerelease && version.pre.is_empty() && version > Version::parse(current)?)
+    Ok(!release.draft
+        && !release.prerelease
+        && version.pre.is_empty()
+        && version > Version::parse(current)?)
 }
 
 fn install_verified(download: &Path, executable: &Path, digest: &str) -> Result<()> {
-    let expected = digest.strip_prefix("sha256:").context("Release asset has no SHA-256 digest")?;
+    let expected = digest
+        .strip_prefix("sha256:")
+        .context("Release asset has no SHA-256 digest")?;
     let actual = format!("{:x}", Sha256::digest(fs::read(download)?));
-    if actual != expected { bail!("Downloaded binary failed SHA-256 verification"); }
+    if actual != expected {
+        bail!("Downloaded binary failed SHA-256 verification");
+    }
     fs::set_permissions(download, fs::metadata(executable)?.permissions())?;
     File::open(download)?.sync_all()?;
     // Same filesystem: replacement is atomic; failures leave the existing binary intact.
-    fs::rename(download, executable).context("Could not replace diffv (check installation directory permissions)")?;
+    fs::rename(download, executable)
+        .context("Could not replace diffv (check installation directory permissions)")?;
     Ok(())
 }
 
@@ -91,7 +120,29 @@ pub fn check_and_install_verbose(channel: UpdateChannel) -> Result<Option<PathBu
     check_and_install_internal(channel, true)
 }
 
+pub fn is_dev_executable(executable: &Path) -> bool {
+    cfg!(debug_assertions)
+        || std::env::var_os("CARGO").is_some()
+        || std::env::var_os("CARGO_MANIFEST_DIR").is_some()
+        || executable.components().any(|c| c.as_os_str() == "target")
+}
+
 fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<Option<PathBuf>> {
+    let executable = match std::env::current_exe().and_then(|p| p.canonicalize()) {
+        Ok(exe) => exe,
+        Err(_) => return Ok(None),
+    };
+
+    if is_dev_executable(&executable) {
+        if verbose {
+            eprintln!(
+                "diffv: Running from a development build ({}). Skipping update to protect local build.",
+                executable.display()
+            );
+        }
+        return Ok(None);
+    }
+
     let Some(name) = platform_asset() else {
         if verbose {
             eprintln!("diffv: No precompiled binary available for this platform.");
@@ -107,23 +158,56 @@ fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<O
     let fetch_timeout = Duration::from_secs(if verbose { 10 } else { 3 });
 
     let fetch_res = match channel {
-        UpdateChannel::Stable => {
-            fetch(curl(&format!("https://api.github.com/repos/{}/releases/latest", REPO)), &json, fetch_timeout)
-        }
+        UpdateChannel::Stable => fetch(
+            curl(&format!(
+                "https://api.github.com/repos/{}/releases/latest",
+                REPO
+            )),
+            &json,
+            fetch_timeout,
+        ),
         UpdateChannel::Beta => {
             // Try explicit 'beta' tag, fallback to 'nightly' if no separate beta tag
-            let beta_res = fetch(curl(&format!("https://api.github.com/repos/{}/releases/tags/beta", REPO)), &json, fetch_timeout);
+            let beta_res = fetch(
+                curl(&format!(
+                    "https://api.github.com/repos/{}/releases/tags/beta",
+                    REPO
+                )),
+                &json,
+                fetch_timeout,
+            );
             if beta_res.is_err() {
-                fetch(curl(&format!("https://api.github.com/repos/{}/releases/tags/nightly", REPO)), &json, fetch_timeout)
+                fetch(
+                    curl(&format!(
+                        "https://api.github.com/repos/{}/releases/tags/nightly",
+                        REPO
+                    )),
+                    &json,
+                    fetch_timeout,
+                )
             } else {
                 beta_res
             }
         }
         UpdateChannel::Nightly => {
             // Try 'nightly' tag, fallback to 'beta'
-            let nightly_res = fetch(curl(&format!("https://api.github.com/repos/{}/releases/tags/nightly", REPO)), &json, fetch_timeout);
+            let nightly_res = fetch(
+                curl(&format!(
+                    "https://api.github.com/repos/{}/releases/tags/nightly",
+                    REPO
+                )),
+                &json,
+                fetch_timeout,
+            );
             if nightly_res.is_err() {
-                fetch(curl(&format!("https://api.github.com/repos/{}/releases/tags/beta", REPO)), &json, fetch_timeout)
+                fetch(
+                    curl(&format!(
+                        "https://api.github.com/repos/{}/releases/tags/beta",
+                        REPO
+                    )),
+                    &json,
+                    fetch_timeout,
+                )
             } else {
                 nightly_res
             }
@@ -148,8 +232,6 @@ fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<O
         .digest
         .as_deref()
         .context("Release asset checksum unavailable")?;
-
-    let executable = std::env::current_exe()?.canonicalize()?;
 
     let should_update = match channel {
         UpdateChannel::Stable => newer_release(&release, env!("CARGO_PKG_VERSION"))?,
@@ -199,7 +281,12 @@ fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<O
 mod tests {
     use super::*;
     fn release(tag: &str) -> Release {
-        Release { tag_name: tag.into(), draft: false, prerelease: false, assets: vec![] }
+        Release {
+            tag_name: tag.into(),
+            draft: false,
+            prerelease: false,
+            assets: vec![],
+        }
     }
     #[test]
     fn only_newer_stable_versions_are_installed() {
@@ -207,7 +294,8 @@ mod tests {
         assert!(!newer_release(&release("v0.2.0"), "0.2.0").unwrap());
         assert!(!newer_release(&release("v0.1.0"), "0.2.0").unwrap());
         assert!(!newer_release(&release("v1.0.0-beta.1"), "0.2.0").unwrap());
-        let mut draft = release("v1.0.0"); draft.draft = true;
+        let mut draft = release("v1.0.0");
+        draft.draft = true;
         assert!(!newer_release(&draft, "0.2.0").unwrap());
     }
     #[test]
@@ -215,7 +303,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installed = dir.path().join("installed");
         let download = dir.path().join("download");
-        fs::write(&installed, "old").unwrap(); fs::write(&download, "new").unwrap();
+        fs::write(&installed, "old").unwrap();
+        fs::write(&download, "new").unwrap();
         assert!(install_verified(&download, &installed, "sha256:bad").is_err());
         assert_eq!(fs::read(&installed).unwrap(), b"old");
         let digest = format!("sha256:{:x}", Sha256::digest(b"new"));
@@ -225,9 +314,22 @@ mod tests {
     #[test]
     fn network_timeout_is_bounded() {
         let dir = tempfile::tempdir().unwrap();
-        let mut command = Command::new("sleep"); command.arg("5");
+        let mut command = Command::new("sleep");
+        command.arg("5");
         let started = Instant::now();
-        assert!(fetch(command, &dir.path().join("output"), Duration::from_millis(30)).is_err());
+        assert!(fetch(
+            command,
+            &dir.path().join("output"),
+            Duration::from_millis(30)
+        )
+        .is_err());
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn test_is_dev_executable() {
+        let dev_path = PathBuf::from("/home/user/project/target/debug/diffv");
+        assert!(is_dev_executable(&dev_path));
+        let release_target_path = PathBuf::from("/home/user/project/target/release/diffv");
+        assert!(is_dev_executable(&release_target_path));
     }
 }

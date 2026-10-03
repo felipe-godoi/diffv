@@ -3,9 +3,57 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
+use std::path::Path;
 
 use crate::core::models::{Language, RepoStats, WatcherScanState};
 use crate::ui::theme::Theme;
+
+/// Formats a folder path starting from the git repository base (e.g. `repo_name` or `repo_name/subpath`)
+/// and truncates to `max_chars` with an ellipsis (`…`) if it exceeds the limit.
+pub fn format_folder_display(path: &Path, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let resolved = if path.as_os_str().is_empty() || path == Path::new(".") {
+        std::env::current_dir().unwrap_or_else(|_| path.to_path_buf())
+    } else if path.is_relative() {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    };
+
+    let base_name = resolved
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("repo");
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| resolved.clone());
+
+    let canon_resolved = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+    let canon_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.clone());
+
+    let path_str = if let Ok(rel) = canon_cwd.strip_prefix(&canon_resolved) {
+        if rel.as_os_str().is_empty() {
+            base_name.to_string()
+        } else {
+            format!("{}/{}", base_name, rel.to_string_lossy().replace('\\', "/"))
+        }
+    } else {
+        base_name.to_string()
+    };
+
+    let count = path_str.chars().count();
+    if count > max_chars {
+        let take_chars = max_chars.saturating_sub(1);
+        let prefix: String = path_str.chars().take(take_chars).collect();
+        format!("{}…", prefix)
+    } else {
+        path_str
+    }
+}
 
 pub fn render_header(
     frame: &mut Frame,
@@ -16,6 +64,7 @@ pub fn render_header(
     watcher_state: WatcherScanState,
     spinner_idx: usize,
     worktree_name: Option<&str>,
+    comparison_branch: Option<&str>,
     language: Language,
     theme: &Theme,
 ) {
@@ -42,9 +91,23 @@ pub fn render_header(
         Span::raw(" "),
     ];
 
-    // Branch
-    let branch_display = if width < 60 && repo_stats.branch.len() > 10 {
+    // Branch (with optional comparison target and [B] keybinding hint)
+    let branch_display = if let Some(target) = comparison_branch {
+        if width < 65 {
+            format!(
+                " 󰊢 {}↔{} ",
+                &repo_stats.branch[..5.min(repo_stats.branch.len())],
+                &target[..5.min(target.len())]
+            )
+        } else if width < 85 {
+            format!(" 󰊢 {} ↔ {} ", repo_stats.branch, target)
+        } else {
+            format!(" 󰊢 {} ↔ {} [B] ", repo_stats.branch, target)
+        }
+    } else if width < 60 && repo_stats.branch.len() > 10 {
         format!(" 󰊢 {}… ", &repo_stats.branch[..8])
+    } else if width >= 80 {
+        format!(" 󰊢 {} [B] ", repo_stats.branch)
     } else {
         format!(" 󰊢 {} ", repo_stats.branch)
     };
@@ -66,7 +129,39 @@ pub fn render_header(
             };
             spans.push(Span::styled(
                 wt_str,
-                Style::default().fg(theme.status_u).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.status_u)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+
+    // Current working directory pill (with character limit and ellipsis when overflowing)
+    let folder_budget = if width >= 140 {
+        Some(32)
+    } else if width >= 115 {
+        Some(25)
+    } else if width >= 90 {
+        Some(18)
+    } else if width >= 68 {
+        Some(12)
+    } else {
+        None
+    };
+
+    if let Some(max_len) = folder_budget {
+        let folder_str = format_folder_display(&repo_stats.root_dir, max_len);
+        if !folder_str.is_empty() {
+            spans.push(Span::styled("· ", Style::default().fg(theme.border)));
+            spans.push(Span::styled(
+                " ",
+                Style::default()
+                    .fg(theme.key_fg)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                format!("{} ", folder_str),
+                Style::default().fg(theme.fg),
             ));
         }
     }
@@ -101,12 +196,23 @@ pub fn render_header(
 
     // Mode badge
     if width >= 95 {
-        spans.push(Span::styled(format!("{} ", mode_label), Style::default().fg(theme.line_num_fg)));
+        spans.push(Span::styled(
+            format!("{} ", mode_label),
+            Style::default().fg(theme.line_num_fg),
+        ));
     }
     let mode_str = if is_unified {
-        if width < 80 { "󰤈 Uni [m] " } else { " 󰤈 Unified [m] " }
+        if width < 80 {
+            "󰤈 Uni [m] "
+        } else {
+            " 󰤈 Unified [m] "
+        }
     } else {
-        if width < 80 { "󰤉 SbS [m] " } else { " 󰤉 Side-by-Side [m] " }
+        if width < 80 {
+            "󰤉 SbS [m] "
+        } else {
+            " 󰤉 Side-by-Side [m] "
+        }
     };
     spans.push(Span::styled(
         mode_str,
@@ -175,27 +281,53 @@ pub fn render_header(
     };
     spans.push(Span::styled(
         format!(" {} ", lang_str),
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme.key_fg)
+            .add_modifier(Modifier::BOLD),
     ));
 
     // Right-aligned settings and help hints
     if width >= 105 {
         spans.push(Span::styled("│ ", Style::default().fg(theme.border)));
-        spans.push(Span::styled("󰒓 ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
         spans.push(Span::styled(
-            match language { Language::En => "Config [C]  ", Language::Pt => "Config [C]  " },
+            "󰒓 ",
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            match language {
+                Language::En => "Config [C]  ",
+                Language::Pt => "Config [C]  ",
+            },
             Style::default().fg(theme.line_num_fg),
         ));
     }
     if width >= 125 {
-        spans.push(Span::styled("󰋖 ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
         spans.push(Span::styled(
-            match language { Language::En => "Help [?]  ", Language::Pt => "Ajuda [?]  " },
+            "󰋖 ",
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            match language {
+                Language::En => "Help [?]  ",
+                Language::Pt => "Ajuda [?]  ",
+            },
             Style::default().fg(theme.line_num_fg),
         ));
-        spans.push(Span::styled("󰌌 ", Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)));
         spans.push(Span::styled(
-            match language { Language::En => "Focus [Tab]", Language::Pt => "Foco [Tab]" },
+            "󰌌 ",
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            match language {
+                Language::En => "Focus [Tab]",
+                Language::Pt => "Foco [Tab]",
+            },
             Style::default().fg(theme.line_num_fg),
         ));
     }
@@ -207,4 +339,36 @@ pub fn render_header(
 
     let paragraph = Paragraph::new(Line::from(spans)).block(block);
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_format_folder_display_truncation() {
+        let repo_path =
+            PathBuf::from("/some/deep/and/long/directory/structure/myproject-with-very-long-name");
+        // Limit shorter than repo base name -> should truncate and end with ellipsis '…'
+        let formatted = format_folder_display(&repo_path, 10);
+        assert_eq!(formatted.chars().count(), 10);
+        assert!(formatted.ends_with('…'));
+
+        // Zero limit -> returns empty string
+        assert_eq!(format_folder_display(&repo_path, 0), "");
+
+        // Limit larger than base name -> no truncation or ellipsis
+        let short_path = PathBuf::from("/tmp/myproj");
+        let formatted_short = format_folder_display(&short_path, 20);
+        assert_eq!(formatted_short, "myproj");
+        assert!(!formatted_short.contains('…'));
+    }
+
+    #[test]
+    fn test_format_folder_display_repo_base() {
+        let path = PathBuf::from("/home/user/code/diffv");
+        let formatted = format_folder_display(&path, 30);
+        assert!(formatted.starts_with("diffv"));
+    }
 }

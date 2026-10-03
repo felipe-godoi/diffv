@@ -1,6 +1,6 @@
+use crate::config::EditorConfig;
 use std::path::Path;
 use std::process::Command;
-use crate::config::EditorConfig;
 
 pub fn open_editor(
     file_path: &Path,

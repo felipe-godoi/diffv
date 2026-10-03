@@ -1,12 +1,14 @@
-use std::collections::BTreeMap;
-use std::path::PathBuf;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use ratatui::Frame;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
-use crate::core::models::{CommitEntry, DiffSection, DrawerTab, FileDiff, FileStatus, Language, StageStatus, StashEntry};
+use crate::core::models::{
+    CommitEntry, DiffSection, DrawerTab, FileDiff, FileStatus, Language, StageStatus, StashEntry,
+};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,14 +123,8 @@ pub fn build_tree_items(
             });
 
             if !is_collapsed {
-                let (sub_add, sub_del) = flatten_node(
-                    sub_node,
-                    dir_path,
-                    depth + 1,
-                    files,
-                    collapsed_dirs,
-                    out,
-                );
+                let (sub_add, sub_del) =
+                    flatten_node(sub_node, dir_path, depth + 1, files, collapsed_dirs, out);
                 out[insert_idx].additions = sub_add;
                 out[insert_idx].deletions = sub_del;
                 total_add += sub_add;
@@ -186,13 +182,27 @@ pub fn build_tree_items(
     }
 
     let mut items = Vec::new();
-    if !filtered_indices.iter().any(|&i| files[i].section == DiffSection::Staged) {
-        flatten_node(&build_node(files, filtered_indices), PathBuf::new(), 0, files, collapsed_dirs, &mut items);
+    if !filtered_indices
+        .iter()
+        .any(|&i| files[i].section == DiffSection::Staged)
+    {
+        flatten_node(
+            &build_node(files, filtered_indices),
+            PathBuf::new(),
+            0,
+            files,
+            collapsed_dirs,
+            &mut items,
+        );
         return items;
     }
 
     for section in [DiffSection::Staged, DiffSection::Changes] {
-        let indices: Vec<usize> = filtered_indices.iter().copied().filter(|&i| files[i].section == section).collect();
+        let indices: Vec<usize> = filtered_indices
+            .iter()
+            .copied()
+            .filter(|&i| files[i].section == section)
+            .collect();
         if indices.is_empty() {
             continue;
         }
@@ -218,7 +228,14 @@ pub fn build_tree_items(
             is_section: true,
         });
         if !is_collapsed {
-            flatten_node(&build_node(files, &indices), key, 1, files, collapsed_dirs, &mut items);
+            flatten_node(
+                &build_node(files, &indices),
+                key,
+                1,
+                files,
+                collapsed_dirs,
+                &mut items,
+            );
         }
     }
     items
@@ -248,7 +265,8 @@ pub fn file_icon(name: &str) -> (&'static str, Color) {
         ".gitignore" | ".gitattributes" | ".gitmodules" | ".gitconfig" => {
             return ("󰊢 ", Color::Rgb(243, 139, 168));
         }
-        ".env" | ".env.local" | ".env.example" | ".env.development" | ".env.production" | ".env.test" => {
+        ".env" | ".env.local" | ".env.example" | ".env.development" | ".env.production"
+        | ".env.test" => {
             return (" ", Color::Rgb(249, 226, 175));
         }
         "cargo.toml" | "cargo.lock" => {
@@ -369,14 +387,18 @@ pub fn file_icon(name: &str) -> (&'static str, Color) {
         "org" => (" ", Color::Rgb(116, 199, 236)),
         "rst" | "adoc" => ("󰈙 ", Color::Rgb(186, 194, 222)),
         // Images & Media
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" => ("󰈟 ", Color::Rgb(203, 166, 247)),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" => {
+            ("󰈟 ", Color::Rgb(203, 166, 247))
+        }
         "svg" => ("󰈟 ", Color::Rgb(249, 226, 175)),
         "mp3" | "wav" | "ogg" | "flac" | "m4a" => ("󰎈 ", Color::Rgb(249, 226, 175)),
         "mp4" | "mkv" | "webm" | "avi" | "mov" => ("󰕧 ", Color::Rgb(243, 139, 168)),
         // Fonts
         "ttf" | "otf" | "woff" | "woff2" => (" ", Color::Rgb(243, 139, 168)),
         // Archives & Compressed
-        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" => (" ", Color::Rgb(249, 226, 175)),
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" => {
+            (" ", Color::Rgb(249, 226, 175))
+        }
         // Lockfiles
         "lock" => ("󰌾 ", Color::Rgb(147, 153, 178)),
         // Binaries & Executables
@@ -424,46 +446,77 @@ pub fn render_drawer(
     };
 
     let border_style = if filter_mode {
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.key_fg)
+            .add_modifier(Modifier::BOLD)
     } else if is_focused {
-        Style::default().fg(theme.header_fg).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.header_fg)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.border)
     };
 
     // Header title with 3 tabs
     let mut title_spans = Vec::new();
-    let sel_tab_style = Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD);
+    let sel_tab_style = Style::default()
+        .fg(theme.text_on(theme.header_fg))
+        .bg(theme.header_fg)
+        .add_modifier(Modifier::BOLD);
     let norm_tab_style = Style::default().fg(theme.line_num_fg);
 
     title_spans.push(Span::raw(" "));
     if active_tab == DrawerTab::Changes {
-        title_spans.push(Span::styled(format!(" [1] {} ", tab_changes_title), sel_tab_style));
+        title_spans.push(Span::styled(
+            format!(" [1] {} ", tab_changes_title),
+            sel_tab_style,
+        ));
     } else {
-        title_spans.push(Span::styled(format!(" [1] {} ", tab_changes_title), norm_tab_style));
+        title_spans.push(Span::styled(
+            format!(" [1] {} ", tab_changes_title),
+            norm_tab_style,
+        ));
     }
 
     title_spans.push(Span::styled("│", Style::default().fg(theme.border)));
 
     if active_tab == DrawerTab::Commits {
-        title_spans.push(Span::styled(format!(" [2] {} ", tab_commits_title), sel_tab_style));
+        title_spans.push(Span::styled(
+            format!(" [2] {} ", tab_commits_title),
+            sel_tab_style,
+        ));
     } else {
-        title_spans.push(Span::styled(format!(" [2] {} ", tab_commits_title), norm_tab_style));
+        title_spans.push(Span::styled(
+            format!(" [2] {} ", tab_commits_title),
+            norm_tab_style,
+        ));
     }
 
     title_spans.push(Span::styled("│", Style::default().fg(theme.border)));
 
     if active_tab == DrawerTab::Stashes {
-        title_spans.push(Span::styled(format!(" [3] {} ", tab_stashes_title), sel_tab_style));
+        title_spans.push(Span::styled(
+            format!(" [3] {} ", tab_stashes_title),
+            sel_tab_style,
+        ));
     } else {
-        title_spans.push(Span::styled(format!(" [3] {} ", tab_stashes_title), norm_tab_style));
+        title_spans.push(Span::styled(
+            format!(" [3] {} ", tab_stashes_title),
+            norm_tab_style,
+        ));
     }
     title_spans.push(Span::raw(" "));
 
     if let Some(title) = transient_title {
         title_spans = vec![Span::styled(format!(" {} · Esc ", title), sel_tab_style)];
     } else if let Some(commit) = active_commit_info {
-        title_spans = vec![Span::styled(format!(" Commit {} · Esc ", commit.hash.chars().take(7).collect::<String>()), sel_tab_style)];
+        title_spans = vec![Span::styled(
+            format!(
+                " Commit {} · Esc ",
+                commit.hash.chars().take(7).collect::<String>()
+            ),
+            sel_tab_style,
+        )];
     }
 
     let block = Block::default()
@@ -569,10 +622,7 @@ fn render_commit_files_drawer(
     let header_height = if area.height < 16 { 3 } else { 4 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(3),
-        ])
+        .constraints([Constraint::Length(header_height), Constraint::Min(3)])
         .split(area);
 
     let short_hash = &commit.hash[..7.min(commit.hash.len())];
@@ -584,24 +634,45 @@ fn render_commit_files_drawer(
     };
 
     header_lines.push(Line::from(vec![
-        Span::styled(format!(" 󰜉 {} ", short_hash), Style::default().fg(theme.text_on(theme.header_fg)).bg(theme.header_fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!(" 󰜉 {} ", short_hash),
+            Style::default()
+                .fg(theme.text_on(theme.header_fg))
+                .bg(theme.header_fg)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" "),
-        Span::styled(format!("👤 {} · {}", commit.author, commit.date), Style::default().fg(theme.line_num_fg)),
+        Span::styled(
+            format!("👤 {} · {}", commit.author, commit.date),
+            Style::default().fg(theme.line_num_fg),
+        ),
     ]));
 
     // Commit subject (wrapped naturally without cutting off)
     let first_line = commit.message.lines().next().unwrap_or("");
-    header_lines.push(Line::from(vec![
-        Span::styled(format!(" 󰈚 {}", first_line), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-    ]));
+    header_lines.push(Line::from(vec![Span::styled(
+        format!(" 󰈚 {}", first_line),
+        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+    )]));
 
     if header_height >= 4 {
-        header_lines.push(Line::from(vec![
-            Span::styled(format!(" 󰈚 {} files · {} · {}", items.len(), details_label, back_label), Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM)),
-        ]));
+        header_lines.push(Line::from(vec![Span::styled(
+            format!(
+                " 󰈚 {} files · {} · {}",
+                items.len(),
+                details_label,
+                back_label
+            ),
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::DIM),
+        )]));
     }
 
-    frame.render_widget(Paragraph::new(header_lines).wrap(Wrap { trim: true }), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(header_lines).wrap(Wrap { trim: true }),
+        chunks[0],
+    );
 
     render_changes_tab(
         frame,
@@ -633,10 +704,7 @@ fn render_stash_files_drawer(
     let header_height = if area.height < 16 { 3 } else { 4 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(header_height),
-            Constraint::Min(3),
-        ])
+        .constraints([Constraint::Length(header_height), Constraint::Min(3)])
         .split(area);
 
     let mut header_lines = Vec::new();
@@ -646,22 +714,40 @@ fn render_stash_files_drawer(
     };
 
     header_lines.push(Line::from(vec![
-        Span::styled(format!(" 󰮎 {} ", stash.selector), Style::default().fg(theme.text_on(theme.key_fg)).bg(theme.key_fg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!(" 󰮎 {} ", stash.selector),
+            Style::default()
+                .fg(theme.text_on(theme.key_fg))
+                .bg(theme.key_fg)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" "),
         Span::styled(&stash.date, Style::default().fg(theme.line_num_fg)),
     ]));
 
-    header_lines.push(Line::from(vec![
-        Span::styled(format!(" 󰈚 {}", stash.message), Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
-    ]));
+    header_lines.push(Line::from(vec![Span::styled(
+        format!(" 󰈚 {}", stash.message),
+        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+    )]));
 
     if header_height >= 4 {
-        header_lines.push(Line::from(vec![
-            Span::styled(format!(" 󰈚 {} files · {} · {}", items.len(), details_label, back_label), Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM)),
-        ]));
+        header_lines.push(Line::from(vec![Span::styled(
+            format!(
+                " 󰈚 {} files · {} · {}",
+                items.len(),
+                details_label,
+                back_label
+            ),
+            Style::default()
+                .fg(theme.key_fg)
+                .add_modifier(Modifier::DIM),
+        )]));
     }
 
-    frame.render_widget(Paragraph::new(header_lines).wrap(Wrap { trim: true }), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(header_lines).wrap(Wrap { trim: true }),
+        chunks[0],
+    );
 
     render_changes_tab(
         frame,
@@ -707,7 +793,10 @@ fn render_changes_tab(
     };
 
     let show_stats = area.width >= 28;
-    let file_count = items.iter().filter(|item| item.file_index.is_some()).count();
+    let file_count = items
+        .iter()
+        .filter(|item| item.file_index.is_some())
+        .count();
 
     let sub_header = if filter_mode {
         match language {
@@ -723,7 +812,9 @@ fn render_changes_tab(
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
         sub_header,
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
+        Style::default()
+            .fg(theme.key_fg)
+            .add_modifier(Modifier::DIM),
     )));
 
     let max_rows = area.height.saturating_sub(1) as usize;
@@ -741,7 +832,13 @@ fn render_changes_tab(
         };
 
         let cursor_span = if is_selected {
-            Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD))
+            Span::styled(
+                "▎",
+                Style::default()
+                    .fg(theme.key_fg)
+                    .bg(theme.selected_bg)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
             Span::styled(" ", base_style)
         };
@@ -749,14 +846,30 @@ fn render_changes_tab(
         let indent = "  ".repeat(item.depth);
 
         if item.is_section {
-            let bg = if is_selected { theme.selected_bg } else { theme.bg };
+            let bg = if is_selected {
+                theme.selected_bg
+            } else {
+                theme.bg
+            };
             let mut spans = vec![
                 cursor_span,
-                Span::styled(if item.is_collapsed { "▸ " } else { "▾ " }, Style::default().fg(theme.line_num_fg).bg(bg)),
-                Span::styled(item.name.clone(), Style::default().fg(theme.header_fg).bg(bg).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    if item.is_collapsed { "▸ " } else { "▾ " },
+                    Style::default().fg(theme.line_num_fg).bg(bg),
+                ),
+                Span::styled(
+                    item.name.clone(),
+                    Style::default()
+                        .fg(theme.header_fg)
+                        .bg(bg)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ];
             if show_stats {
-                spans.push(Span::styled(format!(" +{} -{}", item.additions, item.deletions), Style::default().fg(theme.line_num_fg).bg(bg)));
+                spans.push(Span::styled(
+                    format!(" +{} -{}", item.additions, item.deletions),
+                    Style::default().fg(theme.line_num_fg).bg(bg),
+                ));
             }
             lines.push(Line::from(spans));
         } else if item.is_dir {
@@ -770,14 +883,28 @@ fn render_changes_tab(
             let mut spans = vec![
                 cursor_span,
                 Span::styled(indent, base_style),
-                Span::styled(dir_icon, Style::default().fg(dir_color).bg(if is_selected { theme.selected_bg } else { theme.bg })),
+                Span::styled(
+                    dir_icon,
+                    Style::default().fg(dir_color).bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    }),
+                ),
                 Span::styled(
                     format!("{}/", item.name),
                     base_style.add_modifier(Modifier::BOLD),
                 ),
             ];
             if show_stats {
-                spans.push(Span::styled(stats_str, Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })));
+                spans.push(Span::styled(
+                    stats_str,
+                    Style::default().fg(theme.line_num_fg).bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    }),
+                ));
             }
             lines.push(Line::from(spans));
         } else {
@@ -793,16 +920,24 @@ fn render_changes_tab(
             let stage_span = match item.stage_status.unwrap_or(StageStatus::Unstaged) {
                 StageStatus::Staged => Span::styled(
                     "󰄬 ",
-                    Style::default().fg(theme.status_a).bg(if is_selected { theme.selected_bg } else { theme.bg }).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.status_a)
+                        .bg(if is_selected {
+                            theme.selected_bg
+                        } else {
+                            theme.bg
+                        })
+                        .add_modifier(Modifier::BOLD),
                 ),
                 StageStatus::PartiallyStaged => Span::styled(
                     "± ",
-                    Style::default().fg(theme.status_m).bg(if is_selected { theme.selected_bg } else { theme.bg }),
+                    Style::default().fg(theme.status_m).bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    }),
                 ),
-                StageStatus::Unstaged | StageStatus::Untracked => Span::styled(
-                    "  ",
-                    base_style,
-                ),
+                StageStatus::Unstaged | StageStatus::Untracked => Span::styled("  ", base_style),
             };
 
             let (icon_str, icon_color) = file_icon(&item.name);
@@ -817,13 +952,34 @@ fn render_changes_tab(
             let mut spans = vec![
                 cursor_span,
                 Span::styled(indent, base_style),
-                Span::styled(status_badge, Style::default().fg(status_color).bg(if is_selected { theme.selected_bg } else { theme.bg })),
+                Span::styled(
+                    status_badge,
+                    Style::default().fg(status_color).bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    }),
+                ),
                 stage_span,
-                Span::styled(icon_str, Style::default().fg(icon_color).bg(if is_selected { theme.selected_bg } else { theme.bg })),
+                Span::styled(
+                    icon_str,
+                    Style::default().fg(icon_color).bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    }),
+                ),
                 Span::styled(&item.name, name_style),
             ];
             if show_stats {
-                spans.push(Span::styled(stats_str, Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg })));
+                spans.push(Span::styled(
+                    stats_str,
+                    Style::default().fg(theme.line_num_fg).bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    }),
+                ));
             }
             lines.push(Line::from(spans));
         }
@@ -854,12 +1010,32 @@ fn render_commits_tab(
 
     let mut lines = Vec::new();
     let header_msg = match language {
-        Language::En => if area.width < 28 { format!(" Commits ({})", commits.len()) } else { format!(" Recent Commits ({}) · [Enter] View · [o] PR", commits.len()) },
-        Language::Pt => if area.width < 28 { format!(" Commits ({})", commits.len()) } else { format!(" Commits Recentes ({}) · [Enter] Ver · [o] PR", commits.len()) },
+        Language::En => {
+            if area.width < 28 {
+                format!(" Commits ({})", commits.len())
+            } else {
+                format!(
+                    " Recent Commits ({}) · [Enter] View · [o] PR",
+                    commits.len()
+                )
+            }
+        }
+        Language::Pt => {
+            if area.width < 28 {
+                format!(" Commits ({})", commits.len())
+            } else {
+                format!(
+                    " Commits Recentes ({}) · [Enter] Ver · [o] PR",
+                    commits.len()
+                )
+            }
+        }
     };
     lines.push(Line::from(Span::styled(
         header_msg,
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
+        Style::default()
+            .fg(theme.key_fg)
+            .add_modifier(Modifier::DIM),
     )));
 
     let max_rows = area.height.saturating_sub(1) as usize;
@@ -878,7 +1054,13 @@ fn render_commits_tab(
         };
 
         let cursor_span = if is_selected {
-            Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD))
+            Span::styled(
+                "▎",
+                Style::default()
+                    .fg(theme.key_fg)
+                    .bg(theme.selected_bg)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
             Span::styled(" ", base_style)
         };
@@ -888,18 +1070,33 @@ fn render_commits_tab(
             cursor_span,
             Span::styled(
                 format!(" 󰜉 {:<7} ", short_hash),
-                Style::default().fg(theme.key_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.key_fg)
+                    .bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    })
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 &commit.message,
-                if is_selected { base_style.add_modifier(Modifier::BOLD) } else { base_style },
+                if is_selected {
+                    base_style.add_modifier(Modifier::BOLD)
+                } else {
+                    base_style
+                },
             ),
         ];
 
         if show_date {
             spans.push(Span::styled(
                 format!(" ({})", commit.date),
-                Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }),
+                Style::default().fg(theme.line_num_fg).bg(if is_selected {
+                    theme.selected_bg
+                } else {
+                    theme.bg
+                }),
             ));
         }
 
@@ -931,12 +1128,26 @@ fn render_stashes_tab(
 
     let mut lines = Vec::new();
     let header_msg = match language {
-        Language::En => if area.width < 28 { format!(" Stashes ({})", stashes.len()) } else { format!(" Git Stashes ({}) · [Enter] View", stashes.len()) },
-        Language::Pt => if area.width < 28 { format!(" Stashes ({})", stashes.len()) } else { format!(" Stashes Git ({}) · [Enter] Ver", stashes.len()) },
+        Language::En => {
+            if area.width < 28 {
+                format!(" Stashes ({})", stashes.len())
+            } else {
+                format!(" Git Stashes ({}) · [Enter] View", stashes.len())
+            }
+        }
+        Language::Pt => {
+            if area.width < 28 {
+                format!(" Stashes ({})", stashes.len())
+            } else {
+                format!(" Stashes Git ({}) · [Enter] Ver", stashes.len())
+            }
+        }
     };
     lines.push(Line::from(Span::styled(
         header_msg,
-        Style::default().fg(theme.key_fg).add_modifier(Modifier::DIM),
+        Style::default()
+            .fg(theme.key_fg)
+            .add_modifier(Modifier::DIM),
     )));
 
     let max_rows = area.height.saturating_sub(1) as usize;
@@ -955,7 +1166,13 @@ fn render_stashes_tab(
         };
 
         let cursor_span = if is_selected {
-            Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD))
+            Span::styled(
+                "▎",
+                Style::default()
+                    .fg(theme.key_fg)
+                    .bg(theme.selected_bg)
+                    .add_modifier(Modifier::BOLD),
+            )
         } else {
             Span::styled(" ", base_style)
         };
@@ -964,18 +1181,33 @@ fn render_stashes_tab(
             cursor_span,
             Span::styled(
                 format!(" 󰮎 {:<9} ", stash.selector),
-                Style::default().fg(theme.key_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.key_fg)
+                    .bg(if is_selected {
+                        theme.selected_bg
+                    } else {
+                        theme.bg
+                    })
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 &stash.message,
-                if is_selected { base_style.add_modifier(Modifier::BOLD) } else { base_style },
+                if is_selected {
+                    base_style.add_modifier(Modifier::BOLD)
+                } else {
+                    base_style
+                },
             ),
         ];
 
         if show_date {
             spans.push(Span::styled(
                 format!(" ({})", stash.date),
-                Style::default().fg(theme.line_num_fg).bg(if is_selected { theme.selected_bg } else { theme.bg }),
+                Style::default().fg(theme.line_num_fg).bg(if is_selected {
+                    theme.selected_bg
+                } else {
+                    theme.bg
+                }),
             ));
         }
 
@@ -1018,7 +1250,13 @@ pub fn render_drawer_line_overlay(
             let indent = "  ".repeat(item.depth);
 
             let mut s = vec![
-                Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "▎",
+                    Style::default()
+                        .fg(theme.key_fg)
+                        .bg(theme.selected_bg)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(indent, Style::default().bg(theme.selected_bg)),
             ];
 
@@ -1026,11 +1264,24 @@ pub fn render_drawer_line_overlay(
                 let dir_icon = if item.is_collapsed { " " } else { " " };
                 let path_text = format!("{}/", item.name);
                 let stats = format!(" +{} -{}", item.additions, item.deletions);
-                s.push(Span::styled(dir_icon, Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
-                s.push(Span::styled(path_text, Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
-                s.push(Span::styled(stats, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
+                s.push(Span::styled(
+                    dir_icon,
+                    Style::default().fg(theme.key_fg).bg(theme.selected_bg),
+                ));
+                s.push(Span::styled(
+                    path_text,
+                    Style::default()
+                        .fg(theme.selected_fg)
+                        .bg(theme.selected_bg)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                s.push(Span::styled(
+                    stats,
+                    Style::default().fg(theme.line_num_fg).bg(theme.selected_bg),
+                ));
             } else {
-                let (status_badge, status_color) = match item.status.unwrap_or(FileStatus::Modified) {
+                let (status_badge, status_color) = match item.status.unwrap_or(FileStatus::Modified)
+                {
                     FileStatus::Modified => ("● ", theme.status_m),
                     FileStatus::Added => ("✚ ", theme.status_a),
                     FileStatus::Deleted => ("✖ ", theme.status_d),
@@ -1038,27 +1289,59 @@ pub fn render_drawer_line_overlay(
                     FileStatus::Renamed => ("➜ ", theme.key_fg),
                     FileStatus::Copied => ("✚ ", theme.status_a),
                 };
-                let (stage_badge, stage_color) = match item.stage_status.unwrap_or(StageStatus::Unstaged) {
-                    StageStatus::Staged => ("󰄬 ", theme.status_a),
-                    StageStatus::PartiallyStaged => ("󰄬* ", theme.key_fg),
-                    StageStatus::Untracked => ("? ", theme.status_u),
-                    StageStatus::Unstaged => ("  ", theme.line_num_fg),
-                };
+                let (stage_badge, stage_color) =
+                    match item.stage_status.unwrap_or(StageStatus::Unstaged) {
+                        StageStatus::Staged => ("󰄬 ", theme.status_a),
+                        StageStatus::PartiallyStaged => ("󰄬* ", theme.key_fg),
+                        StageStatus::Untracked => ("? ", theme.status_u),
+                        StageStatus::Unstaged => ("  ", theme.line_num_fg),
+                    };
                 let (file_ico, ico_color) = file_icon(&item.name);
                 let path_text = item.name.clone();
                 let stats = format!(" +{} -{}", item.additions, item.deletions);
 
-                s.push(Span::styled(status_badge, Style::default().fg(status_color).bg(theme.selected_bg)));
-                s.push(Span::styled(stage_badge, Style::default().fg(stage_color).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
-                s.push(Span::styled(file_ico, Style::default().fg(ico_color).bg(theme.selected_bg)));
-                s.push(Span::styled(path_text, Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
-                s.push(Span::styled(stats, Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
+                s.push(Span::styled(
+                    status_badge,
+                    Style::default().fg(status_color).bg(theme.selected_bg),
+                ));
+                s.push(Span::styled(
+                    stage_badge,
+                    Style::default()
+                        .fg(stage_color)
+                        .bg(theme.selected_bg)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                s.push(Span::styled(
+                    file_ico,
+                    Style::default().fg(ico_color).bg(theme.selected_bg),
+                ));
+                s.push(Span::styled(
+                    path_text,
+                    Style::default()
+                        .fg(theme.selected_fg)
+                        .bg(theme.selected_bg)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                s.push(Span::styled(
+                    stats,
+                    Style::default().fg(theme.line_num_fg).bg(theme.selected_bg),
+                ));
             }
-            s.push(Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
+            s.push(Span::styled(
+                " ▏",
+                Style::default().fg(theme.key_fg).bg(theme.selected_bg),
+            ));
 
-            let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
+            let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 {
+                3
+            } else {
+                4
+            };
             let y = if active_commit_info.is_some() || active_stash_info.is_some() {
-                file_tree_area.y + 2 + commit_header_h + (selected_file_idx.saturating_sub(file_scroll)) as u16
+                file_tree_area.y
+                    + 2
+                    + commit_header_h
+                    + (selected_file_idx.saturating_sub(file_scroll)) as u16
             } else {
                 file_tree_area.y + 2 + (selected_file_idx.saturating_sub(file_scroll)) as u16
             };
@@ -1072,16 +1355,44 @@ pub fn render_drawer_line_overlay(
                 let item = &items[selected_file_idx];
                 let indent = "  ".repeat(item.depth);
                 let mut s = vec![
-                    Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "▎",
+                        Style::default()
+                            .fg(theme.key_fg)
+                            .bg(theme.selected_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(indent, Style::default().bg(theme.selected_bg)),
                 ];
                 let (file_ico, ico_color) = file_icon(&item.name);
-                s.push(Span::styled(file_ico, Style::default().fg(ico_color).bg(theme.selected_bg)));
-                s.push(Span::styled(item.name.clone(), Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
-                s.push(Span::styled(format!(" +{} -{}", item.additions, item.deletions), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
-                s.push(Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
-                let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
-                let y = file_tree_area.y + 2 + commit_header_h + (selected_file_idx.saturating_sub(file_scroll)) as u16;
+                s.push(Span::styled(
+                    file_ico,
+                    Style::default().fg(ico_color).bg(theme.selected_bg),
+                ));
+                s.push(Span::styled(
+                    item.name.clone(),
+                    Style::default()
+                        .fg(theme.selected_fg)
+                        .bg(theme.selected_bg)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                s.push(Span::styled(
+                    format!(" +{} -{}", item.additions, item.deletions),
+                    Style::default().fg(theme.line_num_fg).bg(theme.selected_bg),
+                ));
+                s.push(Span::styled(
+                    " ▏",
+                    Style::default().fg(theme.key_fg).bg(theme.selected_bg),
+                ));
+                let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 {
+                    3
+                } else {
+                    4
+                };
+                let y = file_tree_area.y
+                    + 2
+                    + commit_header_h
+                    + (selected_file_idx.saturating_sub(file_scroll)) as u16;
                 (s, y)
             } else {
                 if commits.is_empty() || selected_commit_idx >= commits.len() {
@@ -1091,13 +1402,39 @@ pub fn render_drawer_line_overlay(
                 let short_h = &commit.hash[..7.min(commit.hash.len())];
                 let subject = commit.message.lines().next().unwrap_or("").trim();
                 let s = vec![
-                    Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("  {} ", short_h), Style::default().fg(theme.header_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
-                    Span::styled(subject, Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" ({}) · 👤 {}", commit.date, commit.author), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)),
-                    Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)),
+                    Span::styled(
+                        "▎",
+                        Style::default()
+                            .fg(theme.key_fg)
+                            .bg(theme.selected_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  {} ", short_h),
+                        Style::default()
+                            .fg(theme.header_fg)
+                            .bg(theme.selected_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        subject,
+                        Style::default()
+                            .fg(theme.selected_fg)
+                            .bg(theme.selected_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" ({}) · 👤 {}", commit.date, commit.author),
+                        Style::default().fg(theme.line_num_fg).bg(theme.selected_bg),
+                    ),
+                    Span::styled(
+                        " ▏",
+                        Style::default().fg(theme.key_fg).bg(theme.selected_bg),
+                    ),
                 ];
-                let y = file_tree_area.y + 2 + (selected_commit_idx.saturating_sub(commit_scroll)) as u16;
+                let y = file_tree_area.y
+                    + 2
+                    + (selected_commit_idx.saturating_sub(commit_scroll)) as u16;
                 (s, y)
             }
         }
@@ -1109,16 +1446,44 @@ pub fn render_drawer_line_overlay(
                 let item = &items[selected_file_idx];
                 let indent = "  ".repeat(item.depth);
                 let mut s = vec![
-                    Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "▎",
+                        Style::default()
+                            .fg(theme.key_fg)
+                            .bg(theme.selected_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(indent, Style::default().bg(theme.selected_bg)),
                 ];
                 let (file_ico, ico_color) = file_icon(&item.name);
-                s.push(Span::styled(file_ico, Style::default().fg(ico_color).bg(theme.selected_bg)));
-                s.push(Span::styled(item.name.clone(), Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)));
-                s.push(Span::styled(format!(" +{} -{}", item.additions, item.deletions), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)));
-                s.push(Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)));
-                let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
-                let y = file_tree_area.y + 2 + commit_header_h + (selected_file_idx.saturating_sub(file_scroll)) as u16;
+                s.push(Span::styled(
+                    file_ico,
+                    Style::default().fg(ico_color).bg(theme.selected_bg),
+                ));
+                s.push(Span::styled(
+                    item.name.clone(),
+                    Style::default()
+                        .fg(theme.selected_fg)
+                        .bg(theme.selected_bg)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                s.push(Span::styled(
+                    format!(" +{} -{}", item.additions, item.deletions),
+                    Style::default().fg(theme.line_num_fg).bg(theme.selected_bg),
+                ));
+                s.push(Span::styled(
+                    " ▏",
+                    Style::default().fg(theme.key_fg).bg(theme.selected_bg),
+                ));
+                let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 {
+                    3
+                } else {
+                    4
+                };
+                let y = file_tree_area.y
+                    + 2
+                    + commit_header_h
+                    + (selected_file_idx.saturating_sub(file_scroll)) as u16;
                 (s, y)
             } else {
                 if stashes.is_empty() || selected_stash_idx >= stashes.len() {
@@ -1126,26 +1491,58 @@ pub fn render_drawer_line_overlay(
                 }
                 let stash = &stashes[selected_stash_idx];
                 let s = vec![
-                    Span::styled("▎", Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" 󰮎 {:<9} ", stash.selector), Style::default().fg(theme.key_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
-                    Span::styled(&stash.message, Style::default().fg(theme.selected_fg).bg(theme.selected_bg).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" ({})", stash.date), Style::default().fg(theme.line_num_fg).bg(theme.selected_bg)),
-                    Span::styled(" ▏", Style::default().fg(theme.key_fg).bg(theme.selected_bg)),
+                    Span::styled(
+                        "▎",
+                        Style::default()
+                            .fg(theme.key_fg)
+                            .bg(theme.selected_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" 󰮎 {:<9} ", stash.selector),
+                        Style::default()
+                            .fg(theme.key_fg)
+                            .bg(theme.selected_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        &stash.message,
+                        Style::default()
+                            .fg(theme.selected_fg)
+                            .bg(theme.selected_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" ({})", stash.date),
+                        Style::default().fg(theme.line_num_fg).bg(theme.selected_bg),
+                    ),
+                    Span::styled(
+                        " ▏",
+                        Style::default().fg(theme.key_fg).bg(theme.selected_bg),
+                    ),
                 ];
-                let y = file_tree_area.y + 2 + (selected_stash_idx.saturating_sub(stash_scroll)) as u16;
+                let y =
+                    file_tree_area.y + 2 + (selected_stash_idx.saturating_sub(stash_scroll)) as u16;
                 (s, y)
             }
         }
     };
 
-    let total_len = spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
+    let total_len = spans
+        .iter()
+        .map(|s| s.content.chars().count())
+        .sum::<usize>();
 
     // ONLY show overlay if the line content overflows the drawer's inner width!
     if total_len <= avail_w {
         return;
     }
 
-    let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 { 3 } else { 4 };
+    let commit_header_h = if file_tree_area.height.saturating_sub(2) < 16 {
+        3
+    } else {
+        4
+    };
     let min_y = if active_commit_info.is_some() || active_stash_info.is_some() {
         file_tree_area.y + 2 + commit_header_h
     } else {
@@ -1170,7 +1567,6 @@ pub fn render_drawer_line_overlay(
     frame.render_widget(Clear, overlay_rect);
     frame.render_widget(Paragraph::new(Line::from(spans)), overlay_rect);
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1210,4 +1606,3 @@ mod tests {
         assert_eq!(file_icon("archive.zip").0, " ");
     }
 }
-

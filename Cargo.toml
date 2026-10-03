@@ -4,6 +4,12 @@ version = "0.5.0"
 edition = "2021"
 authors = ["Felipe Godoi"]
 description = "High-performance VS Code style CLI diff viewer and companion for AI coding agents"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/felipe-godoi/diffv"
+homepage = "https://github.com/felipe-godoi/diffv"
+readme = "README.md"
+keywords = ["git", "diff", "tui", "ratatui", "ai-agent"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 ratatui = "0.29"

@@ -1,6 +1,6 @@
-use std::path::Path;
-use arboard::Clipboard;
 use crate::core::models::{DiffKind, Hunk};
+use arboard::Clipboard;
+use std::path::Path;
 
 pub fn copy_hunk_as_markdown(file_path: &Path, hunk: &Hunk) -> anyhow::Result<()> {
     let mut text = format!(

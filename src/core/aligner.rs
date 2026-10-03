@@ -28,7 +28,10 @@ pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
                     let mut additions = Vec::new();
                     let mut add_indices = Vec::new();
 
-                    while i < lines.len() && (lines[i].kind == DiffKind::Deletion || lines[i].kind == DiffKind::Addition) {
+                    while i < lines.len()
+                        && (lines[i].kind == DiffKind::Deletion
+                            || lines[i].kind == DiffKind::Addition)
+                    {
                         if lines[i].kind == DiffKind::Deletion {
                             deletions.push(lines[i].clone());
                             del_indices.push(i);
@@ -69,7 +72,8 @@ pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
                         if row_idx < deletions.len() && row_idx < additions.len() {
                             let left_ref = left_line.as_mut().unwrap();
                             let right_ref = right_line.as_mut().unwrap();
-                            let (left_spans, right_spans) = compute_intraline_spans(&left_ref.content, &right_ref.content);
+                            let (left_spans, right_spans) =
+                                compute_intraline_spans(&left_ref.content, &right_ref.content);
                             left_ref.spans = left_spans;
                             right_ref.spans = right_spans;
                         }

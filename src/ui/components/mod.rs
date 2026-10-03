@@ -1,13 +1,14 @@
+pub mod branch_popup;
 pub mod commit_view;
 pub mod details_popup;
 pub mod file_tree;
 pub mod header;
 pub mod help_popup;
+pub mod horizontal;
 pub mod ruler;
+pub mod settings_popup;
 pub mod side_by_side;
+pub mod style;
 pub mod toast;
 pub mod unified;
 pub mod worktree_popup;
-pub mod horizontal;
-pub mod style;
-pub mod settings_popup;
