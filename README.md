@@ -33,33 +33,37 @@
 
 ## 🚀 Installation
 
-### Automated Installer (macOS & Linux)
+### Automated Install (macOS & Linux)
 
-You can install `diffv` with a single command:
-
+Via `curl`:
 ```bash
-# Via curl
 curl -fsSL https://raw.githubusercontent.com/felipe-godoi/diffv/main/install.sh | bash
+```
 
-# Or from a cloned repository
+Or from a local cloned repository:
+```bash
 ./install.sh
 ```
 
 The installer detects your OS and architecture, downloads the latest release binary, verifies its SHA-256 checksum, and installs it to `~/.local/bin/diffv`. Remote installation needs no Rust toolchain or GitHub login. Running the installer from a source checkout builds the local code.
-
-To uninstall:
-```bash
-diffv --uninstall
-
-# Or via the installer script:
-./install.sh --uninstall
-```
 
 ### Manual Install via Cargo
 
 ```bash
 cargo install --git https://github.com/felipe-godoi/diffv.git
 ```
+
+### Uninstall
+
+```bash
+diffv --uninstall
+```
+
+Or via the installer script:
+```bash
+./install.sh --uninstall
+```
+
 
 ---
 
