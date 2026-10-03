@@ -1,7 +1,17 @@
 # diffv ⚡
 > High-performance VS Code style CLI diff viewer and companion for AI coding agents.
 
+[![CI](https://github.com/felipe-godoi/diffv/actions/workflows/ci.yml/badge.svg)](https://github.com/felipe-godoi/diffv/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/felipe-godoi/diffv?color=blue)](https://github.com/felipe-godoi/diffv/releases)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](Cargo.toml)
+
+<p align="center">
+  <img src="assets/demo.gif" alt="diffv demo" width="100%" />
+</p>
+
 `diffv` brings the visual clarity, dual-column side-by-side layout, and intra-line word/character highlighting of the VS Code Diff Editor straight into your terminal, designed specifically for seamless pairing with **tmux**, **Neovim**, and autonomous AI coding agents (Antigravity CLI, Claude Code, Aider, Copilot, etc.).
+
 
 ---
 
@@ -200,9 +210,20 @@ All unit tests for side-by-side alignment, fillers, code tokenization intra-line
 
 ---
 
+## 🤝 Contributing
+
+Contributions are welcome! Please check out [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup, coding guidelines, and our PR workflow. Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
+
+---
+
 ## 📄 License
 
-MIT OR Apache-2.0
+Dual-licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option.
 
 ## Automatic updates & Release Channels
 
