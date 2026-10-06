@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -16,16 +16,19 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use diffv::cli::Cli;
-use diffv::config::{Config, UpdateChannel};
+use diffv::config::{Config, ResolvedSearch, UpdateChannel};
 use diffv::git::provider::GitProvider;
 use diffv::integration::editor::open_editor;
 use diffv::integration::fzf::{is_fzf_available, search_diff_text_fzf, search_files_fzf};
 use diffv::ui::app::{App, AppMode, FzfRequest};
+use diffv::ui::components::loading::render_loading;
+use diffv::ui::theme::Theme;
 use diffv::watcher::service::{WatchEvent, WatchService};
 
 enum AppEvent {
     Input(Event),
     Reload,
+    UpdateInstalled(String),
     WatcherProgress {
         scanned: usize,
         total: Option<usize>,
@@ -159,24 +162,11 @@ fn run(args: Cli) -> Result<()> {
         config.update.auto_update
     };
 
-    if auto_update_enabled && std::env::var_os("DIFFV_UPDATE_RESTART").is_none() {
-        // Offline, rate-limited or no newer release: keep running the installed version.
-        if let Ok(Some(path)) = diffv::update::check_and_install(channel) {
-            eprintln!("diffv updated. Restarting…");
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                let error = std::process::Command::new(path)
-                    .args(std::env::args_os().skip(1))
-                    .env("DIFFV_UPDATE_RESTART", "1")
-                    .exec();
-                eprintln!(
-                    "Could not restart diffv: {}. Reopen to use the update.",
-                    error
-                );
-            }
-        }
-    }
+    // The check runs in the background once the TUI is up (see `run_app`), so a slow
+    // or offline network never delays the first frame.
+    let update_channel = (auto_update_enabled
+        && std::env::var_os("DIFFV_UPDATE_RESTART").is_none())
+    .then_some(channel);
 
     // Setup custom panic hook to restore terminal
     let default_panic = std::panic::take_hook();
@@ -199,7 +189,7 @@ fn run(args: Cli) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let app_result = run_app(&mut terminal, mode, config, &args, cwd);
+    let app_result = run_app(&mut terminal, mode, config, &args, cwd, update_channel);
 
     // Teardown TUI
     disable_raw_mode()?;
@@ -211,6 +201,71 @@ fn run(args: Cli) -> Result<()> {
     terminal.show_cursor()?;
 
     app_result
+}
+
+/// Collects the initial git/diff state on a worker thread while drawing a loading
+/// indicator, so the first frame shows up immediately. Keys pressed meanwhile are
+/// returned to be replayed once the app exists; Shift+Q / Ctrl+C quit right away
+/// (returns `None`).
+fn load_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    mode: AppMode,
+    config: Config,
+    args: &Cli,
+    watch_enabled: bool,
+) -> Result<Option<(App, Vec<KeyEvent>)>> {
+    let theme = Theme::from_name(args.theme.as_deref().unwrap_or(&config.ui.theme));
+    let (staged, unified, theme_override, ignore_whitespace, history) = (
+        args.staged,
+        args.unified,
+        args.theme.clone(),
+        args.ignore_whitespace,
+        args.history,
+    );
+    let loader = thread::spawn(move || {
+        App::new(
+            mode,
+            config,
+            watch_enabled,
+            staged,
+            unified,
+            theme_override,
+            ignore_whitespace,
+            history,
+        )
+    });
+
+    let mut queued_keys = Vec::new();
+    let started = Instant::now();
+    let mut spinner_idx = usize::MAX;
+    while !loader.is_finished() {
+        // Advance the spinner every 80ms but check for completion more often.
+        let frame = started.elapsed().as_millis() as usize / 80;
+        if frame != spinner_idx {
+            spinner_idx = frame;
+            terminal.draw(|f| render_loading(f, spinner_idx, &theme))?;
+        }
+        if !event::poll(Duration::from_millis(10))? {
+            continue;
+        }
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                let ctrl_c =
+                    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+                if key.code == KeyCode::Char('Q') || ctrl_c {
+                    return Ok(None);
+                }
+                queued_keys.push(key);
+            }
+            Event::Resize(_, _) => terminal.autoresize()?,
+            _ => {}
+        }
+    }
+
+    let app = loader
+        .join()
+        .map_err(|_| anyhow::anyhow!("initial diff loading panicked"))??;
+    Ok(Some((app, queued_keys)))
 }
 
 fn determine_app_mode(args: &Cli, cwd: &Path) -> Result<AppMode> {
@@ -270,23 +325,30 @@ fn run_app(
     config: Config,
     args: &Cli,
     cwd: &Path,
+    update_channel: Option<UpdateChannel>,
 ) -> Result<()> {
+    // Channel for unifying keyboard events, debounced filesystem events and tick timer
+    let (tx, rx) = mpsc::channel();
+
+    // 0. Auto-update check off the critical path: quiet, bounded by the updater's
+    // timeouts, failures ignored (offline, rate-limited or no newer release).
+    if let Some(channel) = update_channel {
+        let update_tx = tx.clone();
+        thread::spawn(move || {
+            if let Ok(Some(tag)) = diffv::update::check_and_install_quiet(channel) {
+                let _ = update_tx.send(AppEvent::UpdateInstalled(tag));
+            }
+        });
+    }
+
     let watch_enabled =
         args.watch || (config.watcher.enabled && matches!(mode, AppMode::Git { .. }));
 
-    let mut app = App::new(
-        mode,
-        config,
-        watch_enabled,
-        args.staged,
-        args.unified,
-        args.theme.clone(),
-        args.ignore_whitespace,
-        args.history,
-    )?;
+    let Some((mut app, queued_keys)) = load_app(terminal, mode, config, args, watch_enabled)?
+    else {
+        return Ok(());
+    };
 
-    // Channel for unifying keyboard events, debounced filesystem events and tick timer
-    let (tx, rx) = mpsc::channel();
     let is_editor_active = Arc::new(AtomicBool::new(false));
 
     // 1. Keyboard & terminal event listener thread
@@ -371,6 +433,14 @@ fn run_app(
         }
     });
 
+    // Keys typed while loading run now, in order, against the first real frame
+    if !queued_keys.is_empty() {
+        terminal.draw(|f| app.render(f))?;
+        for key in queued_keys {
+            app.handle_key(key);
+        }
+    }
+
     // Main event loop with dirty tracking for 0.0% idle CPU
     let mut needs_redraw = true;
 
@@ -431,16 +501,11 @@ fn run_app(
 
         // Check if an interactive fzf search request is pending
         if let Some(fzf_req) = app.fzf_request.take() {
-            if !is_fzf_available() {
-                let msg = match app.language {
-                    diffv::core::models::Language::En => {
-                        "fzf is not installed or not found on PATH"
-                    }
-                    diffv::core::models::Language::Pt => {
-                        "fzf não está instalado ou não foi encontrado no PATH"
-                    }
-                };
-                app.set_notification(msg);
+            // fzf is optional: `[search] engine` (Ctrl+G) picks fzf or the built-in picker
+            if let ResolvedSearch::Builtin { fzf_missing } =
+                app.config.search.engine.resolve(is_fzf_available())
+            {
+                app.open_builtin_picker(fzf_req, fzf_missing);
                 needs_redraw = true;
                 continue;
             }
@@ -508,6 +573,10 @@ fn run_app(
             }
             AppEvent::Input(Event::Resize(_, _)) => {
                 terminal.autoresize()?;
+                needs_redraw = true;
+            }
+            AppEvent::UpdateInstalled(tag) => {
+                app.notify_update_installed(&tag);
                 needs_redraw = true;
             }
             AppEvent::Reload => {

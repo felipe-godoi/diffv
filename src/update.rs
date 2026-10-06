@@ -113,11 +113,17 @@ fn install_verified(download: &Path, executable: &Path, digest: &str) -> Result<
 use crate::config::UpdateChannel;
 
 pub fn check_and_install(channel: UpdateChannel) -> Result<Option<PathBuf>> {
-    check_and_install_internal(channel, false)
+    check_and_install_internal(channel, false, false).map(|r| r.map(|(path, _)| path))
 }
 
 pub fn check_and_install_verbose(channel: UpdateChannel) -> Result<Option<PathBuf>> {
-    check_and_install_internal(channel, true)
+    check_and_install_internal(channel, true, false).map(|r| r.map(|(path, _)| path))
+}
+
+/// Startup check run in the background while the TUI is on screen: never writes to
+/// the terminal, and returns the installed release tag when an update was applied.
+pub fn check_and_install_quiet(channel: UpdateChannel) -> Result<Option<String>> {
+    check_and_install_internal(channel, false, true).map(|r| r.map(|(_, tag)| tag))
 }
 
 pub fn is_dev_executable(executable: &Path) -> bool {
@@ -127,7 +133,11 @@ pub fn is_dev_executable(executable: &Path) -> bool {
         || executable.components().any(|c| c.as_os_str() == "target")
 }
 
-fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<Option<PathBuf>> {
+fn check_and_install_internal(
+    channel: UpdateChannel,
+    verbose: bool,
+    quiet: bool,
+) -> Result<Option<(PathBuf, String)>> {
     let executable = match std::env::current_exe().and_then(|p| p.canonicalize()) {
         Ok(exe) => exe,
         Err(_) => return Ok(None),
@@ -259,11 +269,13 @@ fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<O
     }
     let staging = tempfile::tempdir_in(parent)?;
     let download = staging.path().join("diffv");
-    eprintln!(
-        "Updating diffv ({}) → {}…",
-        channel.as_str(),
-        release.tag_name
-    );
+    if !quiet {
+        eprintln!(
+            "Updating diffv ({}) → {}…",
+            channel.as_str(),
+            release.tag_name
+        );
+    }
     let prefix = format!("https://github.com/{}/releases/download/", REPO);
     if !asset.browser_download_url.starts_with(&prefix) {
         bail!("Unexpected release download URL");
@@ -274,7 +286,7 @@ fn check_and_install_internal(channel: UpdateChannel, verbose: bool) -> Result<O
         Duration::from_secs(90),
     )?;
     install_verified(&download, &executable, digest)?;
-    Ok(Some(executable))
+    Ok(Some((executable, release.tag_name)))
 }
 
 #[cfg(test)]

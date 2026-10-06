@@ -1,5 +1,5 @@
 # diffv ⚡
-> High-performance VS Code style CLI diff viewer and companion for AI coding agents.
+> High-performance VS Code style CLI diff viewer to use alongside your AI coding agent.
 
 [![CI](https://github.com/felipe-godoi/diffv/actions/workflows/ci.yml/badge.svg)](https://github.com/felipe-godoi/diffv/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/felipe-godoi/diffv?color=blue)](https://github.com/felipe-godoi/diffv/releases)
@@ -10,7 +10,7 @@
   <img src="assets/demo.gif" alt="diffv demo" width="100%" />
 </p>
 
-`diffv` brings the visual clarity, dual-column side-by-side layout, and intra-line word/character highlighting of the VS Code Diff Editor straight into your terminal, designed specifically for seamless pairing with **tmux**, **Neovim**, and autonomous AI coding agents (Antigravity CLI, Claude Code, Aider, Copilot, etc.).
+`diffv` brings the visual clarity, dual-column side-by-side layout, and intra-line word/character highlighting of the VS Code Diff Editor straight into your terminal, designed specifically for seamless pairing with **tmux**, your editor (`$EDITOR`), and autonomous AI coding agents (Antigravity CLI, Claude Code, Aider, Copilot, etc.).
 
 
 ---
@@ -24,7 +24,7 @@
 - 🌲 **Interactive File Drawer & Quick Filter**: Fast navigation with `j`/`k`, status indicators (`M`, `A`, `D`, `?`, `[S]`, `[U]`), and instant fuzzy search filtering (`/`).
 - 🎯 **Granular Staging & Discarding**: Stage (`s`), unstage (`u`), or discard (`d`) individual hunks, or stage (`S`), unstage (`U`), or discard (`D`) entire files with quick confirmation dialogs.
 - 📋 **AI Context Copying (`c`)**: One-key copy of the active hunk or file diff formatted in Markdown directly to your system clipboard (`arboard`) to easily paste into AI agent prompts.
-- ✏️ **Instant Neovim / $EDITOR Jump (`e` or `Enter`)**: Opens `$EDITOR +<line> <file>` or routes to an active Neovim session via `nvr` (neovim-remote).
+- ✏️ **Instant Editor Jump (`e` or `Enter`)**: Opens `$EDITOR +<line> <file>` (`$GIT_EDITOR` and `$VISUAL` take precedence, as in git). With none of them set it uses the system default editor (`editor`, the Debian/Ubuntu `update-alternatives` entry), then `vi`, then `nano`. Optionally, when you run diffv inside Neovim (`$NVIM` set) with `use_nvr = true` and `nvr` (neovim-remote) installed, the file opens in that running instance.
 - 📂 **Multi-Mode Comparison**: Works with Git working trees, `--staged` mode, specific Git branches/commits (`HEAD~1`, `main..feat`), arbitrary local files (`diffv a.rs b.rs`), local directories (`diffv dir1 dir2`), and standard input pipes (`git diff | diffv -`).
 - 🔀 **Branch Comparison Selector (`B` / `--compare`)**: Interactive branch picker popup (just like VS Code) to compare your current worktree against any local or remote branch (`main`, `origin/main`, etc.), with instant fuzzy search and quick reset to default worktree changes.
 - 📜 **File Commit History (`H` / `-H`)**: Inspect commit log entries for the active file with author, relative timestamp, and commit message, and preview individual commit diffs in-place.
@@ -45,12 +45,25 @@ Or from a local cloned repository:
 ./install.sh
 ```
 
-The installer detects your OS and architecture, downloads the latest release binary, verifies its SHA-256 checksum, and installs it to `~/.local/bin/diffv`. Remote installation needs no Rust toolchain or GitHub login. Running the installer from a source checkout builds the local code.
+The installer detects your OS and architecture, downloads the latest release binary, verifies its SHA-256 checksum, and installs it to `~/.local/bin/diffv`. Remote installation needs no Rust toolchain or GitHub login. Running the installer from a source checkout builds the local code. If `fzf` is not installed, the script offers it as an **optional** extra with a `(y/N)` prompt — pressing Enter skips it — and in non-interactive runs (`curl … | bash`) it only prints a one-line tip; a missing or failed `fzf` install never fails the diffv installation.
 
 ### Manual Install via Cargo
 
 ```bash
 cargo install --git https://github.com/felipe-godoi/diffv.git
+```
+
+### Optional: `fzf`
+
+[`fzf`](https://github.com/junegunn/fzf) is **optional**. When it is on your `PATH`, `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open it full-screen for the fastest fuzzy matching in the terminal. Without it, `diffv` falls back to a **built-in picker** popup with the same candidates (fuzzy/substring filter, `↑`/`↓`, `Enter` to open, `Esc` / `Ctrl+C` / `Ctrl+Q` to cancel like fzf — `Shift+Q` types a "Q" there) — searching keeps working, you just get the simpler in-app list instead of fzf's interface.
+
+Press `Ctrl+G` (outside the picker) to switch the search engine: `auto` (fzf when installed, otherwise the built-in picker) → `fzf` → `builtin` → `auto`. `fzf` is skipped when it is not installed, a toast shows the engine in use, and the choice is saved as `[search] engine` in `config.toml` (also editable in Settings, `C`). With `engine = "fzf"` and fzf missing, diffv says so and falls back to the built-in picker.
+
+```bash
+# macOS
+brew install fzf
+# Debian / Ubuntu
+sudo apt install fzf
 ```
 
 ### Uninstall
@@ -127,17 +140,19 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `h` / `l` or `←` / `→` | General | Tree: collapse/expand folder. Diff: switch Old/New column |
 | `Space` | File Tree | Toggle collapse/expand on current folder |
 | `<` / `>` or `,` / `.` | General | **Resize Panes**: shrink / expand File Tree width |
-| `Mouse Wheel` | General | **Scroll** hovered pane smoothly (File Tree or Diff) |
+| `Mouse Wheel` | General | **Scroll the view** of the hovered pane (File Tree or Diff); the cursor stays put and is only dragged along when it would leave the screen |
 | `Mouse Click` | General | **Select** file / line, collapse/expand folders, switch focus, or click branch badge to open Branch Selector |
 | `Mouse Drag` | General | **Drag vertical divider** to resize File Tree width |
+| `Mouse Drag` | Diff | **Select diff text** (unified, side-by-side or commit diff) and copy it to the clipboard on release. `Ctrl+C` copies again, `Esc` clears. Gutters and `+`/`-` markers are left out |
 | `t` | File Tree | Toggle **📁 Pastas (Tree)** ↔ **📄 Lista (Flat)** |
 | `v` | Diff | Toggle **Visual Mode** for line-level partial staging / unstaging |
 | `o` | Commits / History | Open the selected commit's **GitHub pull request** in the browser (falls back to the commit page; uses `gh` when available) |
 | `x` | General | **Expand full file** ↔ changes only (keeps file and cursor line) |
-| `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash) |
-| `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched |
-| `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in Neovim |
-| `e` | Diff | Open file in Neovim / `$EDITOR` at cursor line (`+line`) |
+| `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash). Uses `fzf` when installed, otherwise the built-in picker |
+| `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched. Uses `fzf` when installed, otherwise the built-in picker |
+| `Ctrl+g` | General | Switch the search engine: **auto** → **fzf** → **built-in** (fzf skipped when not installed; saved to `config.toml`) |
+| `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in your editor |
+| `e` | Diff | Open file in your editor (`$EDITOR`; system default editor, then `vi`/`nano` when unset) at cursor line (`+line`) |
 | `s` | Diff | **Stage** current hunk (or Visual lines) of a file under **Changes** |
 | `u` | Diff | **Unstage** current hunk (or Visual lines) of a file under **Staged** |
 | `d` | Diff | **Discard** current hunk under **Changes** (with `y/n` confirmation) |
@@ -196,10 +211,13 @@ enabled = true
 debounce_ms = 150
 watch_untracked = true
 
+[search]
+engine = "auto"                # auto (fzf if installed, else built-in), fzf, or builtin · Ctrl+G cycles
+
 [editor]
-command = "nvim"
+command = "vi"                 # Default: $GIT_EDITOR > $VISUAL > $EDITOR > system `editor` > vi > nano
 args = ["+{{line}}", "{{file}}"]
-use_nvr = true                 # Uses nvr (neovim-remote) if running inside tmux/nvim
+use_nvr = true                 # Optional: inside Neovim ($NVIM set) with nvr installed, open in that instance
 ```
 
 ---

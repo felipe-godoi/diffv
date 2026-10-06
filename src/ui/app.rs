@@ -26,6 +26,9 @@ use crate::ui::components::file_tree::{
 };
 use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
+use crate::ui::components::picker::{
+    picker_key_action, render_picker_popup, PickerAction, PickerState,
+};
 use crate::ui::components::ruler::render_ruler;
 use crate::ui::components::settings_popup::{render_settings_popup, SettingItem, SETTING_ITEMS};
 use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
@@ -33,6 +36,8 @@ use crate::ui::components::style::centered_rect;
 use crate::ui::components::toast::{render_toast, TOAST_DURATION};
 use crate::ui::components::unified::render_unified;
 use crate::ui::components::worktree_popup::{render_worktree_popup, WorktreeCreationState};
+use crate::ui::scroll::{clamp_cursor, max_list_offset, scroll_offset, SCROLLOFF, WHEEL_STEP};
+use crate::ui::selection::{extract_text, is_selected, pane_lines, MouseSelection, TextMap};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,6 +176,8 @@ pub struct App {
 
     // External fzf requests
     pub fzf_request: Option<FzfRequest>,
+    // Built-in picker used for fzf requests when fzf is not installed
+    pub picker: Option<PickerState>,
 
     // Terminal geometry for responsive drag resizing
     pub term_width: u16,
@@ -187,6 +194,23 @@ pub struct App {
     // Branch comparison selector popup state
     pub show_branch_selector: bool,
     pub branch_selector: Option<BranchSelectorState>,
+
+    // Mouse text selection over the diff panes
+    pub text_map: TextMap,
+    pub mouse_selection: Option<MouseSelection>,
+    selection_key: Option<SelectionKey>,
+    pending_click: Option<crossterm::event::MouseEvent>,
+}
+
+/// Identifies the rendered diff a mouse selection was made on; line ids are only
+/// meaningful while it stays the same.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectionKey {
+    path: PathBuf,
+    section: DiffSection,
+    is_unified: bool,
+    full_context: bool,
+    rows: usize,
 }
 
 impl App {
@@ -294,6 +318,7 @@ impl App {
             details_popup_scroll: 0,
             worktree_creation: None,
             fzf_request: None,
+            picker: None,
             term_width: 80,
             term_height: 25,
             watcher_state: if watch_mode {
@@ -306,6 +331,10 @@ impl App {
             settings_selected_idx: 0,
             show_branch_selector: false,
             branch_selector: None,
+            text_map: TextMap::default(),
+            mouse_selection: None,
+            selection_key: None,
+            pending_click: None,
         };
 
         app.reload_diffs_internal(false)?;
@@ -614,6 +643,22 @@ impl App {
                 };
                 self.set_notification(msg);
             }
+            SettingItem::SearchEngine => {
+                use crate::config::SearchEngine;
+                let fzf_available = crate::integration::fzf::is_fzf_available();
+                self.config.search.engine = if forward {
+                    self.config.search.engine.next(fzf_available)
+                } else {
+                    match self.config.search.engine {
+                        SearchEngine::Auto => SearchEngine::Builtin,
+                        SearchEngine::Builtin if fzf_available => SearchEngine::Fzf,
+                        SearchEngine::Builtin | SearchEngine::Fzf => SearchEngine::Auto,
+                    }
+                };
+                let msg =
+                    search_engine_message(self.config.search.engine, fzf_available, self.language);
+                self.set_notification(msg);
+            }
             SettingItem::WatcherEnabled => {
                 self.config.watcher.enabled = !self.config.watcher.enabled;
                 let msg = match (self.config.watcher.enabled, self.language) {
@@ -764,12 +809,9 @@ impl App {
         }
         let total = self.total_diff_rows();
         if total > 0 {
-            let max_scroll = total.saturating_sub(1);
-            self.scroll_y = (self.scroll_y + amount).min(max_scroll);
-            if self.selected_row < self.scroll_y {
-                self.selected_row = self.scroll_y;
-            }
+            self.scroll_y = scroll_offset(self.scroll_y, amount as isize, total - 1);
         }
+        self.keep_diff_cursor_in_view();
     }
 
     pub fn scroll_viewport_up(&mut self, amount: usize) {
@@ -777,10 +819,122 @@ impl App {
             self.wrap_skip = self.wrap_skip.saturating_sub(amount);
             return;
         }
-        let vp = self.viewport_height.saturating_sub(3).max(1);
         self.scroll_y = self.scroll_y.saturating_sub(amount);
-        if self.selected_row >= self.scroll_y + vp {
-            self.selected_row = (self.scroll_y + vp).saturating_sub(1);
+        self.keep_diff_cursor_in_view();
+    }
+
+    /// Logical diff rows fully visible from `scroll_y` (wrapped rows count by height).
+    fn visible_diff_rows(&self) -> usize {
+        let vp = self.viewport_height.saturating_sub(3).max(1);
+        let Some(file) = self.current_file().filter(|_| self.wrap_lines) else {
+            return vp;
+        };
+        let mut used = 0;
+        let mut count = 0;
+        for height in wrapped_row_heights(
+            file,
+            self.is_unified,
+            wrap_width(self.is_unified, self.diff_width),
+        )
+        .skip(self.scroll_y)
+        {
+            if count > 0 && used + height > vp {
+                break;
+            }
+            used += height;
+            count += 1;
+        }
+        count.max(1)
+    }
+
+    /// Drags the diff cursor along when the view scrolled past it.
+    fn keep_diff_cursor_in_view(&mut self) {
+        let total = self.total_diff_rows();
+        let visible = self.visible_diff_rows();
+        self.selected_row =
+            clamp_cursor(self.selected_row, self.scroll_y, visible, total, SCROLLOFF);
+    }
+
+    /// Mouse wheel over the diff: scrolls the view, not the cursor.
+    pub fn wheel_diff(&mut self, down: bool) {
+        if down {
+            self.scroll_viewport_down(WHEEL_STEP);
+        } else {
+            self.scroll_viewport_up(WHEEL_STEP);
+        }
+    }
+
+    /// Mouse wheel over the drawer (files / commits / stashes / file history):
+    /// scrolls the list and only moves the selection when it would leave the view.
+    pub fn wheel_drawer(&mut self, down: bool) {
+        let delta = if down {
+            WHEEL_STEP as isize
+        } else {
+            -(WHEEL_STEP as isize)
+        };
+        let base_rows = self.file_tree_height.saturating_sub(4).max(1);
+        let inspecting = self.active_commit_info.is_some() || self.active_stash_info.is_some();
+        let lists_files = self.drawer_tab == DrawerTab::Changes || inspecting;
+        let (offset, cursor, total, visible) = if self.show_history {
+            (
+                &mut self.history_scroll,
+                &mut self.selected_history_idx,
+                self.history_commits.len(),
+                base_rows,
+            )
+        } else if lists_files {
+            let header_rows = if !inspecting {
+                0
+            } else if self.viewport_height < 18 {
+                3
+            } else {
+                4
+            };
+            let visible = base_rows.saturating_sub(header_rows).max(1);
+            if self.file_view_mode == FileViewMode::Tree {
+                let total = self.tree_items.len();
+                (
+                    &mut self.file_tree_scroll,
+                    &mut self.selected_tree_idx,
+                    total,
+                    visible,
+                )
+            } else {
+                let total = self.filtered_indices.len();
+                (
+                    &mut self.file_tree_scroll,
+                    &mut self.selected_filtered_idx,
+                    total,
+                    visible,
+                )
+            }
+        } else if self.drawer_tab == DrawerTab::Commits {
+            (
+                &mut self.repo_commit_scroll,
+                &mut self.selected_repo_commit_idx,
+                self.repo_commits.len(),
+                base_rows,
+            )
+        } else {
+            (
+                &mut self.stash_scroll,
+                &mut self.selected_stash_idx,
+                self.stashes.len(),
+                base_rows,
+            )
+        };
+        *offset = scroll_offset(*offset, delta, max_list_offset(total, visible));
+        let previous = *cursor;
+        *cursor = clamp_cursor(*cursor, *offset, visible, total, SCROLLOFF);
+        if *cursor == previous {
+            return;
+        }
+        if self.show_history {
+            self.load_selected_commit_diff();
+        } else if lists_files {
+            self.wrap_skip = 0;
+            self.scroll_y = 0;
+            self.selected_row = 0;
         }
     }
 
@@ -991,6 +1145,67 @@ impl App {
                 self.load_selected_stash();
             }
             SearchSource::Loaded | SearchSource::CurrentFile => {}
+        }
+    }
+
+    /// Opens the built-in picker for `request` (used when fzf is not installed).
+    /// Opens the built-in picker for `request`; `fzf_missing` says fzf was wanted
+    /// (search engine `auto` / `fzf`) but is not installed.
+    pub fn open_builtin_picker(&mut self, request: FzfRequest, fzf_missing: bool) {
+        let query = self.prepare_fzf(request);
+        if query.items.is_empty() {
+            return;
+        }
+        self.picker = Some(PickerState::new(request, query.items, query.header));
+        if fzf_missing {
+            let msg = match self.language {
+                Language::En => "fzf not found on PATH · using the built-in picker",
+                Language::Pt => "fzf não encontrado no PATH · usando o picker interno",
+            };
+            self.set_notification(msg);
+        }
+    }
+
+    /// Ctrl+G: auto → fzf → builtin → auto (fzf skipped when not installed), saved
+    /// to config.toml like a settings change.
+    pub fn cycle_search_engine(&mut self) {
+        let fzf_available = crate::integration::fzf::is_fzf_available();
+        self.config.search.engine = self.config.search.engine.next(fzf_available);
+        let _ = self.config.save();
+        let msg = search_engine_message(self.config.search.engine, fzf_available, self.language);
+        self.set_notification(msg);
+    }
+
+    fn handle_picker_key(&mut self, key: KeyEvent) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        match picker_key_action(key) {
+            PickerAction::Cancel => self.picker = None,
+            PickerAction::Accept => {
+                let request = picker.request;
+                let selected = picker.selected_item().cloned();
+                self.picker = None;
+                match (selected, request) {
+                    (Some(item), FzfRequest::Files) => self.handle_fzf_file_result(item),
+                    (Some(item), FzfRequest::Text) => self.handle_fzf_text_result(item),
+                    (None, _) => {}
+                }
+            }
+            PickerAction::Move(delta) => picker.move_by(delta),
+            PickerAction::ClearQuery => {
+                picker.query.clear();
+                picker.refilter();
+            }
+            PickerAction::Backspace => {
+                picker.query.pop();
+                picker.refilter();
+            }
+            PickerAction::Type(c) => {
+                picker.query.push(c);
+                picker.refilter();
+            }
+            PickerAction::Ignore => {}
         }
     }
 
@@ -1336,6 +1551,16 @@ impl App {
         self.notification = Some((msg.into(), Instant::now()));
     }
 
+    /// A background auto-update replaced the binary; it is used on the next start.
+    /// Shown longer than a regular toast so it is not missed.
+    pub fn notify_update_installed(&mut self, tag: &str) {
+        let msg = match self.language {
+            Language::En => format!("✓ diffv updated to {} · restart to use it", tag),
+            Language::Pt => format!("✓ diffv atualizado para {} · reinicie para usar", tag),
+        };
+        self.notification = Some((msg, Instant::now() + Duration::from_secs(6)));
+    }
+
     pub fn reload_diffs(&mut self) {
         if let Err(e) = self.reload_diffs_internal(true) {
             self.set_notification(format!("Reload error: {}", e));
@@ -1559,6 +1784,12 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
         self.expire_notification();
 
+        // Built-in search picker: it is a text prompt (like fzf), so every key goes to it
+        if self.picker.is_some() {
+            self.handle_picker_key(key);
+            return;
+        }
+
         // Shift+Q unconditionally quits the program regardless of navigation/modal state
         if key.code == KeyCode::Char('Q') {
             self.should_quit = true;
@@ -1669,7 +1900,7 @@ impl App {
             self.pending_key_time = None;
             match pending {
                 'g' => match key.code {
-                    KeyCode::Char('g') => {
+                    KeyCode::Char('g') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                         // gg: jump to top of view
                         if self.focus == Focus::DiffView {
                             self.selected_row = 0;
@@ -2097,7 +2328,19 @@ impl App {
             return;
         }
 
-        // 5. Normal / Visual Navigation
+        // 5. Mouse selection: Ctrl+C copies it, Esc clears it
+        if self.mouse_selection.is_some() {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.copy_mouse_selection();
+                return;
+            }
+            if key.code == KeyCode::Esc {
+                self.mouse_selection = None;
+                return;
+            }
+        }
+
+        // 6. Normal / Visual Navigation
         match key.code {
             KeyCode::Esc => {
                 if self.visual_mode {
@@ -2206,6 +2449,9 @@ impl App {
             KeyCode::Char('i') => {
                 self.show_details_popup = !self.show_details_popup;
                 self.details_popup_scroll = 0;
+            }
+            KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cycle_search_engine();
             }
             KeyCode::Char('g') => {
                 self.pending_key = Some('g');
@@ -2989,7 +3235,146 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        let modal_open = self.picker.is_some()
+            || self.show_details_popup
+            || self.show_settings
+            || self.show_branch_selector
+            || self.show_help
+            || self.show_worktrees
+            || self.confirm_action.is_some();
+        if !modal_open && self.handle_selection_mouse(mouse) {
+            return;
+        }
+        self.dispatch_mouse(mouse);
+    }
+
+    /// Drag-to-select over the diff text. A press on the text is held back until
+    /// release: if the pointer moved it becomes a selection (and is copied),
+    /// otherwise the original click is replayed so existing click behaviour is kept.
+    fn handle_selection_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
+        use crate::ui::selection::MouseSelection;
         use crossterm::event::{MouseButton, MouseEventKind};
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.mouse_selection = None;
+                self.pending_click = None;
+                let divider = self.effective_tree_width();
+                let on_divider = self.show_drawer
+                    && mouse.column >= divider.saturating_sub(2)
+                    && mouse.column <= divider + 2;
+                if on_divider {
+                    return false;
+                }
+                let Some(pane) = self.text_map.pane_at(mouse.column, mouse.row) else {
+                    return false;
+                };
+                let Some(hit) = self.text_map.hit(pane, mouse.column, mouse.row) else {
+                    return false;
+                };
+                self.mouse_selection = Some(MouseSelection {
+                    pane,
+                    anchor: hit,
+                    head: hit,
+                    dragging: false,
+                });
+                self.selection_key = self.current_selection_key();
+                self.pending_click = Some(mouse);
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.pending_click.is_some() => {
+                if let Some(sel) = &mut self.mouse_selection {
+                    if let Some(hit) = self.text_map.hit(sel.pane, mouse.column, mouse.row) {
+                        sel.head = hit;
+                        sel.dragging = true;
+                    }
+                }
+                true
+            }
+            MouseEventKind::Up(_) if self.pending_click.is_some() => {
+                let press = self.pending_click.take();
+                if let Some(sel) = &mut self.mouse_selection {
+                    if let Some(hit) = self.text_map.hit(sel.pane, mouse.column, mouse.row) {
+                        if sel.dragging {
+                            sel.head = hit;
+                        }
+                    }
+                }
+                if self.mouse_selection.as_ref().is_some_and(|s| s.dragging) {
+                    self.copy_mouse_selection();
+                } else {
+                    self.mouse_selection = None;
+                    if let Some(press) = press {
+                        self.dispatch_mouse(press);
+                    }
+                    self.dispatch_mouse(mouse);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn current_selection_key(&self) -> Option<SelectionKey> {
+        let file = self.current_file()?;
+        Some(SelectionKey {
+            path: file.new_path.clone(),
+            section: file.section,
+            is_unified: self.is_unified,
+            full_context: self.full_context,
+            rows: if self.is_unified {
+                file.hunks.iter().map(|h| h.lines.len() + 1).sum()
+            } else {
+                file.aligned_rows.len()
+            },
+        })
+    }
+
+    pub fn mouse_selection_text(&self) -> Option<String> {
+        let sel = self.mouse_selection.as_ref()?;
+        let file = self.current_file()?;
+        Some(extract_text(&pane_lines(file, sel.pane), sel.range()))
+    }
+
+    fn copy_mouse_selection(&mut self) {
+        let Some(text) = self.mouse_selection_text().filter(|t| !t.is_empty()) else {
+            return;
+        };
+        let chars = text.chars().count();
+        match crate::integration::clipboard::copy_text(&text) {
+            Ok(_) => self.set_notification(match self.language {
+                Language::En => format!("✓ Copied {} chars to clipboard", chars),
+                Language::Pt => format!("✓ {} caracteres copiados para o clipboard", chars),
+            }),
+            Err(e) => self.set_notification(format!("Clipboard error: {}", e)),
+        }
+    }
+
+    fn effective_tree_width(&self) -> u16 {
+        if !self.show_drawer {
+            0
+        } else if self.term_width > 0 && self.term_width < 85 {
+            self.file_tree_width
+                .min((self.term_width * 32 / 100).max(18))
+                .min(self.term_width.saturating_sub(25))
+        } else if self.term_width > 0 {
+            self.file_tree_width.min(self.term_width.saturating_sub(25))
+        } else {
+            self.file_tree_width
+        }
+    }
+
+    fn dispatch_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        if let Some(picker) = &mut self.picker {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => picker.move_by(3),
+                MouseEventKind::ScrollUp => picker.move_by(-3),
+                _ => {}
+            }
+            return;
+        }
 
         if self.show_details_popup {
             match mouse.kind {
@@ -3079,22 +3464,12 @@ impl App {
             return;
         }
 
-        let effective_tree_width = if !self.show_drawer {
-            0
-        } else if self.term_width > 0 && self.term_width < 85 {
-            self.file_tree_width
-                .min((self.term_width * 32 / 100).max(18))
-                .min(self.term_width.saturating_sub(25))
-        } else if self.term_width > 0 {
-            self.file_tree_width.min(self.term_width.saturating_sub(25))
-        } else {
-            self.file_tree_width
-        };
+        let effective_tree_width = self.effective_tree_width();
 
         if self.show_history && mouse.column < effective_tree_width {
             match mouse.kind {
-                MouseEventKind::ScrollDown => self.file_tree_down(3),
-                MouseEventKind::ScrollUp => self.file_tree_up(3),
+                MouseEventKind::ScrollDown => self.wheel_drawer(true),
+                MouseEventKind::ScrollUp => self.wheel_drawer(false),
                 MouseEventKind::Down(MouseButton::Left) if mouse.row >= 4 => {
                     let idx = self.history_scroll + mouse.row.saturating_sub(4) as usize;
                     if idx < self.history_commits.len() {
@@ -3133,18 +3508,12 @@ impl App {
         }
 
         match mouse.kind {
-            MouseEventKind::ScrollDown => {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                let down = mouse.kind == MouseEventKind::ScrollDown;
                 if effective_tree_width > 0 && mouse.column < effective_tree_width {
-                    self.file_tree_down(3);
+                    self.wheel_drawer(down);
                 } else {
-                    self.scroll_down(3);
-                }
-            }
-            MouseEventKind::ScrollUp => {
-                if effective_tree_width > 0 && mouse.column < effective_tree_width {
-                    self.file_tree_up(3);
-                } else {
-                    self.scroll_up(3);
+                    self.wheel_diff(down);
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -3895,6 +4264,12 @@ impl App {
             ])
             .split(chunks[1]);
 
+        self.text_map.clear();
+        if self.mouse_selection.is_some() && self.selection_key != self.current_selection_key() {
+            self.mouse_selection = None;
+            self.pending_click = None;
+        }
+
         let file_tree_area = main_chunks[0];
         let diff_area = main_chunks[1];
         self.diff_width = diff_area.width;
@@ -3993,50 +4368,14 @@ impl App {
             }
         } else {
             if self.wrap_lines && self.selected_row >= self.scroll_y {
-                use unicode_width::UnicodeWidthStr;
-                let width = if self.is_unified {
-                    diff_area.width.saturating_sub(18)
-                } else {
-                    (diff_area.width.saturating_sub(3) / 2).saturating_sub(10)
-                }
-                .max(1) as usize;
+                let width = wrap_width(self.is_unified, diff_area.width);
                 let height = self
                     .current_file()
                     .map(|f| {
-                        if self.is_unified {
-                            f.hunks
-                                .iter()
-                                .flat_map(|h| {
-                                    std::iter::once(1usize).chain(
-                                        h.lines
-                                            .iter()
-                                            .map(|l| l.content.width().max(1).div_ceil(width)),
-                                    )
-                                })
-                                .skip(self.scroll_y)
-                                .take(self.selected_row - self.scroll_y + 1)
-                                .sum::<usize>()
-                        } else {
-                            f.aligned_rows
-                                .iter()
-                                .skip(self.scroll_y)
-                                .take(self.selected_row - self.scroll_y + 1)
-                                .map(|r| {
-                                    let len = r
-                                        .left
-                                        .as_ref()
-                                        .map(|l| l.content.width())
-                                        .unwrap_or(0)
-                                        .max(
-                                            r.right
-                                                .as_ref()
-                                                .map(|l| l.content.width())
-                                                .unwrap_or(0),
-                                        );
-                                    len.max(1).div_ceil(width)
-                                })
-                                .sum::<usize>()
-                        }
+                        wrapped_row_heights(f, self.is_unified, width)
+                            .skip(self.scroll_y)
+                            .take(self.selected_row - self.scroll_y + 1)
+                            .sum::<usize>()
                     })
                     .unwrap_or(0);
                 if height > diff_area.height.saturating_sub(3) as usize {
@@ -4044,6 +4383,7 @@ impl App {
                 }
             }
             let mut row_map = Vec::new();
+            let mut text_map = std::mem::take(&mut self.text_map);
             let cur_file = self.current_file();
             let syntax_enabled = self.config.ui.syntax_highlighting;
 
@@ -4066,6 +4406,7 @@ impl App {
                     self.wrap_lines,
                     self.wrap_skip,
                     &mut row_map,
+                    &mut text_map,
                     self.selected_row,
                     visual_range,
                     self.focus == Focus::DiffView,
@@ -4083,6 +4424,7 @@ impl App {
                     self.wrap_lines,
                     self.wrap_skip,
                     &mut row_map,
+                    &mut text_map,
                     self.selected_row,
                     visual_range,
                     self.column_side,
@@ -4106,6 +4448,8 @@ impl App {
                 );
             }
             self.diff_row_map = row_map;
+            self.text_map = text_map;
+            self.highlight_mouse_selection(frame);
         }
 
         // 4. Overlays
@@ -4193,6 +4537,7 @@ impl App {
             && !self.show_history
             && !self.show_details_popup
             && self.confirm_action.is_none()
+            && self.picker.is_none()
         {
             render_drawer_line_overlay(
                 frame,
@@ -4213,10 +4558,105 @@ impl App {
             );
         }
 
+        if let Some(picker) = &mut self.picker {
+            render_picker_popup(frame, size, picker, self.language, &self.theme);
+        }
+
         // Floating notification styled with the active theme
         if let Some((msg, _)) = &self.notification {
             render_toast(frame, size, msg, &self.theme);
         }
+    }
+}
+
+impl App {
+    fn highlight_mouse_selection(&self, frame: &mut Frame) {
+        let Some(sel) = &self.mouse_selection else {
+            return;
+        };
+        let range = sel.range();
+        let style = ratatui::style::Style::default()
+            .fg(self.theme.selected_fg)
+            .bg(self.theme.selected_bg)
+            .add_modifier(ratatui::style::Modifier::REVERSED);
+        let buf = frame.buffer_mut();
+        for (pane, _, rows) in &self.text_map.panes {
+            if *pane != sel.pane {
+                continue;
+            }
+            for row in rows {
+                for (i, &ch) in row.cells.iter().enumerate() {
+                    if is_selected(range, row.line, ch) {
+                        if let Some(cell) = buf.cell_mut((row.x + i as u16, row.y)) {
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Text width the wrapped diff rows are measured against (gutters excluded).
+fn wrap_width(is_unified: bool, diff_width: u16) -> usize {
+    if is_unified {
+        diff_width.saturating_sub(18)
+    } else {
+        (diff_width.saturating_sub(3) / 2).saturating_sub(10)
+    }
+    .max(1) as usize
+}
+
+/// Screen rows each logical diff row takes when wrapped at `width` columns.
+fn wrapped_row_heights(
+    file: &FileDiff,
+    is_unified: bool,
+    width: usize,
+) -> Box<dyn Iterator<Item = usize> + '_> {
+    use unicode_width::UnicodeWidthStr;
+    if is_unified {
+        Box::new(file.hunks.iter().flat_map(move |h| {
+            std::iter::once(1usize).chain(
+                h.lines
+                    .iter()
+                    .map(move |l| l.content.width().max(1).div_ceil(width)),
+            )
+        }))
+    } else {
+        Box::new(file.aligned_rows.iter().map(move |r| {
+            let side = |l: &Option<crate::core::models::DiffLine>| {
+                l.as_ref().map(|l| l.content.width()).unwrap_or(0)
+            };
+            side(&r.left).max(side(&r.right)).max(1).div_ceil(width)
+        }))
+    }
+}
+
+/// Toast naming the engine searches will actually use.
+fn search_engine_message(
+    engine: crate::config::SearchEngine,
+    fzf_available: bool,
+    language: Language,
+) -> String {
+    use crate::config::ResolvedSearch;
+    let effective = match (engine.resolve(fzf_available), language) {
+        (ResolvedSearch::Fzf, _) => "fzf",
+        (ResolvedSearch::Builtin { .. }, Language::En) => "built-in picker",
+        (ResolvedSearch::Builtin { .. }, Language::Pt) => "picker interno",
+    };
+    let auto = match language {
+        Language::En => "auto",
+        Language::Pt => "automático",
+    };
+    match (engine, language) {
+        (crate::config::SearchEngine::Auto, Language::En) => {
+            format!("Search engine: {} ({}) · Ctrl+G", auto, effective)
+        }
+        (crate::config::SearchEngine::Auto, Language::Pt) => {
+            format!("Motor de busca: {} ({}) · Ctrl+G", auto, effective)
+        }
+        (_, Language::En) => format!("Search engine: {} · Ctrl+G", effective),
+        (_, Language::Pt) => format!("Motor de busca: {} · Ctrl+G", effective),
     }
 }
 

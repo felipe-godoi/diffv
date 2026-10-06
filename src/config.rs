@@ -13,6 +13,64 @@ pub struct Config {
     pub editor: EditorConfig,
     #[serde(default)]
     pub update: UpdateConfig,
+    #[serde(default)]
+    pub search: SearchConfig,
+}
+
+/// Which UI runs the Ctrl+p / Ctrl+f searches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchEngine {
+    /// fzf when it is installed, otherwise the built-in picker.
+    #[default]
+    Auto,
+    /// Always fzf (falls back to the built-in picker, with a notice, if it is missing).
+    Fzf,
+    /// Always the built-in picker.
+    Builtin,
+}
+
+/// The engine a search actually uses, given whether fzf is installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedSearch {
+    Fzf,
+    Builtin {
+        /// fzf would have been used but is not installed.
+        fzf_missing: bool,
+    },
+}
+
+impl SearchEngine {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SearchEngine::Auto => "auto",
+            SearchEngine::Fzf => "fzf",
+            SearchEngine::Builtin => "builtin",
+        }
+    }
+
+    /// Ctrl+G order: auto → fzf → builtin → auto, skipping fzf when it is not installed.
+    pub fn next(self, fzf_available: bool) -> Self {
+        match self {
+            SearchEngine::Auto if fzf_available => SearchEngine::Fzf,
+            SearchEngine::Auto | SearchEngine::Fzf => SearchEngine::Builtin,
+            SearchEngine::Builtin => SearchEngine::Auto,
+        }
+    }
+
+    pub fn resolve(self, fzf_available: bool) -> ResolvedSearch {
+        match self {
+            SearchEngine::Builtin => ResolvedSearch::Builtin { fzf_missing: false },
+            SearchEngine::Auto | SearchEngine::Fzf if fzf_available => ResolvedSearch::Fzf,
+            SearchEngine::Auto | SearchEngine::Fzf => ResolvedSearch::Builtin { fzf_missing: true },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SearchConfig {
+    #[serde(default)]
+    pub engine: SearchEngine,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,12 +192,77 @@ fn default_debounce_ms() -> u64 {
     150
 }
 fn default_editor_command() -> String {
-    if let Ok(editor) = std::env::var("EDITOR") {
-        if !editor.is_empty() {
-            return editor;
-        }
+    let env = EditorEnv {
+        git_editor: std::env::var("GIT_EDITOR").ok(),
+        visual: std::env::var("VISUAL").ok(),
+        editor: std::env::var("EDITOR").ok(),
+    };
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    editor_command_from(
+        &env,
+        |name| dirs.iter().any(|dir| is_executable(&dir.join(name))),
+        is_executable,
+    )
+}
+
+/// Editor-related environment variables, read once so the resolution stays testable.
+#[derive(Debug, Default, Clone)]
+struct EditorEnv {
+    git_editor: Option<String>,
+    visual: Option<String>,
+    editor: Option<String>,
+}
+
+/// Default `[editor] command` when the config file sets none (nvr is handled
+/// separately, only with `use_nvr` inside `$NVIM`):
+/// 1. the first non-empty of `$GIT_EDITOR`, `$VISUAL`, `$EDITOR` (git's order);
+/// 2. the system default editor: `editor` on the `PATH` (the Debian/Ubuntu
+///    `update-alternatives` entry), else `/usr/bin/editor` if executable;
+/// 3. `vi`, then `nano`, whichever is on the `PATH`; `vi` as the last resort.
+///
+/// `on_path` says whether a command name resolves in the `PATH`;
+/// `is_executable` checks an absolute path. No subprocess is spawned.
+fn editor_command_from(
+    env: &EditorEnv,
+    on_path: impl Fn(&str) -> bool,
+    is_executable: impl Fn(&Path) -> bool,
+) -> String {
+    let from_env = [&env.git_editor, &env.visual, &env.editor]
+        .into_iter()
+        .flatten()
+        .map(|value| value.trim())
+        .find(|value| !value.is_empty());
+    if let Some(editor) = from_env {
+        return editor.to_string();
     }
-    "nvim".to_string()
+    if on_path("editor") {
+        return "editor".to_string();
+    }
+    let system_editor = Path::new("/usr/bin/editor");
+    if is_executable(system_editor) {
+        return system_editor.display().to_string();
+    }
+    ["vi", "nano"]
+        .into_iter()
+        .find(|name| on_path(name))
+        .unwrap_or("vi")
+        .to_string()
+}
+
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
 }
 fn default_editor_args() -> Vec<String> {
     vec!["+{{line}}".to_string(), "{{file}}".to_string()]
@@ -239,5 +362,122 @@ impl Config {
         let toml_str = toml::to_string_pretty(self)?;
         std::fs::write(path, toml_str)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(git_editor: Option<&str>, visual: Option<&str>, editor: Option<&str>) -> EditorEnv {
+        EditorEnv {
+            git_editor: git_editor.map(String::from),
+            visual: visual.map(String::from),
+            editor: editor.map(String::from),
+        }
+    }
+
+    fn resolve(env: &EditorEnv, on_path: &[&str], executables: &[&str]) -> String {
+        editor_command_from(
+            env,
+            |name| on_path.contains(&name),
+            |path| executables.iter().any(|e| Path::new(e) == path),
+        )
+    }
+
+    #[test]
+    fn editor_env_vars_follow_gits_order() {
+        let all = ["editor", "vi", "nano"];
+        assert_eq!(
+            resolve(&env(Some("hx"), Some("code -w"), Some("nano")), &all, &[]),
+            "hx"
+        );
+        assert_eq!(
+            resolve(&env(None, Some("code -w"), Some("nano")), &all, &[]),
+            "code -w"
+        );
+        assert_eq!(
+            resolve(&env(None, None, Some(" micro ")), &all, &[]),
+            "micro"
+        );
+        // Whitespace-only values are ignored.
+        assert_eq!(
+            resolve(&env(Some("  "), Some(""), Some("emacs")), &all, &[]),
+            "emacs"
+        );
+    }
+
+    #[test]
+    fn without_env_vars_the_system_default_editor_is_used() {
+        let none = env(None, None, None);
+        assert_eq!(resolve(&none, &["editor", "vi", "nano"], &[]), "editor");
+        // Not on the PATH, but the alternatives link exists.
+        assert_eq!(
+            resolve(&none, &["vi"], &["/usr/bin/editor"]),
+            "/usr/bin/editor"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_vi_then_nano_then_the_vi_name() {
+        let none = env(Some(" "), None, None);
+        assert_eq!(resolve(&none, &["vi", "nano"], &[]), "vi");
+        assert_eq!(resolve(&none, &["nano"], &[]), "nano");
+        assert_eq!(resolve(&none, &[], &[]), "vi");
+    }
+
+    #[test]
+    fn search_engine_cycle_skips_fzf_when_missing() {
+        use SearchEngine::*;
+        assert_eq!(Auto.next(true), Fzf);
+        assert_eq!(Fzf.next(true), Builtin);
+        assert_eq!(Builtin.next(true), Auto);
+        assert_eq!(Auto.next(false), Builtin);
+        assert_eq!(Builtin.next(false), Auto);
+        // A config still saying fzf (uninstalled since) moves on too.
+        assert_eq!(Fzf.next(false), Builtin);
+    }
+
+    #[test]
+    fn search_engine_resolves_from_config_value() {
+        let engine = |toml_str: &str| toml::from_str::<Config>(toml_str).unwrap().search.engine;
+        assert_eq!(engine(""), SearchEngine::Auto);
+        assert_eq!(engine("[search]\nengine = \"fzf\""), SearchEngine::Fzf);
+        assert_eq!(
+            engine("[search]\nengine = \"builtin\""),
+            SearchEngine::Builtin
+        );
+
+        let missing = ResolvedSearch::Builtin { fzf_missing: true };
+        assert_eq!(SearchEngine::Auto.resolve(true), ResolvedSearch::Fzf);
+        assert_eq!(SearchEngine::Auto.resolve(false), missing);
+        assert_eq!(SearchEngine::Fzf.resolve(true), ResolvedSearch::Fzf);
+        assert_eq!(SearchEngine::Fzf.resolve(false), missing);
+        let builtin = ResolvedSearch::Builtin { fzf_missing: false };
+        assert_eq!(SearchEngine::Builtin.resolve(true), builtin);
+        assert_eq!(SearchEngine::Builtin.resolve(false), builtin);
+
+        // The choice round-trips through the saved file.
+        let mut cfg = Config::default();
+        cfg.search.engine = SearchEngine::Builtin;
+        let saved = toml::to_string_pretty(&cfg).unwrap();
+        assert!(saved.contains("[search]") && saved.contains("engine = \"builtin\""));
+    }
+
+    #[test]
+    fn executable_check_needs_an_executable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("ed");
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(!is_executable(&file));
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(is_executable(&file));
+        assert!(!is_executable(dir.path()));
+        assert!(!is_executable(&dir.path().join("missing")));
     }
 }

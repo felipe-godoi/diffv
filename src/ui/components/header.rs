@@ -55,6 +55,8 @@ pub fn format_folder_display(path: &Path, max_chars: usize) -> String {
     }
 }
 
+pub const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 pub fn render_header(
     frame: &mut Frame,
     area: Rect,
@@ -220,8 +222,6 @@ pub fn render_header(
             .fg(theme.header_fg)
             .add_modifier(Modifier::BOLD),
     ));
-
-    const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
     // Watch indicator pill (if space permits)
     if width >= 80 {

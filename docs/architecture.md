@@ -67,7 +67,7 @@ graph TD
     end
 
     subgraph Integrations
-        O -->|'e' / Enter| V[Neovim / $EDITOR Launcher]
+        O -->|'e' / Enter| V[$EDITOR Launcher - editor do sistema / vi / nano]
         O -->|'c'| W[System Clipboard]
         O -->|'s' / 'd'| X[Git Stage / Discard Worker]
     end
@@ -148,7 +148,7 @@ cli-diffviewer/
     │
     └── integration/            # Comunicação externa
         ├── mod.rs
-        ├── editor.rs           # Invocação do Neovim (nvim +line file / nvr)
+        ├── editor.rs           # Invocação do $EDITOR (editor do sistema / vi / nano; nvr opcional)
         ├── clipboard.rs        # Cópia de hunks/patches para o clipboard
         └── tmux.rs             # Utilitários de detecção e redimensionamento do Tmux
 ```
@@ -184,7 +184,7 @@ A aplicação adota um modelo clássico de **Event Loop Reativo**:
 
 ---
 
-## 7. Integração Tmux e Neovim
+## 7. Integração Tmux e Editor
 
 ### 7.1 Tmux Floating Popup
 A ferramenta é compilada para um binário autônomo `diffv`. Para integrá-la ao tmux como um popup instantâneo:
@@ -194,8 +194,14 @@ A ferramenta é compilada para um binário autônomo `diffv`. Para integrá-la a
 bind-key d display-popup -d "#{pane_current_path}" -w 92% -h 90% -E "diffv --watch"
 ```
 
-### 7.2 Neovim Remote Jump
+### 7.2 Abrir no Editor (`$EDITOR`, nvr opcional)
 Ao pressionar `e` em uma linha da diff:
-1. Verifica se `nvr` (neovim-remote) está instalado e se existe um socket Neovim no ambiente (`$NVIM`).
+1. Opcional: se `use_nvr = true`, o `diffv` estiver rodando dentro do Neovim (`$NVIM` definido) e o `nvr` (neovim-remote) estiver instalado:
 2. Se sim, instrui o Neovim existente a abrir o arquivo na linha correta sem fechar a sessão.
-3. Se não, suspende temporariamente a TUI do `diffv` e invoca `$EDITOR +<line> <file>`. Ao fechar o editor, o `diffv` restaura a visualização instantaneamente.
+3. Caso contrário (caminho padrão), suspende temporariamente a TUI do `diffv` e invoca `$EDITOR +<line> <file>`. Ordem de resolução quando o config não define `command`: `$GIT_EDITOR` > `$VISUAL` > `$EDITOR` > editor padrão do sistema (`editor` no `PATH`, a alternativa do Debian/Ubuntu, ou `/usr/bin/editor`) > `vi` > `nano`. Ao fechar o editor, o `diffv` restaura a visualização instantaneamente.
+
+### 7.3 Busca com `fzf` (opcional) e Picker Interno
+`Ctrl+p` / `Ctrl+f` geram a lista de candidatos (`App::prepare_fzf`) e o resultado escolhido volta por `handle_fzf_file_result` / `handle_fzf_text_result`:
+1. Se o `fzf` estiver no `PATH` (`is_fzf_available`), a TUI é suspensa e o `fzf` roda em tela cheia com os candidatos.
+2. Se não, abre o picker interno (`ui/components/picker.rs`): popup com filtro fuzzy/substring (smart-case, termos separados por espaço, em `Ctrl+f` só o conteúdo da linha é comparado, como o `--nth=2` do fzf). O item escolhido entra pelos mesmos handlers, então o comportamento após a escolha é idêntico.
+3. O motor é configurável em `[search] engine` (`auto` | `fzf` | `builtin`, padrão `auto`) e alternado com `Ctrl+G` fora do picker (`auto` → `fzf` → `builtin`, pulando `fzf` quando não instalado; a escolha é salva no `config.toml`). Com `fzf` escolhido e ausente, o app avisa e usa o picker interno.

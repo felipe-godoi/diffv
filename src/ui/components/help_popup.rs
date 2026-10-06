@@ -16,11 +16,11 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
 
     let (title, footer) = match language {
         Language::En => (
-            "Keyboard Shortcuts & Neovim Motions",
+            "Keyboard Shortcuts & Vim Motions",
             [("esc / ? / q", "close")],
         ),
         Language::Pt => (
-            "Atalhos de Teclado & Comandos Neovim",
+            "Atalhos de Teclado & Comandos Vim",
             [("esc / ? / q", "fechar")],
         ),
     };
@@ -45,7 +45,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
         Language::En => (
             vec![
                 (
-                    "󰌌  Neovim Motions & Diff Navigation",
+                    "󰌌  Vim Motions & Diff Navigation",
                     vec![
                         ("j / k or ↓ / ↑", "Move down / up line by line"),
                         ("Ctrl+e / Ctrl+y", "Scroll viewport down / up 1 line (Vim)"),
@@ -62,6 +62,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                         ),
                         ("Enter / Esc", "Focus Diff View / Return to Drawer"),
                         ("Mouse Drag", "Resize panes divider / click to select"),
+                        (
+                            "Drag on diff text",
+                            "Select & copy text · Ctrl+C copy · Esc clear",
+                        ),
                     ],
                 ),
                 (
@@ -87,7 +91,15 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                             "Ctrl+p",
                             "Find file in current scope: changes / commit / stash",
                         ),
-                        ("Ctrl+f", "Search text in file / commit / changes (fzf)"),
+                        (
+                            "Ctrl+f",
+                            "Search text in file/commit/changes (fzf or built-in)",
+                        ),
+                        (
+                            "Esc/Ctrl+C/Ctrl+Q",
+                            "Close search picker (like fzf; Shift+Q types Q)",
+                        ),
+                        ("Ctrl+g", "Switch search engine: auto → fzf → built-in"),
                         ("b", "Toggle File Drawer sidebar visible ↔ hidden"),
                         ("t", "Toggle Folders (Tree) ↔ Flat List view"),
                         ("< / > or , / .", "Resize File Drawer sidebar width"),
@@ -105,7 +117,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                 (
                     "󰒅  Integrations & System",
                     vec![
-                        ("e", "Open in Neovim / $EDITOR at cursor line (+line)"),
+                        ("e", "Open in $EDITOR at cursor line (+line)"),
                         ("c", "Copy hunk to system clipboard as Markdown"),
                         ("C", "Open Settings (Auto-update, Beta channel, Theme...)"),
                         ("L / F2", "Toggle Language (English ↔ Português)"),
@@ -120,7 +132,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
         Language::Pt => (
             vec![
                 (
-                    "󰌌  Movimentação Neovim & Navegação",
+                    "󰌌  Movimentação Vim & Navegação",
                     vec![
                         ("j / k ou ↓ / ↑", "Mover linha por linha para baixo / cima"),
                         (
@@ -142,6 +154,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                         (
                             "Arrastar Mouse",
                             "Redimensionar divisor / clique para selecionar",
+                        ),
+                        (
+                            "Arrastar no diff",
+                            "Selecionar e copiar texto · Ctrl+C copia · Esc limpa",
                         ),
                     ],
                 ),
@@ -176,8 +192,13 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                         ),
                         (
                             "Ctrl+f",
-                            "Buscar texto no arquivo / commit / mudanças (fzf)",
+                            "Buscar texto no arquivo/commit/mudanças (fzf ou interno)",
                         ),
+                        (
+                            "Esc/Ctrl+C/Ctrl+Q",
+                            "Fechar a busca (como no fzf; Shift+Q digita Q)",
+                        ),
+                        ("Ctrl+g", "Trocar motor de busca: auto → fzf → interno"),
                         ("b", "Exibir ↔ ocultar painel lateral (sidebar)"),
                         ("t", "Alternar entre Pastas (Tree) ↔ Lista Plana"),
                         ("< / > ou , / .", "Redimensionar largura do painel lateral"),
@@ -195,7 +216,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                 (
                     "󰒅  Integrações & Sistema",
                     vec![
-                        ("e", "Abrir arquivo no Neovim / $EDITOR na linha (+line)"),
+                        ("e", "Abrir no seu editor ($EDITOR) na linha (+line)"),
                         ("c", "Copiar hunk em Markdown para clipboard"),
                         ("C", "Configurações (Auto-update, Canal Beta, Tema...)"),
                         ("L / F2", "Alternar Idioma (English ↔ Português)"),
