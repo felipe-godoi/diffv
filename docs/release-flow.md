@@ -144,7 +144,7 @@ O repositório possui três workflows automatizados em `.github/workflows/`:
 
 | Arquivo | Gatilhos | Responsabilidade |
 |---|---|---|
-| **`ci.yml`** | `pull_request` e `push` em `main` e `beta` | Roda `cargo test` no Linux e macOS e `cargo clippy --all-targets -- -D warnings`. Emite o status check unificado `CI Passed`. |
+| **`ci.yml`** | `pull_request` em `main`/`beta`; `push` em `beta` | Roda `cargo test` no Linux e macOS e `cargo clippy --all-targets -- -D warnings`. Emite o status check unificado `CI Passed`. |
 | **`release.yml`** | `push` em `main`, `push` em `beta`, tags `v*` | Compila os 4 targets. Na `main`, publica `nightly`. Na `beta`, publica `beta`. Em tags, publica a release `stable` com os binários anexados. |
 | **`release-please.yml`** | `push` em `beta` | Executa o Google Release Please na branch `beta`. Mantém a PR de release atualizada e dispara a esteira de build estável no merge. |
 
