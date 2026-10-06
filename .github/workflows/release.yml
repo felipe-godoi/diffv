@@ -94,23 +94,101 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" dist/* --clobber || \
           gh release create "$RELEASE_TAG" dist/* --verify-tag --title "diffv $RELEASE_TAG" --generate-notes
-      - name: Publish rolling nightly release from main
-        if: github.ref == 'refs/heads/main'
+      # Rolling channels: main -> `nightly`, beta -> `beta`. Idempotent (first run and re-runs).
+      # The tag is moved with the API and the release is updated in place, so the assets are
+      # never removed before the new ones are uploaded. Only "does not exist yet" is tolerated;
+      # any other failure fails the job.
+      - name: Publish rolling release (nightly from main, beta from beta)
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release delete nightly --yes || true
-          git tag -d nightly 2>/dev/null || true
-          git push origin :refs/tags/nightly 2>/dev/null || true
-          gh release create nightly dist/* --target main --prerelease --title "diffv nightly (latest main)" --notes "Automated rolling nightly build from the latest commit on main (${GITHUB_SHA::7})."
-      - name: Publish rolling beta release from beta
-        if: github.ref == 'refs/heads/beta'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          gh release delete beta --yes || true
-          git tag -d beta 2>/dev/null || true
-          git push origin :refs/tags/beta 2>/dev/null || true
-          gh release create beta dist/* --target beta --prerelease --title "diffv beta (latest RC)" --notes "Automated rolling pre-release from the latest commit on beta (${GITHUB_SHA::7})."
+          set -euo pipefail
+
+          case "$GITHUB_REF_NAME" in
+            main)
+              TAG=nightly
+              TITLE="diffv nightly (latest main)"
+              NOTES="Automated rolling nightly build from the latest commit on main (${GITHUB_SHA::7})."
+              ;;
+            beta)
+              TAG=beta
+              TITLE="diffv beta (latest RC)"
+              NOTES="Automated rolling pre-release from the latest commit on beta (${GITHUB_SHA::7})."
+              ;;
+            *)
+              echo "::error::No rolling channel for branch $GITHUB_REF_NAME"; exit 1 ;;
+          esac
+
+          # 4 binaries + 4 .sha256: never publish (or prune a release) from an incomplete build.
+          count=$(find dist -maxdepth 1 -type f | wc -l)
+          if [ "$count" -ne 8 ]; then
+            echo "::error::Expected 8 files in dist/, found $count"; ls -la dist; exit 1
+          fi
+
+          # A re-run of an old commit must not move the channel backwards.
+          head_sha=$(gh api "repos/$GH_REPO/git/ref/heads/$GITHUB_REF_NAME" --jq .object.sha)
+          if [ "$head_sha" != "$GITHUB_SHA" ]; then
+            echo "::warning::$GITHUB_REF_NAME is now at ${head_sha::7}, not ${GITHUB_SHA::7}; a newer run publishes $TAG."
+            exit 0
+          fi
+
+          err=$(mktemp)
+
+          # 1. Point the tag at this commit (create it, or force-move it).
+          if gh api "repos/$GH_REPO/git/ref/tags/$TAG" --silent 2>"$err"; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/$TAG" -f sha="$GITHUB_SHA" -F force=true --silent
+          elif grep -q "Not Found" "$err"; then
+            gh api -X POST "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" --silent
+          else
+            cat "$err" >&2; exit 1
+          fi
+
+          release_exists() {
+            if gh release view "$TAG" >/dev/null 2>"$err"; then return 0
+            elif grep -qi "release not found" "$err"; then return 1
+            else cat "$err" >&2; exit 1
+            fi
+          }
+
+          # 2. Create the release, or update it in place: upload (overwrite) first, prune later.
+          # (`|| return 1` on every command: set -e is ignored inside functions run in a `&&` list.)
+          sync_release() {
+            local names name
+            if release_exists; then
+              gh release upload "$TAG" dist/* --clobber || return 1
+              names=$(gh release view "$TAG" --json assets --jq '.assets[].name') || return 1
+              for name in $names; do
+                [ -e "dist/$name" ] || gh release delete-asset "$TAG" "$name" --yes || return 1
+              done
+              gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --prerelease --draft=false || return 1
+            else
+              gh release create "$TAG" dist/* --verify-tag --prerelease --title "$TITLE" --notes "$NOTES" || return 1
+            fi
+          }
+          sync_release
+
+          # 3. The Releases page sorts by created_at, which GitHub derives from the tagged commit.
+          #    If the in-place update left it older than this commit, recreate the release
+          #    (the tag stays; the new release gets all assets in the create call).
+          commit_date=$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" --jq .commit.committer.date)
+          created_at=$(gh release view "$TAG" --json createdAt --jq .createdAt)
+          if [[ "$created_at" < "$commit_date" ]]; then
+            echo "Release $TAG created_at ($created_at) predates commit ($commit_date); recreating it."
+            gh release delete "$TAG" --yes
+            for attempt in 1 2 3; do
+              sync_release && break
+              [ "$attempt" -lt 3 ] || { echo "::error::Could not recreate release $TAG"; exit 1; }
+              sleep $((attempt * 5))
+            done
+          fi
+
+          # 4. Verify the outcome; any mismatch fails the job.
+          tag_sha=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.sha)
+          [ "$tag_sha" = "$GITHUB_SHA" ] || { echo "::error::Tag $TAG is at $tag_sha, expected $GITHUB_SHA"; exit 1; }
+          gh release view "$TAG" --json isPrerelease,isDraft,assets \
+            --jq 'if .isPrerelease and (.isDraft|not) and (.assets|length) == 8 and all(.assets[]; .state == "uploaded") then empty else error("release \(.assets|length) assets, prerelease=\(.isPrerelease), draft=\(.isDraft)") end'
+          created_at=$(gh release view "$TAG" --json createdAt --jq .createdAt)
+          [[ ! "$created_at" < "$commit_date" ]] || { echo "::error::$TAG created_at $created_at predates commit $commit_date"; exit 1; }
+          echo "Published $TAG at ${GITHUB_SHA::7} (release created_at $created_at)."
