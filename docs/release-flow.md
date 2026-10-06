@@ -84,16 +84,18 @@ O cliente `diffv` possui um sistema de auto-atualização integrado (`src/update
 5. Após aprovação dos status checks, faça o merge na `main`. O canal **`nightly`** será atualizado imediatamente.
 
 ### 4.2 Promovendo para Beta (Criação de Release Candidate)
-Quando um conjunto de funcionalidades estiver pronto para ser testado publicamente:
-1. Sincronize a branch `beta` com a `main`:
+A promoção `main → beta` é automática até o ponto de merge:
+1. A cada push na `main`, o workflow `.github/workflows/promote-to-beta.yml` abre (ou atualiza, se já existir) a Pull Request **`chore: promote main to beta`**, de `main` para `beta`. Ela **não** é mergeada automaticamente.
+2. Quando um conjunto de funcionalidades estiver pronto para ser testado publicamente, cabe ao mantenedor revisar e fazer o merge dessa PR.
+
+   *Alternativa manual:* se preferir (ou se o workflow não estiver disponível), sincronize a `beta` com a `main` diretamente:
    ```bash
    git checkout beta
    git pull origin beta
    git merge main
    git push origin beta
    ```
-   *(Ou abra uma Pull Request de `main` para `beta` no GitHub e faça o merge).*
-2. Ao receber o push, a esteira do GitHub Actions:
+3. Ao receber o push na `beta`, a esteira do GitHub Actions:
    - Compila e atualiza os binários da pre-release no canal **`beta`**.
    - Executa o **Release Please**, que cria ou atualiza uma Pull Request na branch `beta` (ex: `chore(beta): release 0.5.0`) com o `CHANGELOG.md` e a versão do `Cargo.toml` já calculados.
 
@@ -142,7 +144,7 @@ O repositório possui três workflows automatizados em `.github/workflows/`:
 
 | Arquivo | Gatilhos | Responsabilidade |
 |---|---|---|
-| **`ci.yml`** | `pull_request` e `push` em `main` e `beta` | Roda `cargo test` no Linux e macOS e `cargo clippy --all-targets -- -D warnings`. Emite o status check unificado `CI Passed`. |
+| **`ci.yml`** | `pull_request` em `main`/`beta`; `push` em `beta` | Roda `cargo test` no Linux e macOS e `cargo clippy --all-targets -- -D warnings`. Emite o status check unificado `CI Passed`. |
 | **`release.yml`** | `push` em `main`, `push` em `beta`, tags `v*` | Compila os 4 targets. Na `main`, publica `nightly`. Na `beta`, publica `beta`. Em tags, publica a release `stable` com os binários anexados. |
 | **`release-please.yml`** | `push` em `beta` | Executa o Google Release Please na branch `beta`. Mantém a PR de release atualizada e dispara a esteira de build estável no merge. |
 

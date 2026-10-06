@@ -1,8 +1,13 @@
 name: CI
 
+# No push trigger for main: every change lands through a PR, and pull_request
+# already tests the merge commit, i.e. the exact tree that ends up on main.
+# beta keeps a push trigger as the release-channel gate: the main→beta
+# promotion PR is opened with GITHUB_TOKEN, which does not trigger other
+# workflows, so its checks may never show up on the PR itself.
 on:
   push:
-    branches: [main, beta]
+    branches: [beta]
   pull_request:
     branches: [main, beta]
 
