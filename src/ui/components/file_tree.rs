@@ -845,6 +845,61 @@ fn render_stash_files_drawer(
     );
 }
 
+/// Choose a complete header by display width, sacrificing mode details before the count.
+fn changes_header(
+    width: u16,
+    file_count: usize,
+    view_mode: FileViewMode,
+    language: Language,
+    filter_query: Option<&str>,
+) -> String {
+    let (icon, mode) = match (view_mode, language) {
+        (FileViewMode::Tree, Language::En) => ("", "Folders"),
+        (FileViewMode::Tree, Language::Pt) => ("", "Pastas"),
+        (FileViewMode::Flat, Language::En) => ("󰈚", "Flat"),
+        (FileViewMode::Flat, Language::Pt) => ("󰈚", "Lista"),
+    };
+    let (label, files) = match language {
+        Language::En => ("Mode", "files"),
+        Language::Pt => ("Modo", "arquivos"),
+    };
+    let count = format!("({file_count} {files})");
+    let compact_count = format!("({file_count})");
+    let mut candidates = if let Some(query) = filter_query {
+        let filter = match language {
+            Language::En => "Filter",
+            Language::Pt => "Filtro",
+        };
+        // Keep the count before an abbreviated query so filtering remains usable.
+        let prefix = format!(" {compact_count} · 󰍉 {filter}: ");
+        let mut abbreviated_query = String::new();
+        for ch in query.chars() {
+            let next = format!("{prefix}{abbreviated_query}{ch}_");
+            if Line::from(next.as_str()).width() > usize::from(width) {
+                break;
+            }
+            abbreviated_query.push(ch);
+        }
+        vec![
+            format!(" 󰍉 {filter}: {query}_ · {count}"),
+            format!("{prefix}{abbreviated_query}_"),
+        ]
+    } else {
+        vec![
+            format!(" {label}: {icon} {mode} [t] · {count}"),
+            format!(" {icon} {mode} [t] · {count}"),
+            format!(" {mode} · {count}"),
+            format!(" {mode} {compact_count}"),
+        ]
+    };
+    candidates.extend([format!(" {count}"), compact_count, file_count.to_string()]);
+    candidates
+        .into_iter()
+        .find(|text| Line::from(text.as_str()).width() <= usize::from(width))
+        // Below the width of the number itself, show nothing rather than a partial number.
+        .unwrap_or_default()
+}
+
 fn render_changes_tab(
     frame: &mut Frame,
     area: Rect,
@@ -867,29 +922,18 @@ fn render_changes_tab(
         return;
     }
 
-    let mode_str = match (view_mode, language) {
-        (FileViewMode::Tree, Language::En) => " Folders [t]",
-        (FileViewMode::Tree, Language::Pt) => " Pastas [t]",
-        (FileViewMode::Flat, Language::En) => "󰈚 Flat [t]",
-        (FileViewMode::Flat, Language::Pt) => "󰈚 Lista [t]",
-    };
-
     let show_stats = area.width >= 28;
     let file_count = items
         .iter()
         .filter(|item| item.file_index.is_some())
         .count();
-
-    let sub_header = if filter_mode {
-        match language {
-            Language::En => format!(" 󰍉 Filter: {}_ ", filter_query),
-            Language::Pt => format!(" 󰍉 Filtro: {}_ ", filter_query),
-        }
-    } else if area.width < 28 {
-        format!(" {} ({})", mode_str, file_count)
-    } else {
-        format!(" Mode: {} · ({} files)", mode_str, file_count)
-    };
+    let sub_header = changes_header(
+        area.width,
+        file_count,
+        view_mode,
+        language,
+        filter_mode.then_some(filter_query),
+    );
 
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
@@ -1669,6 +1713,96 @@ mod tests {
             aligned_rows: Vec::new(),
             is_binary: false,
         }
+    }
+
+    #[test]
+    fn changes_count_survives_drawer_width_modes_and_languages() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let theme = Theme::vscode_dark();
+        for count in [1, 12, 1234] {
+            let files: Vec<_> = (0..count)
+                .map(|i| file(&format!("src/file{i}.rs"), DiffSection::Changes))
+                .collect();
+            let indices: Vec<_> = (0..count).collect();
+            for mode in [FileViewMode::Tree, FileViewMode::Flat] {
+                for language in [Language::En, Language::Pt] {
+                    let items = build_tree_items(&files, &indices, &HashSet::new(), mode, language);
+                    for width in [20, 30, 40, 60, 80] {
+                        for filter_mode in [false, true] {
+                            let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
+                            terminal
+                                .draw(|frame| {
+                                    render_drawer(
+                                        frame,
+                                        frame.area(),
+                                        DrawerTab::Changes,
+                                        &items,
+                                        0,
+                                        0,
+                                        &[],
+                                        0,
+                                        0,
+                                        &[],
+                                        0,
+                                        0,
+                                        None,
+                                        None,
+                                        true,
+                                        filter_mode,
+                                        "very long filter query 界",
+                                        mode,
+                                        language,
+                                        &theme,
+                                        None,
+                                    );
+                                })
+                                .unwrap();
+                            let row = |y| -> String {
+                                (1..width - 1)
+                                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                                    .collect()
+                            };
+                            let header = row(1);
+                            assert!(
+                                header.contains(&format!("({count})"))
+                                    || header.contains(&format!("({count} files)"))
+                                    || header.contains(&format!("({count} arquivos)")),
+                                "width={width}, count={count}, mode={mode:?}, language={language:?}, filter={filter_mode}: {header}"
+                            );
+                            assert!(row(2).contains("src"), "list must start on the next row");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn changes_header_fits_even_at_extreme_widths() {
+        for language in [Language::En, Language::Pt] {
+            for mode in [FileViewMode::Tree, FileViewMode::Flat] {
+                for count in [1, 12, 1234, usize::MAX] {
+                    for width in 0..=80 {
+                        let header = changes_header(width, count, mode, language, None);
+                        assert!(Line::from(header.as_str()).width() <= usize::from(width));
+                        if usize::from(width) >= count.to_string().len() {
+                            assert!(header.contains(&count.to_string()));
+                        } else {
+                            assert!(header.is_empty(), "never show only part of the number");
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            changes_header(80, 1234, FileViewMode::Tree, Language::En, None),
+            " Mode:  Folders [t] · (1234 files)"
+        );
+        assert_eq!(
+            changes_header(80, 1234, FileViewMode::Flat, Language::Pt, None),
+            " Modo: 󰈚 Lista [t] · (1234 arquivos)"
+        );
     }
 
     fn paths(list: &[&str]) -> Vec<PathBuf> {
