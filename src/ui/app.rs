@@ -63,6 +63,8 @@ pub enum SearchSource {
 pub struct FzfQuery {
     pub items: Vec<String>,
     pub header: String,
+    /// Diffs the candidates come from (the built-in picker's preview uses them).
+    pub files: Vec<FileDiff>,
 }
 
 const FULL_CONTEXT_LINES: usize = 1_000_000;
@@ -180,6 +182,8 @@ pub struct App {
     pub fzf_carry: Option<(FzfQuery, String)>,
     // Built-in picker used for fzf requests when fzf is not installed
     pub picker: Option<PickerState>,
+    /// Preview pane on/off, kept between picker openings.
+    pub picker_preview: bool,
 
     // Terminal geometry for responsive drag resizing
     pub term_width: u16,
@@ -322,6 +326,7 @@ impl App {
             fzf_request: None,
             fzf_carry: None,
             picker: None,
+            picker_preview: true,
             term_width: 80,
             term_height: 25,
             watcher_state: if watch_mode {
@@ -1134,7 +1139,12 @@ impl App {
                 format!("Buscar texto em {} (Esc para cancelar)", label)
             }
         };
-        FzfQuery { items, header }
+        let files = files.into_iter().cloned().collect();
+        FzfQuery {
+            items,
+            header,
+            files,
+        }
     }
 
     fn enter_search_source(&mut self) {
@@ -1171,6 +1181,8 @@ impl App {
 
     fn open_picker(&mut self, request: FzfRequest, query: FzfQuery, text: &str) {
         let mut picker = PickerState::new(request, query.items, query.header);
+        picker.files = query.files;
+        picker.show_preview = self.picker_preview;
         if !text.is_empty() {
             picker.query = text.to_string();
             picker.refilter();
@@ -1211,6 +1223,7 @@ impl App {
         let query = FzfQuery {
             items: picker.items,
             header: picker.header,
+            files: picker.files,
         };
         self.fzf_carry = Some((query, picker.query));
         self.fzf_request = Some(picker.request);
@@ -1256,6 +1269,10 @@ impl App {
                 picker.refilter();
             }
             PickerAction::SwitchEngine => self.switch_search_to_fzf(),
+            PickerAction::TogglePreview => {
+                picker.toggle_preview();
+                self.picker_preview = picker.show_preview;
+            }
             PickerAction::Ignore => {}
         }
     }

@@ -2040,6 +2040,7 @@ fn ctrl_g_inside_the_search_switches_engine_and_keeps_the_query() {
         FzfQuery {
             items: items.clone(),
             header: "Files".into(),
+            files: Vec::new(),
         },
         "app",
     );
@@ -2072,6 +2073,94 @@ fn ctrl_g_inside_the_search_switches_engine_and_keeps_the_query() {
             .0
             .contains("fzf not found"));
     }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn builtin_picker_shows_a_preview_that_follows_the_cursor() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::ui::app::{App, AppMode, FzfRequest};
+    let dir = std::env::temp_dir().join(format!("diffv_picker_preview_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Preview Tester"]);
+    git(&["config", "user.email", "preview@example.com"]);
+    fs::write(dir.join("alpha.txt"), "one\n").unwrap();
+    fs::write(dir.join("beta.txt"), "two\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+    fs::write(dir.join("alpha.txt"), "one\nalpha_preview_line\n").unwrap();
+    fs::write(dir.join("beta.txt"), "two\nbeta_preview_line\n").unwrap();
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        true,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    app.language = diffv::core::models::Language::En;
+    let screen = |app: &mut App, width: u16| {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>()
+    };
+
+    // Files: the preview shows the diff of the file under the cursor.
+    app.open_builtin_picker(FzfRequest::Files, false);
+    let text = screen(&mut app, 140);
+    assert!(text.contains("alpha_preview_line"), "preview of alpha.txt");
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let text = screen(&mut app, 140);
+    assert!(text.contains("beta_preview_line") && !text.contains("alpha_preview_line"));
+
+    // Small terminal: list only.
+    let narrow = screen(&mut app, 60);
+    assert!(!narrow.contains("beta_preview_line"));
+
+    // Ctrl+T hides it, and the choice sticks for the next picker.
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(!screen(&mut app, 140).contains("beta_preview_line"));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.open_builtin_picker(FzfRequest::Text, false);
+    assert!(!app.picker.as_ref().unwrap().show_preview);
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+
+    // Text: context around the matched line, query highlighted in place.
+    for c in "beta_prev".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let text = screen(&mut app, 140);
+    assert!(
+        text.matches("beta_preview_line").count() >= 2,
+        "list + preview"
+    );
+    assert!(text.contains("two"), "context line before the match");
 
     let _ = fs::remove_dir_all(&dir);
 }
