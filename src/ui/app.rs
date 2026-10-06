@@ -34,6 +34,7 @@ use crate::ui::components::style::centered_rect;
 use crate::ui::components::toast::{render_toast, TOAST_DURATION};
 use crate::ui::components::unified::render_unified;
 use crate::ui::components::worktree_popup::{render_worktree_popup, WorktreeCreationState};
+use crate::ui::scroll::{clamp_cursor, max_list_offset, scroll_offset, SCROLLOFF, WHEEL_STEP};
 use crate::ui::selection::{extract_text, is_selected, pane_lines, MouseSelection, TextMap};
 use crate::ui::theme::Theme;
 
@@ -790,12 +791,9 @@ impl App {
         }
         let total = self.total_diff_rows();
         if total > 0 {
-            let max_scroll = total.saturating_sub(1);
-            self.scroll_y = (self.scroll_y + amount).min(max_scroll);
-            if self.selected_row < self.scroll_y {
-                self.selected_row = self.scroll_y;
-            }
+            self.scroll_y = scroll_offset(self.scroll_y, amount as isize, total - 1);
         }
+        self.keep_diff_cursor_in_view();
     }
 
     pub fn scroll_viewport_up(&mut self, amount: usize) {
@@ -803,10 +801,122 @@ impl App {
             self.wrap_skip = self.wrap_skip.saturating_sub(amount);
             return;
         }
-        let vp = self.viewport_height.saturating_sub(3).max(1);
         self.scroll_y = self.scroll_y.saturating_sub(amount);
-        if self.selected_row >= self.scroll_y + vp {
-            self.selected_row = (self.scroll_y + vp).saturating_sub(1);
+        self.keep_diff_cursor_in_view();
+    }
+
+    /// Logical diff rows fully visible from `scroll_y` (wrapped rows count by height).
+    fn visible_diff_rows(&self) -> usize {
+        let vp = self.viewport_height.saturating_sub(3).max(1);
+        let Some(file) = self.current_file().filter(|_| self.wrap_lines) else {
+            return vp;
+        };
+        let mut used = 0;
+        let mut count = 0;
+        for height in wrapped_row_heights(
+            file,
+            self.is_unified,
+            wrap_width(self.is_unified, self.diff_width),
+        )
+        .skip(self.scroll_y)
+        {
+            if count > 0 && used + height > vp {
+                break;
+            }
+            used += height;
+            count += 1;
+        }
+        count.max(1)
+    }
+
+    /// Drags the diff cursor along when the view scrolled past it.
+    fn keep_diff_cursor_in_view(&mut self) {
+        let total = self.total_diff_rows();
+        let visible = self.visible_diff_rows();
+        self.selected_row =
+            clamp_cursor(self.selected_row, self.scroll_y, visible, total, SCROLLOFF);
+    }
+
+    /// Mouse wheel over the diff: scrolls the view, not the cursor.
+    pub fn wheel_diff(&mut self, down: bool) {
+        if down {
+            self.scroll_viewport_down(WHEEL_STEP);
+        } else {
+            self.scroll_viewport_up(WHEEL_STEP);
+        }
+    }
+
+    /// Mouse wheel over the drawer (files / commits / stashes / file history):
+    /// scrolls the list and only moves the selection when it would leave the view.
+    pub fn wheel_drawer(&mut self, down: bool) {
+        let delta = if down {
+            WHEEL_STEP as isize
+        } else {
+            -(WHEEL_STEP as isize)
+        };
+        let base_rows = self.file_tree_height.saturating_sub(4).max(1);
+        let inspecting = self.active_commit_info.is_some() || self.active_stash_info.is_some();
+        let lists_files = self.drawer_tab == DrawerTab::Changes || inspecting;
+        let (offset, cursor, total, visible) = if self.show_history {
+            (
+                &mut self.history_scroll,
+                &mut self.selected_history_idx,
+                self.history_commits.len(),
+                base_rows,
+            )
+        } else if lists_files {
+            let header_rows = if !inspecting {
+                0
+            } else if self.viewport_height < 18 {
+                3
+            } else {
+                4
+            };
+            let visible = base_rows.saturating_sub(header_rows).max(1);
+            if self.file_view_mode == FileViewMode::Tree {
+                let total = self.tree_items.len();
+                (
+                    &mut self.file_tree_scroll,
+                    &mut self.selected_tree_idx,
+                    total,
+                    visible,
+                )
+            } else {
+                let total = self.filtered_indices.len();
+                (
+                    &mut self.file_tree_scroll,
+                    &mut self.selected_filtered_idx,
+                    total,
+                    visible,
+                )
+            }
+        } else if self.drawer_tab == DrawerTab::Commits {
+            (
+                &mut self.repo_commit_scroll,
+                &mut self.selected_repo_commit_idx,
+                self.repo_commits.len(),
+                base_rows,
+            )
+        } else {
+            (
+                &mut self.stash_scroll,
+                &mut self.selected_stash_idx,
+                self.stashes.len(),
+                base_rows,
+            )
+        };
+        *offset = scroll_offset(*offset, delta, max_list_offset(total, visible));
+        let previous = *cursor;
+        *cursor = clamp_cursor(*cursor, *offset, visible, total, SCROLLOFF);
+        if *cursor == previous {
+            return;
+        }
+        if self.show_history {
+            self.load_selected_commit_diff();
+        } else if lists_files {
+            self.wrap_skip = 0;
+            self.scroll_y = 0;
+            self.selected_row = 0;
         }
     }
 
@@ -3320,8 +3430,8 @@ impl App {
 
         if self.show_history && mouse.column < effective_tree_width {
             match mouse.kind {
-                MouseEventKind::ScrollDown => self.file_tree_down(3),
-                MouseEventKind::ScrollUp => self.file_tree_up(3),
+                MouseEventKind::ScrollDown => self.wheel_drawer(true),
+                MouseEventKind::ScrollUp => self.wheel_drawer(false),
                 MouseEventKind::Down(MouseButton::Left) if mouse.row >= 4 => {
                     let idx = self.history_scroll + mouse.row.saturating_sub(4) as usize;
                     if idx < self.history_commits.len() {
@@ -3360,18 +3470,12 @@ impl App {
         }
 
         match mouse.kind {
-            MouseEventKind::ScrollDown => {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                let down = mouse.kind == MouseEventKind::ScrollDown;
                 if effective_tree_width > 0 && mouse.column < effective_tree_width {
-                    self.file_tree_down(3);
+                    self.wheel_drawer(down);
                 } else {
-                    self.scroll_down(3);
-                }
-            }
-            MouseEventKind::ScrollUp => {
-                if effective_tree_width > 0 && mouse.column < effective_tree_width {
-                    self.file_tree_up(3);
-                } else {
-                    self.scroll_up(3);
+                    self.wheel_diff(down);
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -4226,50 +4330,14 @@ impl App {
             }
         } else {
             if self.wrap_lines && self.selected_row >= self.scroll_y {
-                use unicode_width::UnicodeWidthStr;
-                let width = if self.is_unified {
-                    diff_area.width.saturating_sub(18)
-                } else {
-                    (diff_area.width.saturating_sub(3) / 2).saturating_sub(10)
-                }
-                .max(1) as usize;
+                let width = wrap_width(self.is_unified, diff_area.width);
                 let height = self
                     .current_file()
                     .map(|f| {
-                        if self.is_unified {
-                            f.hunks
-                                .iter()
-                                .flat_map(|h| {
-                                    std::iter::once(1usize).chain(
-                                        h.lines
-                                            .iter()
-                                            .map(|l| l.content.width().max(1).div_ceil(width)),
-                                    )
-                                })
-                                .skip(self.scroll_y)
-                                .take(self.selected_row - self.scroll_y + 1)
-                                .sum::<usize>()
-                        } else {
-                            f.aligned_rows
-                                .iter()
-                                .skip(self.scroll_y)
-                                .take(self.selected_row - self.scroll_y + 1)
-                                .map(|r| {
-                                    let len = r
-                                        .left
-                                        .as_ref()
-                                        .map(|l| l.content.width())
-                                        .unwrap_or(0)
-                                        .max(
-                                            r.right
-                                                .as_ref()
-                                                .map(|l| l.content.width())
-                                                .unwrap_or(0),
-                                        );
-                                    len.max(1).div_ceil(width)
-                                })
-                                .sum::<usize>()
-                        }
+                        wrapped_row_heights(f, self.is_unified, width)
+                            .skip(self.scroll_y)
+                            .take(self.selected_row - self.scroll_y + 1)
+                            .sum::<usize>()
                     })
                     .unwrap_or(0);
                 if height > diff_area.height.saturating_sub(3) as usize {
@@ -4488,6 +4556,41 @@ impl App {
                 }
             }
         }
+    }
+}
+
+/// Text width the wrapped diff rows are measured against (gutters excluded).
+fn wrap_width(is_unified: bool, diff_width: u16) -> usize {
+    if is_unified {
+        diff_width.saturating_sub(18)
+    } else {
+        (diff_width.saturating_sub(3) / 2).saturating_sub(10)
+    }
+    .max(1) as usize
+}
+
+/// Screen rows each logical diff row takes when wrapped at `width` columns.
+fn wrapped_row_heights(
+    file: &FileDiff,
+    is_unified: bool,
+    width: usize,
+) -> Box<dyn Iterator<Item = usize> + '_> {
+    use unicode_width::UnicodeWidthStr;
+    if is_unified {
+        Box::new(file.hunks.iter().flat_map(move |h| {
+            std::iter::once(1usize).chain(
+                h.lines
+                    .iter()
+                    .map(move |l| l.content.width().max(1).div_ceil(width)),
+            )
+        }))
+    } else {
+        Box::new(file.aligned_rows.iter().map(move |r| {
+            let side = |l: &Option<crate::core::models::DiffLine>| {
+                l.as_ref().map(|l| l.content.width()).unwrap_or(0)
+            };
+            side(&r.left).max(side(&r.right)).max(1).div_ceil(width)
+        }))
     }
 }
 

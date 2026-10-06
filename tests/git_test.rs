@@ -1890,3 +1890,88 @@ fn builtin_picker_feeds_the_fzf_result_handlers() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn mouse_wheel_scrolls_the_view_and_drags_the_cursor_only_at_edges() {
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+    use diffv::ui::app::{App, AppMode};
+    let dir = std::env::temp_dir().join(format!("diffv_wheel_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Wheel Tester"]);
+    git(&["config", "user.email", "wheel@example.com"]);
+    let long: String = (0..200).map(|i| format!("line {}\n", i)).collect();
+    fs::write(dir.join("a00.txt"), &long).unwrap();
+    for i in 1..40 {
+        fs::write(dir.join(format!("a{:02}.txt", i)), "x\n").unwrap();
+    }
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+    fs::write(dir.join("a00.txt"), long.replace("line", "row")).unwrap();
+    for i in 1..40 {
+        fs::write(dir.join(format!("a{:02}.txt", i)), "y\n").unwrap();
+    }
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        true,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let wheel = |app: &mut App, kind, column| {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+
+    // Diff pane: the view moves, the cursor stays while it is still visible.
+    assert_eq!(app.current_file().unwrap().display_path(), "a00.txt");
+    app.selected_row = 10;
+    wheel(&mut app, MouseEventKind::ScrollDown, 100);
+    assert_eq!((app.scroll_y, app.selected_row), (3, 10));
+    // Scrolling past it drags the cursor along, keeping a 2-line margin.
+    for _ in 0..4 {
+        wheel(&mut app, MouseEventKind::ScrollDown, 100);
+    }
+    assert_eq!((app.scroll_y, app.selected_row), (15, 17));
+    wheel(&mut app, MouseEventKind::ScrollUp, 100);
+    assert_eq!((app.scroll_y, app.selected_row), (12, 17));
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    assert_eq!(app.scroll_y, 12, "render keeps the wheel-scrolled view");
+    assert!(app.diff_row_map.contains(&app.selected_row));
+
+    // Drawer: the list scrolls, the selected file only changes at the edge.
+    let first = app.selected_tree_idx;
+    wheel(&mut app, MouseEventKind::ScrollDown, 5);
+    assert_eq!(app.file_tree_scroll, 3);
+    assert_eq!(app.selected_tree_idx, first.max(5));
+    assert_eq!(app.selected_row, 0, "a new file starts at the top");
+    wheel(&mut app, MouseEventKind::ScrollUp, 5);
+    assert_eq!(app.file_tree_scroll, 0);
+    assert_eq!(app.selected_tree_idx, first.max(5));
+
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -138,7 +138,7 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `h` / `l` or `←` / `→` | General | Tree: collapse/expand folder. Diff: switch Old/New column |
 | `Space` | File Tree | Toggle collapse/expand on current folder |
 | `<` / `>` or `,` / `.` | General | **Resize Panes**: shrink / expand File Tree width |
-| `Mouse Wheel` | General | **Scroll** hovered pane smoothly (File Tree or Diff) |
+| `Mouse Wheel` | General | **Scroll the view** of the hovered pane (File Tree or Diff); the cursor stays put and is only dragged along when it would leave the screen |
 | `Mouse Click` | General | **Select** file / line, collapse/expand folders, switch focus, or click branch badge to open Branch Selector |
 | `Mouse Drag` | General | **Drag vertical divider** to resize File Tree width |
 | `Mouse Drag` | Diff | **Select diff text** (unified, side-by-side or commit diff) and copy it to the clipboard on release. `Ctrl+C` copies again, `Esc` clears. Gutters and `+`/`-` markers are left out |
