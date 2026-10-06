@@ -146,6 +146,8 @@ O repositório possui três workflows automatizados em `.github/workflows/`:
 |---|---|---|
 | **`ci.yml`** | `pull_request` em `main`/`beta`; `push` em `beta` | Roda `cargo test` no Linux e macOS e `cargo clippy --all-targets -- -D warnings`. Emite o status check unificado `CI Passed`. |
 | **`release.yml`** | `push` em `main`, `push` em `beta`, tags `v*` | Compila os 4 targets. Na `main`, publica `nightly`. Na `beta`, publica `beta`. Em tags, publica a release `stable` com os binários anexados. |
+
+**Publicação rolante (`nightly` / `beta`):** a cada push, o `release.yml` move a tag flutuante (`nightly` ou `beta`) para o commit do push via API, e cria ou atualiza a release *in place* (envia os 8 assets com `--clobber` antes de remover qualquer asset obsoleto, e atualiza título/notas). Se a data de criação da release (que o GitHub deriva do commit da tag e que ordena a página de Releases) ficar anterior ao commit, a release é recriada mantendo a tag. Ao final, o passo confere tag, 8 assets e data. Só "ainda não existe" é tolerado; qualquer outro erro deixa o run vermelho. Um re-run de um commit antigo não move o canal para trás (avisa e sai se a branch já avançou). O caminho estável (`v*`) não é afetado.
 | **`release-please.yml`** | `push` em `beta` | Executa o Google Release Please na branch `beta`. Mantém a PR de release atualizada e dispara a esteira de build estável no merge. |
 
 ---
