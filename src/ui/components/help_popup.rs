@@ -16,11 +16,11 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
 
     let (title, footer) = match language {
         Language::En => (
-            "Keyboard Shortcuts & Neovim Motions",
+            "Keyboard Shortcuts & Vim Motions",
             [("esc / ? / q", "close")],
         ),
         Language::Pt => (
-            "Atalhos de Teclado & Comandos Neovim",
+            "Atalhos de Teclado & Comandos Vim",
             [("esc / ? / q", "fechar")],
         ),
     };
@@ -45,7 +45,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
         Language::En => (
             vec![
                 (
-                    "󰌌  Neovim Motions & Diff Navigation",
+                    "󰌌  Vim Motions & Diff Navigation",
                     vec![
                         ("j / k or ↓ / ↑", "Move down / up line by line"),
                         ("Ctrl+e / Ctrl+y", "Scroll viewport down / up 1 line (Vim)"),
@@ -120,7 +120,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
         Language::Pt => (
             vec![
                 (
-                    "󰌌  Movimentação Neovim & Navegação",
+                    "󰌌  Movimentação Vim & Navegação",
                     vec![
                         ("j / k ou ↓ / ↑", "Mover linha por linha para baixo / cima"),
                         (
