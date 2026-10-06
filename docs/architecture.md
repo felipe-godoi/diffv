@@ -199,3 +199,8 @@ Ao pressionar `e` em uma linha da diff:
 1. Verifica se `nvr` (neovim-remote) está instalado e se existe um socket Neovim no ambiente (`$NVIM`).
 2. Se sim, instrui o Neovim existente a abrir o arquivo na linha correta sem fechar a sessão.
 3. Se não, suspende temporariamente a TUI do `diffv` e invoca `$EDITOR +<line> <file>`. Ao fechar o editor, o `diffv` restaura a visualização instantaneamente.
+
+### 7.3 Busca com `fzf` (opcional) e Picker Interno
+`Ctrl+p` / `Ctrl+f` geram a lista de candidatos (`App::prepare_fzf`) e o resultado escolhido volta por `handle_fzf_file_result` / `handle_fzf_text_result`:
+1. Se o `fzf` estiver no `PATH` (`is_fzf_available`), a TUI é suspensa e o `fzf` roda em tela cheia com os candidatos.
+2. Se não, abre o picker interno (`ui/components/picker.rs`): popup com filtro fuzzy/substring (smart-case, termos separados por espaço, em `Ctrl+f` só o conteúdo da linha é comparado, como o `--nth=2` do fzf). O item escolhido entra pelos mesmos handlers, então o comportamento após a escolha é idêntico.

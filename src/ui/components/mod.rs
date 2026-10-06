@@ -6,6 +6,7 @@ pub mod header;
 pub mod help_popup;
 pub mod horizontal;
 pub mod loading;
+pub mod picker;
 pub mod ruler;
 pub mod settings_popup;
 pub mod side_by_side;

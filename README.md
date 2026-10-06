@@ -53,6 +53,17 @@ The installer detects your OS and architecture, downloads the latest release bin
 cargo install --git https://github.com/felipe-godoi/diffv.git
 ```
 
+### Optional: `fzf`
+
+[`fzf`](https://github.com/junegunn/fzf) is **optional**. When it is on your `PATH`, `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open it full-screen for the fastest fuzzy matching in the terminal. Without it, `diffv` falls back to a **built-in picker** popup with the same candidates (fuzzy/substring filter, `↑`/`↓`, `Enter` to open, `Esc` to cancel) — searching keeps working, you just get the simpler in-app list instead of fzf's interface.
+
+```bash
+# macOS
+brew install fzf
+# Debian / Ubuntu
+sudo apt install fzf
+```
+
 ### Uninstall
 
 ```bash
@@ -135,8 +146,8 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `v` | Diff | Toggle **Visual Mode** for line-level partial staging / unstaging |
 | `o` | Commits / History | Open the selected commit's **GitHub pull request** in the browser (falls back to the commit page; uses `gh` when available) |
 | `x` | General | **Expand full file** ↔ changes only (keeps file and cursor line) |
-| `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash) |
-| `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched |
+| `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash). Uses `fzf` when installed, otherwise the built-in picker |
+| `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched. Uses `fzf` when installed, otherwise the built-in picker |
 | `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in Neovim |
 | `e` | Diff | Open file in Neovim / `$EDITOR` at cursor line (`+line`) |
 | `s` | Diff | **Stage** current hunk (or Visual lines) of a file under **Changes** |

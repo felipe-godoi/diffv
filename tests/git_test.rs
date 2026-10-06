@@ -1806,3 +1806,87 @@ fn find_on_screen(buffer: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) 
         })
         .expect("text rendered on screen")
 }
+
+#[test]
+fn builtin_picker_feeds_the_fzf_result_handlers() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::ui::app::{App, AppMode, Focus, FzfRequest};
+    let dir = std::env::temp_dir().join(format!("diffv_builtin_picker_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Picker Tester"]);
+    git(&["config", "user.email", "picker@example.com"]);
+    fs::write(dir.join("alpha.txt"), "one\n").unwrap();
+    fs::write(dir.join("beta.txt"), "two\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+    fs::write(dir.join("alpha.txt"), "one\nalpha_marker\n").unwrap();
+    fs::write(dir.join("beta.txt"), "two\nbeta_marker\n").unwrap();
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        true,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    let type_text = |app: &mut App, text: &str| {
+        for c in text.chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    };
+
+    // Files: filter, pick, and land on the chosen file.
+    app.open_builtin_picker(FzfRequest::Files);
+    assert_eq!(app.picker.as_ref().unwrap().matches.len(), 2);
+    type_text(&mut app, "beta");
+    assert_eq!(app.picker.as_ref().unwrap().matches.len(), 1);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.picker.is_none());
+    assert_eq!(app.current_file().unwrap().display_path(), "beta.txt");
+
+    // The popup renders on top of the UI.
+    app.open_builtin_picker(FzfRequest::Files);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("Find File"));
+    // Esc cancels without moving.
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.picker.is_none());
+    assert_eq!(app.current_file().unwrap().display_path(), "beta.txt");
+
+    // Text: matches line content and jumps to the file + line.
+    app.focus = Focus::FileTree;
+    app.open_builtin_picker(FzfRequest::Text);
+    type_text(&mut app, "alpha_mark");
+    assert_eq!(app.picker.as_ref().unwrap().matches.len(), 1);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.current_file().unwrap().display_path(), "alpha.txt");
+    assert_eq!(app.focus, Focus::DiffView);
+
+    let _ = fs::remove_dir_all(&dir);
+}

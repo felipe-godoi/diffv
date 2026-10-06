@@ -501,15 +501,8 @@ fn run_app(
         // Check if an interactive fzf search request is pending
         if let Some(fzf_req) = app.fzf_request.take() {
             if !is_fzf_available() {
-                let msg = match app.language {
-                    diffv::core::models::Language::En => {
-                        "fzf is not installed or not found on PATH"
-                    }
-                    diffv::core::models::Language::Pt => {
-                        "fzf não está instalado ou não foi encontrado no PATH"
-                    }
-                };
-                app.set_notification(msg);
+                // fzf is optional: fall back to the built-in picker
+                app.open_builtin_picker(fzf_req);
                 needs_redraw = true;
                 continue;
             }

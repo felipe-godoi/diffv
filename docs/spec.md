@@ -125,6 +125,10 @@ A interface é dividida em três componentes principais:
     bind-key d display-popup -E -w 90% -h 90% "diffv --watch"
     ```
   - Redimensionamento limpo de tela (SIGWINCH) garantindo redesenho sem quebras.
+- **Busca Fuzzy (`Ctrl+p` / `Ctrl+f`) com `fzf` opcional**:
+  - `Ctrl+p` busca arquivos e `Ctrl+f` busca texto do diff no escopo atual (mudanças, commit ou stash).
+  - O [`fzf`](https://github.com/junegunn/fzf) é **opcional**: se estiver no `PATH`, a busca abre nele em tela cheia, com a interface e o matching do fzf no terminal.
+  - Sem o `fzf`, o `diffv` usa um **picker interno** (popup ratatui com filtro fuzzy/substring, `↑`/`↓`, `Enter`/`Esc`) com os mesmos candidatos e o mesmo resultado; o app avisa que está usando o picker interno.
 - **Copy Hunk / Context for Prompt**:
   - Atalho `c` para copiar o diff do hunk atual ou arquivo formatado em markdown com caminho do arquivo para o clipboard do sistema, facilitando colar no prompt da IA para pedir correções.
 

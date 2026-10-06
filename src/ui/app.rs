@@ -26,6 +26,7 @@ use crate::ui::components::file_tree::{
 };
 use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
+use crate::ui::components::picker::{render_picker_popup, PickerState};
 use crate::ui::components::ruler::render_ruler;
 use crate::ui::components::settings_popup::{render_settings_popup, SettingItem, SETTING_ITEMS};
 use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
@@ -172,6 +173,8 @@ pub struct App {
 
     // External fzf requests
     pub fzf_request: Option<FzfRequest>,
+    // Built-in picker used for fzf requests when fzf is not installed
+    pub picker: Option<PickerState>,
 
     // Terminal geometry for responsive drag resizing
     pub term_width: u16,
@@ -312,6 +315,7 @@ impl App {
             details_popup_scroll: 0,
             worktree_creation: None,
             fzf_request: None,
+            picker: None,
             term_width: 80,
             term_height: 25,
             watcher_state: if watch_mode {
@@ -1016,6 +1020,60 @@ impl App {
         }
     }
 
+    /// Opens the built-in picker for `request` (used when fzf is not installed).
+    pub fn open_builtin_picker(&mut self, request: FzfRequest) {
+        let query = self.prepare_fzf(request);
+        if query.items.is_empty() {
+            return;
+        }
+        self.picker = Some(PickerState::new(request, query.items, query.header));
+        let msg = match self.language {
+            Language::En => "fzf not found on PATH · using the built-in picker",
+            Language::Pt => "fzf não encontrado no PATH · usando o picker interno",
+        };
+        self.set_notification(msg);
+    }
+
+    fn handle_picker_key(&mut self, key: KeyEvent) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => self.picker = None,
+            KeyCode::Char('c' | 'g') if ctrl => self.picker = None,
+            KeyCode::Enter => {
+                let request = picker.request;
+                let selected = picker.selected_item().cloned();
+                self.picker = None;
+                match (selected, request) {
+                    (Some(item), FzfRequest::Files) => self.handle_fzf_file_result(item),
+                    (Some(item), FzfRequest::Text) => self.handle_fzf_text_result(item),
+                    (None, _) => {}
+                }
+            }
+            KeyCode::Up => picker.move_by(-1),
+            KeyCode::Down => picker.move_by(1),
+            KeyCode::Char('p' | 'k') if ctrl => picker.move_by(-1),
+            KeyCode::Char('n' | 'j') if ctrl => picker.move_by(1),
+            KeyCode::PageUp => picker.move_by(-10),
+            KeyCode::PageDown => picker.move_by(10),
+            KeyCode::Char('u') if ctrl => {
+                picker.query.clear();
+                picker.refilter();
+            }
+            KeyCode::Backspace => {
+                picker.query.pop();
+                picker.refilter();
+            }
+            KeyCode::Char(c) if !ctrl => {
+                picker.query.push(c);
+                picker.refilter();
+            }
+            _ => {}
+        }
+    }
+
     pub fn handle_fzf_file_result(&mut self, selected_file: String) {
         self.enter_search_source();
         if self.jump_to_file(&selected_file) {
@@ -1580,6 +1638,12 @@ impl App {
 
     pub fn handle_key(&mut self, key: KeyEvent) {
         self.expire_notification();
+
+        // Built-in search picker: it is a text prompt (like fzf), so every key goes to it
+        if self.picker.is_some() {
+            self.handle_picker_key(key);
+            return;
+        }
 
         // Shift+Q unconditionally quits the program regardless of navigation/modal state
         if key.code == KeyCode::Char('Q') {
@@ -3023,7 +3087,8 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
-        let modal_open = self.show_details_popup
+        let modal_open = self.picker.is_some()
+            || self.show_details_popup
             || self.show_settings
             || self.show_branch_selector
             || self.show_help
@@ -3153,6 +3218,15 @@ impl App {
 
     fn dispatch_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseButton, MouseEventKind};
+
+        if let Some(picker) = &mut self.picker {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => picker.move_by(3),
+                MouseEventKind::ScrollUp => picker.move_by(-3),
+                _ => {}
+            }
+            return;
+        }
 
         if self.show_details_popup {
             match mouse.kind {
@@ -4357,6 +4431,7 @@ impl App {
             && !self.show_history
             && !self.show_details_popup
             && self.confirm_action.is_none()
+            && self.picker.is_none()
         {
             render_drawer_line_overlay(
                 frame,
@@ -4375,6 +4450,10 @@ impl App {
                 self.active_stash_info.as_ref(),
                 &self.theme,
             );
+        }
+
+        if let Some(picker) = &mut self.picker {
+            render_picker_popup(frame, size, picker, self.language, &self.theme);
         }
 
         // Floating notification styled with the active theme
