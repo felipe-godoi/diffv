@@ -99,7 +99,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                             "Esc/Ctrl+C/Ctrl+Q",
                             "Close search picker (like fzf; Shift+Q types Q)",
                         ),
-                        ("Ctrl+g", "Switch search engine: auto → fzf → built-in"),
+                        (
+                            "Ctrl+g",
+                            "Search engine: auto→fzf→built-in (in search: keeps query)",
+                        ),
                         ("b", "Toggle File Drawer sidebar visible ↔ hidden"),
                         ("t", "Toggle Folders (Tree) ↔ Flat List view"),
                         ("< / > or , / .", "Resize File Drawer sidebar width"),
@@ -198,7 +201,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                             "Esc/Ctrl+C/Ctrl+Q",
                             "Fechar a busca (como no fzf; Shift+Q digita Q)",
                         ),
-                        ("Ctrl+g", "Trocar motor de busca: auto → fzf → interno"),
+                        (
+                            "Ctrl+g",
+                            "Motor de busca: auto→fzf→interno (na busca: leva a query)",
+                        ),
                         ("b", "Exibir ↔ ocultar painel lateral (sidebar)"),
                         ("t", "Alternar entre Pastas (Tree) ↔ Lista Plana"),
                         ("< / > ou , / .", "Redimensionar largura do painel lateral"),

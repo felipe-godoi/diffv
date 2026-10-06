@@ -2003,3 +2003,75 @@ fn background_update_notice_outlives_a_regular_toast() {
     assert!(msg.contains("v9.9.9") && msg.contains("restart"));
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn ctrl_g_inside_the_search_switches_engine_and_keeps_the_query() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::config::SearchEngine;
+    use diffv::ui::app::{App, AppMode, FzfQuery, FzfRequest};
+    let dir = std::env::temp_dir().join(format!("diffv_engine_switch_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    // Engine changes are persisted; keep them out of the real user config.
+    std::env::set_var("XDG_CONFIG_HOME", dir.join("config"));
+    fs::write(dir.join("a.txt"), "a\n").unwrap();
+    fs::write(dir.join("b.txt"), "b\n").unwrap();
+    let mut app = App::new(
+        AppMode::FilePair(dir.join("a.txt"), dir.join("b.txt")),
+        diffv::config::Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    app.language = diffv::core::models::Language::En;
+    let items = vec![
+        "src/main.rs".to_string(),
+        "src/app.rs".to_string(),
+        "README.md".to_string(),
+    ];
+
+    // fzf -> Ctrl+G: the built-in picker opens with the fzf query already applied.
+    app.switch_search_to_builtin(
+        FzfRequest::Files,
+        FzfQuery {
+            items: items.clone(),
+            header: "Files".into(),
+        },
+        "app",
+    );
+    let picker = app.picker.as_ref().expect("built-in picker open");
+    assert_eq!(picker.query, "app");
+    assert_eq!(
+        picker.selected_item().map(String::as_str),
+        Some("src/app.rs")
+    );
+    assert_eq!(picker.items, items, "same candidates as fzf had");
+    assert_eq!(app.config.search.engine, SearchEngine::Builtin);
+    assert!(app
+        .notification
+        .as_ref()
+        .unwrap()
+        .0
+        .contains("built-in picker"));
+    let saved = fs::read_to_string(dir.join("config/diffv/config.toml")).unwrap();
+    assert!(saved.contains("engine = \"builtin\""));
+
+    // Built-in -> Ctrl+G with no fzf on PATH: say so and keep the picker and query.
+    if !diffv::integration::fzf::is_fzf_available() {
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert_eq!(app.picker.as_ref().map(|p| p.query.as_str()), Some("app"));
+        assert!(app.fzf_request.is_none() && app.fzf_carry.is_none());
+        assert!(app
+            .notification
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("fzf not found"));
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}

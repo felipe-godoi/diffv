@@ -56,7 +56,8 @@ impl PickerState {
 
 /// What a key does in the picker. Follows fzf's default bindings: Esc, Ctrl+C and
 /// Ctrl+Q abort; every printable key (including Shift+Q) is query text. Ctrl+G is
-/// not an exit key here (unlike fzf): in diffv it switches the search engine.
+/// not an exit key here (unlike fzf's default): it switches the search to fzf,
+/// carrying the typed query along.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerAction {
     Cancel,
@@ -65,6 +66,8 @@ pub enum PickerAction {
     ClearQuery,
     Backspace,
     Type(char),
+    /// Ctrl+G: continue this search in the other engine (fzf) with the same query.
+    SwitchEngine,
     Ignore,
 }
 
@@ -81,6 +84,7 @@ pub fn picker_key_action(key: KeyEvent) -> PickerAction {
         KeyCode::PageUp => PickerAction::Move(-10),
         KeyCode::PageDown => PickerAction::Move(10),
         KeyCode::Char('u') if ctrl => PickerAction::ClearQuery,
+        KeyCode::Char('g') if ctrl => PickerAction::SwitchEngine,
         KeyCode::Backspace => PickerAction::Backspace,
         KeyCode::Char(c) if !ctrl => PickerAction::Type(c),
         _ => PickerAction::Ignore,
@@ -286,13 +290,13 @@ pub fn render_picker_popup(
             ("↑/↓", "move"),
             ("enter", "open"),
             ("esc", "cancel"),
-            ("", "built-in picker (install fzf for preview)"),
+            ("ctrl+g", "fzf"),
         ],
         Language::Pt => [
             ("↑/↓", "mover"),
             ("enter", "abrir"),
             ("esc", "cancelar"),
-            ("", "picker interno (instale o fzf para preview)"),
+            ("ctrl+g", "fzf"),
         ],
     };
     frame.render_widget(
@@ -374,8 +378,8 @@ mod tests {
         for c in ['c', 'q'] {
             assert_eq!(key(KeyCode::Char(c), ctrl), PickerAction::Cancel);
         }
-        // Ctrl+G is reserved for switching the search engine, so it does not close.
-        assert_eq!(key(KeyCode::Char('g'), ctrl), PickerAction::Ignore);
+        // Ctrl+G switches the search engine instead of closing the picker.
+        assert_eq!(key(KeyCode::Char('g'), ctrl), PickerAction::SwitchEngine);
         // Like in fzf, Shift+Q (and q) are just query text.
         assert_eq!(
             key(KeyCode::Char('Q'), KeyModifiers::SHIFT),

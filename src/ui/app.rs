@@ -176,6 +176,8 @@ pub struct App {
 
     // External fzf requests
     pub fzf_request: Option<FzfRequest>,
+    /// Candidates + typed query carried into fzf when Ctrl+G leaves the built-in picker.
+    pub fzf_carry: Option<(FzfQuery, String)>,
     // Built-in picker used for fzf requests when fzf is not installed
     pub picker: Option<PickerState>,
 
@@ -318,6 +320,7 @@ impl App {
             details_popup_scroll: 0,
             worktree_creation: None,
             fzf_request: None,
+            fzf_carry: None,
             picker: None,
             term_width: 80,
             term_height: 25,
@@ -1156,7 +1159,7 @@ impl App {
         if query.items.is_empty() {
             return;
         }
-        self.picker = Some(PickerState::new(request, query.items, query.header));
+        self.open_picker(request, query, "");
         if fzf_missing {
             let msg = match self.language {
                 Language::En => "fzf not found on PATH · using the built-in picker",
@@ -1164,6 +1167,53 @@ impl App {
             };
             self.set_notification(msg);
         }
+    }
+
+    fn open_picker(&mut self, request: FzfRequest, query: FzfQuery, text: &str) {
+        let mut picker = PickerState::new(request, query.items, query.header);
+        if !text.is_empty() {
+            picker.query = text.to_string();
+            picker.refilter();
+        }
+        self.picker = Some(picker);
+    }
+
+    /// Persists `engine` (as the Ctrl+G shortcut does) and says where the search went.
+    fn set_search_engine(&mut self, engine: crate::config::SearchEngine, fzf_available: bool) {
+        self.config.search.engine = engine;
+        let _ = self.config.save();
+        let msg = search_engine_message(engine, fzf_available, self.language);
+        self.set_notification(msg);
+    }
+
+    /// Ctrl+G pressed inside fzf: reopen the same search in the built-in picker,
+    /// already filtered by the query typed in fzf.
+    pub fn switch_search_to_builtin(&mut self, request: FzfRequest, query: FzfQuery, text: &str) {
+        self.set_search_engine(crate::config::SearchEngine::Builtin, true);
+        self.open_picker(request, query, text);
+    }
+
+    /// Ctrl+G pressed inside the built-in picker: hand its candidates and query to
+    /// fzf (run by the main loop). Without fzf the picker stays open.
+    fn switch_search_to_fzf(&mut self) {
+        if !crate::integration::fzf::is_fzf_available() {
+            let msg = match self.language {
+                Language::En => "fzf not found on PATH · staying in the built-in picker",
+                Language::Pt => "fzf não encontrado no PATH · continuando no picker interno",
+            };
+            self.set_notification(msg);
+            return;
+        }
+        let Some(picker) = self.picker.take() else {
+            return;
+        };
+        self.set_search_engine(crate::config::SearchEngine::Fzf, true);
+        let query = FzfQuery {
+            items: picker.items,
+            header: picker.header,
+        };
+        self.fzf_carry = Some((query, picker.query));
+        self.fzf_request = Some(picker.request);
     }
 
     /// Ctrl+G: auto → fzf → builtin → auto (fzf skipped when not installed), saved
@@ -1205,6 +1255,7 @@ impl App {
                 picker.query.push(c);
                 picker.refilter();
             }
+            PickerAction::SwitchEngine => self.switch_search_to_fzf(),
             PickerAction::Ignore => {}
         }
     }

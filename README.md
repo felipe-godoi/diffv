@@ -57,7 +57,7 @@ cargo install --git https://github.com/felipe-godoi/diffv.git
 
 [`fzf`](https://github.com/junegunn/fzf) is **optional**. When it is on your `PATH`, `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open it full-screen for the fastest fuzzy matching in the terminal. Without it, `diffv` falls back to a **built-in picker** popup with the same candidates (fuzzy/substring filter, `↑`/`↓`, `Enter` to open, `Esc` / `Ctrl+C` / `Ctrl+Q` to cancel like fzf — `Shift+Q` types a "Q" there) — searching keeps working, you just get the simpler in-app list instead of fzf's interface.
 
-Press `Ctrl+G` (outside the picker) to switch the search engine: `auto` (fzf when installed, otherwise the built-in picker) → `fzf` → `builtin` → `auto`. `fzf` is skipped when it is not installed, a toast shows the engine in use, and the choice is saved as `[search] engine` in `config.toml` (also editable in Settings, `C`). With `engine = "fzf"` and fzf missing, diffv says so and falls back to the built-in picker.
+Press `Ctrl+G` (outside the picker) to switch the search engine: `auto` (fzf when installed, otherwise the built-in picker) → `fzf` → `builtin` → `auto`. `fzf` is skipped when it is not installed, a toast shows the engine in use, and the choice is saved as `[search] engine` in `config.toml` (also editable in Settings, `C`). With `engine = "fzf"` and fzf missing, diffv says so and falls back to the built-in picker. `Ctrl+G` also works **inside** a search: from the built-in picker it reopens the same candidates in fzf with your query pre-filled, and from fzf it returns to the built-in picker already filtered by fzf's query (diffv runs fzf with `--print-query --expect=ctrl-g`, so inside diffv `Ctrl+G` no longer aborts fzf). Without fzf, `Ctrl+G` in the picker just says so and keeps you there.
 
 ```bash
 # macOS
@@ -150,7 +150,7 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `x` | General | **Expand full file** ↔ changes only (keeps file and cursor line) |
 | `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash). Uses `fzf` when installed, otherwise the built-in picker |
 | `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched. Uses `fzf` when installed, otherwise the built-in picker |
-| `Ctrl+g` | General | Switch the search engine: **auto** → **fzf** → **built-in** (fzf skipped when not installed; saved to `config.toml`) |
+| `Ctrl+g` | General / Search | Main screen: switch the search engine **auto** → **fzf** → **built-in** (fzf skipped when not installed; saved to `config.toml`). Inside a search (fzf or the built-in picker): continue the same search in the other engine with the typed query |
 | `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in your editor |
 | `e` | Diff | Open file in your editor (`$EDITOR`; system default editor, then `vi`/`nano` when unset) at cursor line (`+line`) |
 | `s` | Diff | **Stage** current hunk (or Visual lines) of a file under **Changes** |
