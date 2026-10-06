@@ -515,9 +515,16 @@ fn test_tab_esc_worktree_fzf_features() {
     assert_eq!(app.selected_filtered_idx, 0);
 
     terminal.draw(|frame| app.render(frame)).unwrap();
-    // Clicking diff view at row 3 selects line 0 of diff
+    // Clicking diff view at row 3 selects line 0 of diff (applied on release, so a
+    // drag can become a text selection instead)
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    });
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
         column: 50,
         row: 3,
         modifiers: KeyModifiers::NONE,
@@ -528,6 +535,12 @@ fn test_tab_esc_worktree_fzf_features() {
     // Clicking diff view at row 4 selects line 1 of diff
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,
+        row: 4,
+        modifiers: KeyModifiers::NONE,
+    });
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
         column: 50,
         row: 4,
         modifiers: KeyModifiers::NONE,
@@ -1688,4 +1701,108 @@ fn test_worktree_selector_live_filter_and_modifier_commands() {
     let _ = fs::remove_dir_all(&temp_dir);
     let _ = fs::remove_dir_all(&wt1_dir);
     let _ = fs::remove_dir_all(&wt2_dir);
+}
+
+#[test]
+fn dragging_over_diff_text_selects_the_source_text() {
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use diffv::ui::app::{App, AppMode};
+    let dir = std::env::temp_dir().join(format!("diffv_mouse_select_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Mouse Tester"]);
+    git(&["config", "user.email", "mouse@example.com"]);
+    fs::write(dir.join("notes.txt"), "alpha line\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+    fs::write(dir.join("notes.txt"), "alpha line\nbravo charlie\n").unwrap();
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        true,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+
+    // Locate "bravo" on screen, inside the diff pane.
+    let (col, row) = find_on_screen(terminal.backend().buffer(), "bravo charlie");
+
+    let mouse = |kind, column| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    let selected_row = app.selected_row;
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), col + 6));
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), col + 12));
+    // The click handlers do not run while dragging.
+    assert_eq!(app.selected_row, selected_row);
+    assert_eq!(app.mouse_selection_text().as_deref(), Some("charlie"));
+    // Dragging back past the start of the line extends the selection leftwards.
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 0));
+    assert_eq!(app.mouse_selection_text().as_deref(), Some("bravo c"));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 0));
+    assert!(app.mouse_selection.is_some());
+
+    // The selection is highlighted on the next frame and Esc clears it.
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    assert!(terminal.backend().buffer()[(col, row)]
+        .modifier
+        .contains(ratatui::style::Modifier::REVERSED));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.mouse_selection.is_none());
+
+    // Side-by-side: the selection stays in the NEW column it started in.
+    app.is_unified = false;
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let (col, row) = find_on_screen(terminal.backend().buffer(), "bravo charlie");
+    let at = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(at(MouseEventKind::Down(MouseButton::Left), col, row));
+    app.handle_mouse(at(MouseEventKind::Drag(MouseButton::Left), col + 4, row));
+    app.handle_mouse(at(MouseEventKind::Up(MouseButton::Left), col + 4, row));
+    assert_eq!(app.mouse_selection_text().as_deref(), Some("bravo"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+fn find_on_screen(buffer: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
+    let n = needle.chars().count();
+    (0..buffer.area.height)
+        .find_map(|y| {
+            let cells: Vec<&str> = (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            (0..cells.len().saturating_sub(n))
+                .find(|&x| cells[x..x + n].concat() == needle)
+                .map(|x| (x as u16, y))
+        })
+        .expect("text rendered on screen")
 }

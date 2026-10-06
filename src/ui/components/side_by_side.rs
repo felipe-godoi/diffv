@@ -7,6 +7,7 @@ use ratatui::Frame;
 use crate::core::models::{DiffKind, DiffLine, FileDiff, HighlightSpan};
 use crate::core::syntax::SyntaxHighlighter;
 use crate::ui::components::style::diff_pane_block;
+use crate::ui::selection::{layout_line, SelectionPane, TextMap, TextRow};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +25,7 @@ pub fn render_side_by_side(
     wrap: bool,
     wrap_skip: usize,
     row_map: &mut Vec<usize>,
+    text_map: &mut TextMap,
     selected_row: usize,
     visual_range: Option<(usize, usize)>,
     active_column: ColumnSide,
@@ -191,6 +193,8 @@ pub fn render_side_by_side(
 
     let mut left_lines = vec![left_header];
     let mut right_lines = vec![right_header];
+    let mut left_text = Vec::new();
+    let mut right_text = Vec::new();
     row_map.push(usize::MAX);
 
     for idx in start_idx..end_idx {
@@ -221,6 +225,8 @@ pub fn render_side_by_side(
             theme,
             right_area.width as usize,
         );
+        let left_layout = side_layout(&left, row.left.as_ref(), left_area, wrap, scroll_x[0]);
+        let right_layout = side_layout(&right, row.right.as_ref(), right_area, wrap, scroll_x[1]);
         let mut left = if wrap {
             crate::ui::components::horizontal::wrap_line(left, 2, left_area.width as usize)
         } else {
@@ -248,6 +254,9 @@ pub fn render_side_by_side(
             0
         };
         row_map.extend(std::iter::repeat_n(idx, height - skip));
+        let first_y = left_area.y + left_lines.len() as u16;
+        push_text_rows(&mut left_text, left_layout, idx, first_y, skip, height);
+        push_text_rows(&mut right_text, right_layout, idx, first_y, skip, height);
         left_lines.extend(left.into_iter().skip(skip));
         right_lines.extend(right.into_iter().skip(skip));
         if left_lines.len() >= max_lines {
@@ -255,8 +264,71 @@ pub fn render_side_by_side(
         }
     }
 
+    left_text.retain(|r| r.y < left_area.bottom());
+    right_text.retain(|r| r.y < right_area.bottom());
+    text_map
+        .panes
+        .push((SelectionPane::Old, left_area, left_text));
+    text_map
+        .panes
+        .push((SelectionPane::New, right_area, right_text));
+
     frame.render_widget(Paragraph::new(left_lines), left_area);
     frame.render_widget(Paragraph::new(right_lines), right_area);
+}
+
+/// Screen x of the text plus the cell → char layout of one side, mirroring the
+/// `wrap_line` / `scroll_line` calls (2 gutter spans: indicator + line number).
+type SideLayout = (u16, Vec<(usize, usize, Vec<usize>)>);
+
+fn side_layout(
+    line: &Line<'_>,
+    diff_line: Option<&DiffLine>,
+    area: Rect,
+    wrap: bool,
+    scroll_x: usize,
+) -> SideLayout {
+    let gutter_width: usize = line.spans.iter().take(2).map(Span::width).sum();
+    let available = (area.width as usize).saturating_sub(gutter_width);
+    let rows = match diff_line.filter(|l| l.kind != DiffKind::Virtual) {
+        Some(l) if wrap => layout_line(&l.content, Some(available), 0),
+        Some(l) => layout_line(&l.content, None, scroll_x),
+        None => Vec::new(),
+    };
+    let rows = rows
+        .into_iter()
+        .map(|(start, end, mut cells)| {
+            cells.truncate(available);
+            (start, end, cells)
+        })
+        .collect();
+    (area.x + gutter_width as u16, rows)
+}
+
+fn push_text_rows(
+    out: &mut Vec<TextRow>,
+    (x, rows): SideLayout,
+    line: usize,
+    first_y: u16,
+    skip: usize,
+    height: usize,
+) {
+    // Filler rows (the other side wrapped further) select up to the end of the line.
+    let line_end = rows.last().map(|r| r.1).unwrap_or(0);
+    for i in skip..height {
+        let (start, end, cells) = rows
+            .get(i)
+            .cloned()
+            .unwrap_or((line_end, line_end, Vec::new()));
+        out.push(TextRow {
+            y: first_y + (i - skip) as u16,
+            x,
+            line,
+            start,
+            end,
+            cells,
+        });
+    }
 }
 
 fn render_side_line<'a>(

@@ -62,6 +62,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                         ),
                         ("Enter / Esc", "Focus Diff View / Return to Drawer"),
                         ("Mouse Drag", "Resize panes divider / click to select"),
+                        (
+                            "Drag on diff text",
+                            "Select & copy text · Ctrl+C copy · Esc clear",
+                        ),
                     ],
                 ),
                 (
@@ -142,6 +146,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                         (
                             "Arrastar Mouse",
                             "Redimensionar divisor / clique para selecionar",
+                        ),
+                        (
+                            "Arrastar no diff",
+                            "Selecionar e copiar texto · Ctrl+C copia · Esc limpa",
                         ),
                     ],
                 ),

@@ -130,6 +130,7 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `Mouse Wheel` | General | **Scroll** hovered pane smoothly (File Tree or Diff) |
 | `Mouse Click` | General | **Select** file / line, collapse/expand folders, switch focus, or click branch badge to open Branch Selector |
 | `Mouse Drag` | General | **Drag vertical divider** to resize File Tree width |
+| `Mouse Drag` | Diff | **Select diff text** (unified, side-by-side or commit diff) and copy it to the clipboard on release. `Ctrl+C` copies again, `Esc` clears. Gutters and `+`/`-` markers are left out |
 | `t` | File Tree | Toggle **📁 Pastas (Tree)** ↔ **📄 Lista (Flat)** |
 | `v` | Diff | Toggle **Visual Mode** for line-level partial staging / unstaging |
 | `o` | Commits / History | Open the selected commit's **GitHub pull request** in the browser (falls back to the commit page; uses `gh` when available) |

@@ -33,6 +33,7 @@ use crate::ui::components::style::centered_rect;
 use crate::ui::components::toast::{render_toast, TOAST_DURATION};
 use crate::ui::components::unified::render_unified;
 use crate::ui::components::worktree_popup::{render_worktree_popup, WorktreeCreationState};
+use crate::ui::selection::{extract_text, is_selected, pane_lines, MouseSelection, TextMap};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +188,23 @@ pub struct App {
     // Branch comparison selector popup state
     pub show_branch_selector: bool,
     pub branch_selector: Option<BranchSelectorState>,
+
+    // Mouse text selection over the diff panes
+    pub text_map: TextMap,
+    pub mouse_selection: Option<MouseSelection>,
+    selection_key: Option<SelectionKey>,
+    pending_click: Option<crossterm::event::MouseEvent>,
+}
+
+/// Identifies the rendered diff a mouse selection was made on; line ids are only
+/// meaningful while it stays the same.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectionKey {
+    path: PathBuf,
+    section: DiffSection,
+    is_unified: bool,
+    full_context: bool,
+    rows: usize,
 }
 
 impl App {
@@ -306,6 +324,10 @@ impl App {
             settings_selected_idx: 0,
             show_branch_selector: false,
             branch_selector: None,
+            text_map: TextMap::default(),
+            mouse_selection: None,
+            selection_key: None,
+            pending_click: None,
         };
 
         app.reload_diffs_internal(false)?;
@@ -2097,7 +2119,19 @@ impl App {
             return;
         }
 
-        // 5. Normal / Visual Navigation
+        // 5. Mouse selection: Ctrl+C copies it, Esc clears it
+        if self.mouse_selection.is_some() {
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.copy_mouse_selection();
+                return;
+            }
+            if key.code == KeyCode::Esc {
+                self.mouse_selection = None;
+                return;
+            }
+        }
+
+        // 6. Normal / Visual Navigation
         match key.code {
             KeyCode::Esc => {
                 if self.visual_mode {
@@ -2989,6 +3023,135 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        let modal_open = self.show_details_popup
+            || self.show_settings
+            || self.show_branch_selector
+            || self.show_help
+            || self.show_worktrees
+            || self.confirm_action.is_some();
+        if !modal_open && self.handle_selection_mouse(mouse) {
+            return;
+        }
+        self.dispatch_mouse(mouse);
+    }
+
+    /// Drag-to-select over the diff text. A press on the text is held back until
+    /// release: if the pointer moved it becomes a selection (and is copied),
+    /// otherwise the original click is replayed so existing click behaviour is kept.
+    fn handle_selection_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
+        use crate::ui::selection::MouseSelection;
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.mouse_selection = None;
+                self.pending_click = None;
+                let divider = self.effective_tree_width();
+                let on_divider = self.show_drawer
+                    && mouse.column >= divider.saturating_sub(2)
+                    && mouse.column <= divider + 2;
+                if on_divider {
+                    return false;
+                }
+                let Some(pane) = self.text_map.pane_at(mouse.column, mouse.row) else {
+                    return false;
+                };
+                let Some(hit) = self.text_map.hit(pane, mouse.column, mouse.row) else {
+                    return false;
+                };
+                self.mouse_selection = Some(MouseSelection {
+                    pane,
+                    anchor: hit,
+                    head: hit,
+                    dragging: false,
+                });
+                self.selection_key = self.current_selection_key();
+                self.pending_click = Some(mouse);
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.pending_click.is_some() => {
+                if let Some(sel) = &mut self.mouse_selection {
+                    if let Some(hit) = self.text_map.hit(sel.pane, mouse.column, mouse.row) {
+                        sel.head = hit;
+                        sel.dragging = true;
+                    }
+                }
+                true
+            }
+            MouseEventKind::Up(_) if self.pending_click.is_some() => {
+                let press = self.pending_click.take();
+                if let Some(sel) = &mut self.mouse_selection {
+                    if let Some(hit) = self.text_map.hit(sel.pane, mouse.column, mouse.row) {
+                        if sel.dragging {
+                            sel.head = hit;
+                        }
+                    }
+                }
+                if self.mouse_selection.as_ref().is_some_and(|s| s.dragging) {
+                    self.copy_mouse_selection();
+                } else {
+                    self.mouse_selection = None;
+                    if let Some(press) = press {
+                        self.dispatch_mouse(press);
+                    }
+                    self.dispatch_mouse(mouse);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn current_selection_key(&self) -> Option<SelectionKey> {
+        let file = self.current_file()?;
+        Some(SelectionKey {
+            path: file.new_path.clone(),
+            section: file.section,
+            is_unified: self.is_unified,
+            full_context: self.full_context,
+            rows: if self.is_unified {
+                file.hunks.iter().map(|h| h.lines.len() + 1).sum()
+            } else {
+                file.aligned_rows.len()
+            },
+        })
+    }
+
+    pub fn mouse_selection_text(&self) -> Option<String> {
+        let sel = self.mouse_selection.as_ref()?;
+        let file = self.current_file()?;
+        Some(extract_text(&pane_lines(file, sel.pane), sel.range()))
+    }
+
+    fn copy_mouse_selection(&mut self) {
+        let Some(text) = self.mouse_selection_text().filter(|t| !t.is_empty()) else {
+            return;
+        };
+        let chars = text.chars().count();
+        match crate::integration::clipboard::copy_text(&text) {
+            Ok(_) => self.set_notification(match self.language {
+                Language::En => format!("✓ Copied {} chars to clipboard", chars),
+                Language::Pt => format!("✓ {} caracteres copiados para o clipboard", chars),
+            }),
+            Err(e) => self.set_notification(format!("Clipboard error: {}", e)),
+        }
+    }
+
+    fn effective_tree_width(&self) -> u16 {
+        if !self.show_drawer {
+            0
+        } else if self.term_width > 0 && self.term_width < 85 {
+            self.file_tree_width
+                .min((self.term_width * 32 / 100).max(18))
+                .min(self.term_width.saturating_sub(25))
+        } else if self.term_width > 0 {
+            self.file_tree_width.min(self.term_width.saturating_sub(25))
+        } else {
+            self.file_tree_width
+        }
+    }
+
+    fn dispatch_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseButton, MouseEventKind};
 
         if self.show_details_popup {
@@ -3079,17 +3242,7 @@ impl App {
             return;
         }
 
-        let effective_tree_width = if !self.show_drawer {
-            0
-        } else if self.term_width > 0 && self.term_width < 85 {
-            self.file_tree_width
-                .min((self.term_width * 32 / 100).max(18))
-                .min(self.term_width.saturating_sub(25))
-        } else if self.term_width > 0 {
-            self.file_tree_width.min(self.term_width.saturating_sub(25))
-        } else {
-            self.file_tree_width
-        };
+        let effective_tree_width = self.effective_tree_width();
 
         if self.show_history && mouse.column < effective_tree_width {
             match mouse.kind {
@@ -3895,6 +4048,12 @@ impl App {
             ])
             .split(chunks[1]);
 
+        self.text_map.clear();
+        if self.mouse_selection.is_some() && self.selection_key != self.current_selection_key() {
+            self.mouse_selection = None;
+            self.pending_click = None;
+        }
+
         let file_tree_area = main_chunks[0];
         let diff_area = main_chunks[1];
         self.diff_width = diff_area.width;
@@ -4044,6 +4203,7 @@ impl App {
                 }
             }
             let mut row_map = Vec::new();
+            let mut text_map = std::mem::take(&mut self.text_map);
             let cur_file = self.current_file();
             let syntax_enabled = self.config.ui.syntax_highlighting;
 
@@ -4066,6 +4226,7 @@ impl App {
                     self.wrap_lines,
                     self.wrap_skip,
                     &mut row_map,
+                    &mut text_map,
                     self.selected_row,
                     visual_range,
                     self.focus == Focus::DiffView,
@@ -4083,6 +4244,7 @@ impl App {
                     self.wrap_lines,
                     self.wrap_skip,
                     &mut row_map,
+                    &mut text_map,
                     self.selected_row,
                     visual_range,
                     self.column_side,
@@ -4106,6 +4268,8 @@ impl App {
                 );
             }
             self.diff_row_map = row_map;
+            self.text_map = text_map;
+            self.highlight_mouse_selection(frame);
         }
 
         // 4. Overlays
@@ -4216,6 +4380,34 @@ impl App {
         // Floating notification styled with the active theme
         if let Some((msg, _)) = &self.notification {
             render_toast(frame, size, msg, &self.theme);
+        }
+    }
+}
+
+impl App {
+    fn highlight_mouse_selection(&self, frame: &mut Frame) {
+        let Some(sel) = &self.mouse_selection else {
+            return;
+        };
+        let range = sel.range();
+        let style = ratatui::style::Style::default()
+            .fg(self.theme.selected_fg)
+            .bg(self.theme.selected_bg)
+            .add_modifier(ratatui::style::Modifier::REVERSED);
+        let buf = frame.buffer_mut();
+        for (pane, _, rows) in &self.text_map.panes {
+            if *pane != sel.pane {
+                continue;
+            }
+            for row in rows {
+                for (i, &ch) in row.cells.iter().enumerate() {
+                    if is_selected(range, row.line, ch) {
+                        if let Some(cell) = buf.cell_mut((row.x + i as u16, row.y)) {
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            }
         }
     }
 }
