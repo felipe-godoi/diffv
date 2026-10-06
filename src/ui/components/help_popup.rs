@@ -73,6 +73,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     vec![
                         ("s", "Stage hunk / Visual lines (file under Changes)"),
                         ("u", "Unstage hunk / Visual lines (file under Staged)"),
+                        (
+                            "s / u (file list)",
+                            "Stage / Unstage the whole file, folder or section",
+                        ),
                         ("d", "Discard hunk in Changes (with prompt)"),
                         ("S / U / D", "Stage / Unstage / Discard entire file"),
                         ("v", "Toggle Visual Mode (line-by-line selection)"),
@@ -170,6 +174,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     vec![
                         ("s", "Stage do hunk / linhas Visual (arquivo em Mudanças)"),
                         ("u", "Unstage do hunk / linhas Visual (arquivo em Staged)"),
+                        (
+                            "s / u (lista)",
+                            "Preparar / Despreparar arquivo, pasta ou seção inteira",
+                        ),
                         ("d", "Descartar hunk em Mudanças (com confirmação)"),
                         (
                             "S / U / D",

@@ -153,6 +153,65 @@ pub fn unstage_file(repo_root: &Path, file_path: &Path) -> anyhow::Result<()> {
     }
 }
 
+/// Stages everything under `path`: a single file, or a directory recursively
+/// (untracked files included, as `git add` does).
+pub fn stage_path(repo_root: &Path, path: &Path) -> anyhow::Result<()> {
+    stage_paths(repo_root, &[path])
+}
+
+/// Undoes the staging of everything under `path` (file or directory).
+pub fn unstage_path(repo_root: &Path, path: &Path) -> anyhow::Result<()> {
+    unstage_paths(repo_root, &[path])
+}
+
+/// `stage_path` for several files or directories in one `git add`.
+/// Paths are taken literally (no glob or `:` pathspec magic).
+pub fn stage_paths<P: AsRef<Path>>(repo_root: &Path, paths: &[P]) -> anyhow::Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let output = Command::new("git")
+        .args(["--literal-pathspecs", "add", "--"])
+        .args(paths.iter().map(AsRef::as_ref))
+        .current_dir(repo_root)
+        .output()?;
+
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to stage: {}", err_msg.trim());
+    }
+    Ok(())
+}
+
+/// `unstage_path` for several files or directories at once.
+pub fn unstage_paths<P: AsRef<Path>>(repo_root: &Path, paths: &[P]) -> anyhow::Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let output = Command::new("git")
+        .args(["--literal-pathspecs", "restore", "--staged", "--"])
+        .args(paths.iter().map(AsRef::as_ref))
+        .current_dir(repo_root)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => Ok(()),
+        _ => {
+            // Fallback for older git
+            let fallback = Command::new("git")
+                .args(["--literal-pathspecs", "reset", "HEAD", "--"])
+                .args(paths.iter().map(AsRef::as_ref))
+                .current_dir(repo_root)
+                .output()?;
+            if !fallback.status.success() {
+                let err_msg = String::from_utf8_lossy(&fallback.stderr);
+                anyhow::bail!("Failed to unstage: {}", err_msg.trim());
+            }
+            Ok(())
+        }
+    }
+}
+
 pub fn discard_file(repo_root: &Path, file_path: &Path, is_untracked: bool) -> anyhow::Result<()> {
     if is_untracked {
         let full_path = repo_root.join(file_path);

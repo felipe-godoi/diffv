@@ -13,8 +13,8 @@ use crate::core::models::{
 };
 
 use crate::git::actions::{
-    discard_file, discard_hunk, stage_file, stage_hunk, stage_partial_hunk, unstage_file,
-    unstage_hunk, unstage_partial_hunk,
+    discard_file, discard_hunk, stage_file, stage_hunk, stage_partial_hunk, stage_paths,
+    unstage_file, unstage_hunk, unstage_partial_hunk, unstage_paths,
 };
 use crate::git::provider::GitProvider;
 use crate::integration::clipboard::copy_hunk_as_markdown;
@@ -22,7 +22,8 @@ use crate::integration::github::{github_repo_url, open_commit_pr};
 use crate::ui::components::branch_popup::{render_branch_popup, BranchSelectorState};
 use crate::ui::components::details_popup::{render_details_popup, DetailsContent};
 use crate::ui::components::file_tree::{
-    build_tree_items, render_drawer, render_drawer_line_overlay, FileViewMode, TreeItem,
+    build_tree_items, files_pending_in, render_drawer, render_drawer_line_overlay,
+    resolve_stage_target, FileViewMode, StageScope, StageTarget, TreeItem,
 };
 use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
@@ -2958,6 +2959,12 @@ impl App {
             KeyCode::Char('c') => {
                 self.copy_current_hunk();
             }
+            KeyCode::Char('s') if self.on_changes_file_list() => {
+                self.apply_to_selected_item(false);
+            }
+            KeyCode::Char('u') if self.on_changes_file_list() => {
+                self.apply_to_selected_item(true);
+            }
             KeyCode::Char('s') => {
                 if self.visual_mode {
                     self.stage_visual_selection();
@@ -4094,6 +4101,119 @@ impl App {
         }
     }
 
+    /// `s` / `u` act on the selected file-list item instead of the hunk.
+    fn on_changes_file_list(&self) -> bool {
+        self.focus == Focus::FileTree && self.drawer_tab == DrawerTab::Changes
+    }
+
+    /// The selected file-list item resolved to the files it covers
+    /// (Tree: file, folder or section; Flat: the selected file).
+    fn selected_stage_target(&self) -> Option<StageTarget> {
+        if self.file_view_mode == FileViewMode::Tree {
+            let item = self.tree_items.get(self.selected_tree_idx)?;
+            return resolve_stage_target(item, &self.files, &self.filtered_indices);
+        }
+        let file = self.get_underlying_file()?;
+        Some(StageTarget {
+            scope: StageScope::File(file.new_path.clone()),
+            paths: vec![file.new_path.clone()],
+        })
+    }
+
+    /// Stages (or unstages) the whole file, folder (recursive) or section under
+    /// the file-list cursor. Only files that really change are passed to git, so
+    /// the toast count is exact and "nothing to do" is reported, not attempted.
+    fn apply_to_selected_item(&mut self, unstage: bool) {
+        if !self.can_modify_index() {
+            return;
+        }
+        let repo_root = match &self.mode {
+            AppMode::Git { git_provider, .. } => git_provider.repo_root.clone(),
+            _ => {
+                self.set_notification(match self.language {
+                    Language::En => "Staging needs a git repository",
+                    Language::Pt => "Stage precisa de um repositório git",
+                });
+                return;
+            }
+        };
+        let Some(target) = self.selected_stage_target() else {
+            self.set_notification(match self.language {
+                Language::En => "Nothing selected to stage",
+                Language::Pt => "Nada selecionado para stage",
+            });
+            return;
+        };
+        let wanted = if unstage {
+            DiffSection::Staged
+        } else {
+            DiffSection::Changes
+        };
+        let pending = files_pending_in(&self.files, &target.paths, wanted);
+        let label = self.stage_scope_label(&target.scope);
+        if pending.is_empty() {
+            self.set_notification(match (unstage, self.language) {
+                (false, Language::En) => format!("Nothing to stage in {}", label),
+                (false, Language::Pt) => format!("Nada para preparar em {}", label),
+                (true, Language::En) => format!("Nothing staged in {}", label),
+                (true, Language::Pt) => format!("Nada preparado em {}", label),
+            });
+            return;
+        }
+
+        let mut pathspecs: Vec<PathBuf> = Vec::new();
+        for &i in &pending {
+            let file = &self.files[i];
+            pathspecs.push(file.new_path.clone());
+            // A staged rename also stages its source's removal; undo both.
+            if unstage {
+                if let Some(old) = file.old_path.as_ref().filter(|p| **p != file.new_path) {
+                    pathspecs.push(old.clone());
+                }
+            }
+        }
+        pathspecs.sort();
+        pathspecs.dedup();
+
+        let result = if unstage {
+            unstage_paths(&repo_root, &pathspecs)
+        } else {
+            stage_paths(&repo_root, &pathspecs)
+        };
+        match result {
+            Ok(()) => {
+                self.reload_diffs();
+                // After the reload, which would replace it with "disk updated".
+                let msg = stage_done_message(
+                    self.language,
+                    unstage,
+                    &target.scope,
+                    &label,
+                    pending.len(),
+                );
+                self.set_notification(msg);
+            }
+            Err(e) => self.set_notification(match (unstage, self.language) {
+                (false, Language::En) => format!("Stage error: {}", e),
+                (false, Language::Pt) => format!("Erro ao preparar: {}", e),
+                (true, Language::En) => format!("Unstage error: {}", e),
+                (true, Language::Pt) => format!("Erro ao despreparar: {}", e),
+            }),
+        }
+    }
+
+    fn stage_scope_label(&self, scope: &StageScope) -> String {
+        match scope {
+            StageScope::File(path) => path.display().to_string(),
+            StageScope::Dir(path) => format!("{}/", path.display()),
+            StageScope::Section(DiffSection::Staged) => "Staged".to_string(),
+            StageScope::Section(DiffSection::Changes) => match self.language {
+                Language::En => "Changes".to_string(),
+                Language::Pt => "Mudanças".to_string(),
+            },
+        }
+    }
+
     fn stage_current_file(&mut self) {
         if !self.can_modify_index() {
             return;
@@ -4697,6 +4817,68 @@ fn wrapped_row_heights(
             };
             side(&r.left).max(side(&r.right)).max(1).div_ceil(width)
         }))
+    }
+}
+
+/// Toast after `s` / `u` on a file-list item, e.g. "✓ Staged 4 files under src/".
+fn stage_done_message(
+    language: Language,
+    unstage: bool,
+    scope: &StageScope,
+    label: &str,
+    count: usize,
+) -> String {
+    if let StageScope::File(_) = scope {
+        return match (unstage, language) {
+            (false, Language::En) => format!("✓ Staged {}", label),
+            (false, Language::Pt) => format!("✓ {} preparado", label),
+            (true, Language::En) => format!("✓ Unstaged {}", label),
+            (true, Language::Pt) => format!("✓ {} despreparado", label),
+        };
+    }
+    let place = match (scope, language) {
+        (StageScope::Dir(_), Language::En) => "under",
+        (_, Language::En) => "in",
+        (_, Language::Pt) => "em",
+    };
+    let one = count == 1;
+    match (unstage, language) {
+        (false, Language::En) => format!(
+            "✓ Staged {} file{} {} {}",
+            count,
+            if one { "" } else { "s" },
+            place,
+            label
+        ),
+        (true, Language::En) => format!(
+            "✓ Unstaged {} file{} {} {}",
+            count,
+            if one { "" } else { "s" },
+            place,
+            label
+        ),
+        (false, Language::Pt) => format!(
+            "✓ {} {} {} {}",
+            count,
+            if one {
+                "arquivo preparado"
+            } else {
+                "arquivos preparados"
+            },
+            place,
+            label
+        ),
+        (true, Language::Pt) => format!(
+            "✓ {} {} {} {}",
+            count,
+            if one {
+                "arquivo despreparado"
+            } else {
+                "arquivos despreparados"
+            },
+            place,
+            label
+        ),
     }
 }
 

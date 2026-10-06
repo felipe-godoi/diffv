@@ -39,6 +39,88 @@ pub fn section_key(section: DiffSection) -> PathBuf {
     })
 }
 
+/// What `s` / `u` act on when pressed on a file-list item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageScope {
+    File(PathBuf),
+    /// Repo-relative directory, without the section prefix.
+    Dir(PathBuf),
+    Section(DiffSection),
+}
+
+/// A file-list item resolved to the visible files it covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageTarget {
+    pub scope: StageScope,
+    /// Repo-relative paths, sorted and deduplicated.
+    pub paths: Vec<PathBuf>,
+}
+
+/// Resolves a tree item to the files under it: the file itself, every visible
+/// file below a directory (recursive, collapsed or not), or every visible file
+/// of a section. Directories inside a section only cover that section's files.
+pub fn resolve_stage_target(
+    item: &TreeItem,
+    files: &[FileDiff],
+    filtered_indices: &[usize],
+) -> Option<StageTarget> {
+    let collect = |keep: &dyn Fn(&FileDiff) -> bool| -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = filtered_indices
+            .iter()
+            .filter_map(|&i| files.get(i))
+            .filter(|f| keep(f))
+            .map(|f| f.new_path.clone())
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
+    };
+
+    if let Some(idx) = item.file_index {
+        let file = files.get(idx)?;
+        return Some(StageTarget {
+            scope: StageScope::File(file.new_path.clone()),
+            paths: vec![file.new_path.clone()],
+        });
+    }
+    if !item.is_dir {
+        return None;
+    }
+
+    let section = [DiffSection::Staged, DiffSection::Changes]
+        .into_iter()
+        .find(|&s| item.path.starts_with(section_key(s)));
+    if item.is_section {
+        let section = section?;
+        return Some(StageTarget {
+            scope: StageScope::Section(section),
+            paths: collect(&|f| f.section == section),
+        });
+    }
+
+    let dir = match section {
+        Some(s) => item.path.strip_prefix(section_key(s)).ok()?.to_path_buf(),
+        None => item.path.clone(),
+    };
+    let paths =
+        collect(&|f| section.is_none_or(|s| f.section == s) && f.new_path.starts_with(&dir));
+    Some(StageTarget {
+        scope: StageScope::Dir(dir),
+        paths,
+    })
+}
+
+/// Files that `s` (wanted = Changes) or `u` (wanted = Staged) would really
+/// change among `paths`: those with an entry in that section.
+pub fn files_pending_in(files: &[FileDiff], paths: &[PathBuf], wanted: DiffSection) -> Vec<usize> {
+    files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.section == wanted && paths.contains(&f.new_path))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 pub fn build_tree_items(
     files: &[FileDiff],
     filtered_indices: &[usize],
@@ -1571,6 +1653,146 @@ pub fn render_drawer_line_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::models::ChangeStats;
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    fn file(path: &str, section: DiffSection) -> FileDiff {
+        FileDiff {
+            old_path: None,
+            new_path: PathBuf::from(path),
+            status: FileStatus::Modified,
+            stage_status: StageStatus::Unstaged,
+            section,
+            stats: ChangeStats::default(),
+            hunks: Vec::new(),
+            aligned_rows: Vec::new(),
+            is_binary: false,
+        }
+    }
+
+    fn paths(list: &[&str]) -> Vec<PathBuf> {
+        list.iter().map(PathBuf::from).collect()
+    }
+
+    fn tree(files: &[FileDiff], collapsed: &[&str]) -> Vec<TreeItem> {
+        let collapsed: HashSet<PathBuf> = collapsed.iter().map(PathBuf::from).collect();
+        let all: Vec<usize> = (0..files.len()).collect();
+        build_tree_items(files, &all, &collapsed, FileViewMode::Tree, Language::En)
+    }
+
+    fn target_at(files: &[FileDiff], items: &[TreeItem], path: &str) -> StageTarget {
+        let item = items
+            .iter()
+            .find(|i| i.path == Path::new(path))
+            .unwrap_or_else(|| panic!("no tree item {}", path));
+        let all: Vec<usize> = (0..files.len()).collect();
+        resolve_stage_target(item, files, &all).unwrap()
+    }
+
+    #[test]
+    fn stage_target_of_a_file_is_that_file() {
+        let files = vec![
+            file("src/a.rs", DiffSection::Changes),
+            file("src/b.rs", DiffSection::Changes),
+        ];
+        let items = tree(&files, &[]);
+        let t = target_at(&files, &items, "src/b.rs");
+        assert_eq!(t.scope, StageScope::File(PathBuf::from("src/b.rs")));
+        assert_eq!(t.paths, paths(&["src/b.rs"]));
+    }
+
+    #[test]
+    fn stage_target_of_a_directory_is_recursive_even_when_collapsed() {
+        let files = vec![
+            file("src/a.rs", DiffSection::Changes),
+            file("src/ui/app.rs", DiffSection::Changes),
+            file("src/ui/widgets/w.rs", DiffSection::Changes),
+            file("srcfoo/x.rs", DiffSection::Changes),
+            file("top.txt", DiffSection::Changes),
+        ];
+        let items = tree(&files, &[]);
+        let t = target_at(&files, &items, "src");
+        assert_eq!(t.scope, StageScope::Dir(PathBuf::from("src")));
+        assert_eq!(
+            t.paths,
+            paths(&["src/a.rs", "src/ui/app.rs", "src/ui/widgets/w.rs"]),
+            "subdirectories included, sibling `srcfoo` excluded"
+        );
+        let t = target_at(&files, &items, "src/ui");
+        assert_eq!(t.paths, paths(&["src/ui/app.rs", "src/ui/widgets/w.rs"]));
+
+        let items = tree(&files, &["src"]);
+        assert!(items
+            .iter()
+            .all(|i| i.path == Path::new("src") || !i.path.starts_with("src")));
+        let t = target_at(&files, &items, "src");
+        assert_eq!(t.paths.len(), 3, "collapsed folder still covers its files");
+    }
+
+    #[test]
+    fn stage_target_inside_a_section_stays_in_that_section() {
+        let files = vec![
+            file("src/a.rs", DiffSection::Staged),
+            file("src/a.rs", DiffSection::Changes),
+            file("src/b.rs", DiffSection::Changes),
+            file("docs/c.md", DiffSection::Staged),
+        ];
+        let items = tree(&files, &[]);
+
+        let t = target_at(&files, &items, ":changes/src");
+        assert_eq!(t.scope, StageScope::Dir(PathBuf::from("src")));
+        assert_eq!(t.paths, paths(&["src/a.rs", "src/b.rs"]));
+        let t = target_at(&files, &items, ":staged/src");
+        assert_eq!(t.scope, StageScope::Dir(PathBuf::from("src")));
+        assert_eq!(t.paths, paths(&["src/a.rs"]));
+
+        let t = target_at(&files, &items, ":staged");
+        assert_eq!(t.scope, StageScope::Section(DiffSection::Staged));
+        assert_eq!(t.paths, paths(&["docs/c.md", "src/a.rs"]));
+        let t = target_at(&files, &items, ":changes");
+        assert_eq!(t.scope, StageScope::Section(DiffSection::Changes));
+        assert_eq!(t.paths, paths(&["src/a.rs", "src/b.rs"]));
+    }
+
+    #[test]
+    fn stage_target_only_covers_files_visible_through_the_filter() {
+        let files = vec![
+            file("src/a.rs", DiffSection::Changes),
+            file("src/b.rs", DiffSection::Changes),
+        ];
+        let visible = vec![1];
+        let items = build_tree_items(
+            &files,
+            &visible,
+            &HashSet::new(),
+            FileViewMode::Tree,
+            Language::En,
+        );
+        let dir = items.iter().find(|i| i.is_dir).unwrap();
+        let t = resolve_stage_target(dir, &files, &visible).unwrap();
+        assert_eq!(t.paths, paths(&["src/b.rs"]));
+    }
+
+    #[test]
+    fn files_pending_in_keeps_only_entries_of_the_wanted_section() {
+        let files = vec![
+            file("src/a.rs", DiffSection::Staged),
+            file("src/a.rs", DiffSection::Changes),
+            file("src/b.rs", DiffSection::Changes),
+            file("docs/c.md", DiffSection::Staged),
+        ];
+        let target = paths(&["src/a.rs", "src/b.rs"]);
+        assert_eq!(
+            files_pending_in(&files, &target, DiffSection::Changes),
+            vec![1, 2]
+        );
+        assert_eq!(
+            files_pending_in(&files, &target, DiffSection::Staged),
+            vec![0]
+        );
+        assert!(files_pending_in(&files, &paths(&["src/b.rs"]), DiffSection::Staged).is_empty());
+    }
 
     #[test]
     fn test_file_icon_catalog() {
