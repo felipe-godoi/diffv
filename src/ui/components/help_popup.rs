@@ -112,7 +112,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                 (
                     "󰒅  Integrations & System",
                     vec![
-                        ("e", "Open in Neovim / $EDITOR at cursor line (+line)"),
+                        ("e", "Open in $EDITOR at cursor line (+line)"),
                         ("c", "Copy hunk to system clipboard as Markdown"),
                         ("C", "Open Settings (Auto-update, Beta channel, Theme...)"),
                         ("L / F2", "Toggle Language (English ↔ Português)"),
@@ -206,7 +206,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                 (
                     "󰒅  Integrações & Sistema",
                     vec![
-                        ("e", "Abrir arquivo no Neovim / $EDITOR na linha (+line)"),
+                        ("e", "Abrir no seu editor ($EDITOR) na linha (+line)"),
                         ("c", "Copiar hunk em Markdown para clipboard"),
                         ("C", "Configurações (Auto-update, Canal Beta, Tema...)"),
                         ("L / F2", "Alternar Idioma (English ↔ Português)"),

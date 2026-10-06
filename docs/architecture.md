@@ -67,7 +67,7 @@ graph TD
     end
 
     subgraph Integrations
-        O -->|'e' / Enter| V[Neovim / $EDITOR Launcher]
+        O -->|'e' / Enter| V[$EDITOR Launcher - vim como padrão]
         O -->|'c'| W[System Clipboard]
         O -->|'s' / 'd'| X[Git Stage / Discard Worker]
     end
@@ -148,7 +148,7 @@ cli-diffviewer/
     │
     └── integration/            # Comunicação externa
         ├── mod.rs
-        ├── editor.rs           # Invocação do Neovim (nvim +line file / nvr)
+        ├── editor.rs           # Invocação do $EDITOR (vim como padrão; nvr opcional)
         ├── clipboard.rs        # Cópia de hunks/patches para o clipboard
         └── tmux.rs             # Utilitários de detecção e redimensionamento do Tmux
 ```
@@ -184,7 +184,7 @@ A aplicação adota um modelo clássico de **Event Loop Reativo**:
 
 ---
 
-## 7. Integração Tmux e Neovim
+## 7. Integração Tmux e Editor
 
 ### 7.1 Tmux Floating Popup
 A ferramenta é compilada para um binário autônomo `diffv`. Para integrá-la ao tmux como um popup instantâneo:
@@ -194,11 +194,11 @@ A ferramenta é compilada para um binário autônomo `diffv`. Para integrá-la a
 bind-key d display-popup -d "#{pane_current_path}" -w 92% -h 90% -E "diffv --watch"
 ```
 
-### 7.2 Neovim Remote Jump
+### 7.2 Abrir no Editor (`$EDITOR`, nvr opcional)
 Ao pressionar `e` em uma linha da diff:
-1. Verifica se `nvr` (neovim-remote) está instalado e se existe um socket Neovim no ambiente (`$NVIM`).
+1. Opcional: se `use_nvr = true`, o `diffv` estiver rodando dentro do Neovim (`$NVIM` definido) e o `nvr` (neovim-remote) estiver instalado:
 2. Se sim, instrui o Neovim existente a abrir o arquivo na linha correta sem fechar a sessão.
-3. Se não, suspende temporariamente a TUI do `diffv` e invoca `$EDITOR +<line> <file>`. Ao fechar o editor, o `diffv` restaura a visualização instantaneamente.
+3. Caso contrário (caminho padrão), suspende temporariamente a TUI do `diffv` e invoca `$EDITOR +<line> <file>` — ou `vim` se `$EDITOR` não estiver definido. Ao fechar o editor, o `diffv` restaura a visualização instantaneamente.
 
 ### 7.3 Busca com `fzf` (opcional) e Picker Interno
 `Ctrl+p` / `Ctrl+f` geram a lista de candidatos (`App::prepare_fzf`) e o resultado escolhido volta por `handle_fzf_file_result` / `handle_fzf_text_result`:

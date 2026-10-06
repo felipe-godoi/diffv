@@ -134,12 +134,13 @@ fn default_debounce_ms() -> u64 {
     150
 }
 fn default_editor_command() -> String {
-    if let Ok(editor) = std::env::var("EDITOR") {
-        if !editor.is_empty() {
-            return editor;
-        }
-    }
-    "nvim".to_string()
+    editor_command_from(std::env::var("EDITOR").ok())
+}
+/// `$EDITOR` when set, otherwise `vim` (nvr is only used for `use_nvr` inside `$NVIM`).
+fn editor_command_from(editor_env: Option<String>) -> String {
+    editor_env
+        .filter(|editor| !editor.trim().is_empty())
+        .unwrap_or_else(|| "vim".to_string())
 }
 fn default_editor_args() -> Vec<String> {
     vec!["+{{line}}".to_string(), "{{file}}".to_string()]
@@ -239,5 +240,17 @@ impl Config {
         let toml_str = toml::to_string_pretty(self)?;
         std::fs::write(path, toml_str)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_defaults_to_env_editor_then_vim() {
+        assert_eq!(editor_command_from(Some("hx".into())), "hx");
+        assert_eq!(editor_command_from(Some("  ".into())), "vim");
+        assert_eq!(editor_command_from(None), "vim");
     }
 }

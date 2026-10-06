@@ -27,13 +27,13 @@ Criar uma ferramenta de terminal (TUI) moderna, veloz e focada exclusivamente em
 1. **Acompanhamento em Tempo Real de Agentes de IA (`Watch Mode`)**:
    - Rodando em um split do tmux ou monitor secundário, o visualizador detecta gravações no disco e atualiza a visualização do diff instantaneamente (debounced), mantendo a posição de scroll relativa e a seleção de arquivo.
 2. **Revisão Rápida via Popup do Tmux**:
-   - Acionado via atalho global do tmux (ex: `prefix + d`), abrindo um `tmux display-popup` flutuante com a TUI para inspecionar o que o agente acabou de propor ou alterar, permitindo aceitar/reverter ou abrir no Neovim.
+   - Acionado via atalho global do tmux (ex: `prefix + d`), abrindo um `tmux display-popup` flutuante com a TUI para inspecionar o que o agente acabou de propor ou alterar, permitindo aceitar/reverter ou abrir no seu editor.
 3. **Inspeção de Repositório Git (Working Tree / Staged / Commits)**:
    - Execução direta com `diffv` (mostra working tree + staged + untracked), `diffv --staged` ou `diffv <commit|branch>`.
 4. **Comparação Arbitrária de Arquivos ou Pastas**:
    - `diffv arquivo_a.py arquivo_b.py` ou `diffv dir_a/ dir_b/`.
 5. **Transição Suave para o Editor**:
-   - Pressionar uma tecla (`e` ou `Enter`) para abrir instantaneamente o Neovim exatamente no arquivo e na linha onde o cursor da diff está posicionado.
+   - Pressionar uma tecla (`e` ou `Enter`) para abrir instantaneamente o seu editor exatamente no arquivo e na linha onde o cursor da diff está posicionado.
 
 ---
 
@@ -117,7 +117,7 @@ A interface é dividida em três componentes principais:
 
 ### 4.3 Integração com Neovim e Terminal
 - **Jump to Neovim**:
-  - Pressionar `e` abre o arquivo no Neovim exatamente na linha e coluna onde o cursor da diff está.
+  - Pressionar `e` abre o arquivo no seu editor exatamente na linha e coluna onde o cursor da diff está.
   - Suporte a `$EDITOR` configurável, com detecção de servidores Neovim ativos (`nvr` / Neovim RPC) para abrir em um buffer no Neovim já aberto no pane adjacente do tmux.
 - **Tmux Integration**:
   - Suporte out-of-the-box para execução em `tmux display-popup`:
@@ -147,7 +147,7 @@ Projetado para ergonomia e memória muscular de usuários de Neovim/Vim:
 | `Tab` | Geral | Alternar foco entre File Tree e Diff View |
 | `h` / `l` ou `←` / `→` | Geral | Alternar entre coluna Old e New (ou colapsar/expandir na árvore) |
 | `Enter` | File Tree | Selecionar e carregar arquivo no diff viewer |
-| `e` | Diff | Abrir arquivo no Neovim na linha atual (`nvim +<line> <file>`) |
+| `e` | Diff | Abrir arquivo no seu editor na linha atual (`$EDITOR +<line> <file>`, vim como padrão) |
 | `s` | Diff | Fazer stage do hunk atual |
 | `u` | Diff | Fazer unstage do hunk atual |
 | `d` | Diff | Descartar / reverter o hunk atual |
