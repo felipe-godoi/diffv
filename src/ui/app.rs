@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::Frame;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -22,8 +22,9 @@ use crate::integration::github::{github_repo_url, open_commit_pr};
 use crate::ui::components::branch_popup::{render_branch_popup, BranchSelectorState};
 use crate::ui::components::details_popup::{render_details_popup, DetailsContent};
 use crate::ui::components::file_tree::{
-    build_tree_items, files_pending_in, render_drawer, render_drawer_line_overlay,
-    resolve_stage_target, FileViewMode, StageScope, StageTarget, TreeItem,
+    build_tree_items, changes_header_rows, files_pending_in, render_drawer,
+    render_drawer_line_overlay, resolve_stage_target, FileViewMode, StageScope, StageTarget,
+    TreeItem,
 };
 use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
@@ -3425,6 +3426,25 @@ impl App {
         }
     }
 
+    /// Rows the Changes header takes right now (1, or 2 when it wraps), derived
+    /// from the current drawer size and state so a click never uses a stale layout.
+    fn current_changes_header_rows(&self) -> u16 {
+        changes_header_rows(
+            Rect::new(
+                0,
+                0,
+                self.effective_tree_width(),
+                self.file_tree_height as u16,
+            ),
+            &self.tree_items,
+            self.filter_mode,
+            &self.filter_query,
+            self.file_view_mode,
+            self.language,
+        )
+        .max(1)
+    }
+
     fn effective_tree_width(&self) -> u16 {
         if !self.show_drawer {
             0
@@ -3738,14 +3758,20 @@ impl App {
                             return;
                         }
 
-                        if mouse.row == 3 {
+                        // The Changes header may wrap onto a second row; every header row toggles the mode.
+                        let header_rows = if self.drawer_tab == DrawerTab::Changes {
+                            self.current_changes_header_rows()
+                        } else {
+                            1
+                        };
+                        if mouse.row < 3 + header_rows {
                             if self.drawer_tab == DrawerTab::Changes {
                                 self.toggle_file_view_mode();
                             }
                             return;
                         }
 
-                        let item_row = (mouse.row.saturating_sub(4)) as usize;
+                        let item_row = (mouse.row.saturating_sub(3 + header_rows)) as usize;
                         match self.drawer_tab {
                             DrawerTab::Changes => {
                                 let target_idx = self.file_tree_scroll + item_row;
@@ -4465,6 +4491,14 @@ impl App {
 
         self.viewport_height = diff_area.height as usize;
         self.file_tree_height = file_tree_area.height as usize;
+        let changes_header_rows = changes_header_rows(
+            file_tree_area,
+            &self.tree_items,
+            self.filter_mode,
+            &self.filter_query,
+            self.file_view_mode,
+            self.language,
+        );
 
         let selected_file_idx = if self.file_view_mode == FileViewMode::Tree {
             self.selected_tree_idx
@@ -4742,6 +4776,7 @@ impl App {
                 self.stash_scroll,
                 self.active_commit_info.as_ref(),
                 self.active_stash_info.as_ref(),
+                changes_header_rows,
                 &self.theme,
             );
         }

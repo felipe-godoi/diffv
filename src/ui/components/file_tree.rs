@@ -628,6 +628,7 @@ pub fn render_drawer(
                 filter_query,
                 view_mode,
                 language,
+                true,
                 theme,
             );
         }
@@ -766,6 +767,7 @@ fn render_commit_files_drawer(
         filter_query,
         view_mode,
         language,
+        false,
         theme,
     );
 }
@@ -841,18 +843,76 @@ fn render_stash_files_drawer(
         filter_query,
         view_mode,
         language,
+        false,
         theme,
     );
 }
 
-/// Choose a complete header by display width, sacrificing mode details before the count.
+/// Smallest Changes-area height (header row included) in which the header may
+/// wrap onto a second row.
+///
+/// A wrapped header takes one more row away from the file list, so the rule is
+/// "a two-row header must still leave at least five list rows": 2 header + 5
+/// list = 7. In shorter areas the header stays on one row and is reduced
+/// instead, so a short pane never trades its list for a second header row.
+pub const CHANGES_WRAP_MIN_HEIGHT: u16 = 7;
+
+/// How many rows the Changes header may use in an area of `height` rows.
+fn changes_header_budget(height: u16, allow_wrap: bool) -> u16 {
+    if allow_wrap && height >= CHANGES_WRAP_MIN_HEIGHT {
+        2
+    } else {
+        1
+    }
+}
+
+/// Rows the Changes header occupies in the drawer `drawer` (borders included),
+/// so mouse hit-testing and the selection overlay agree with what is drawn.
+pub fn changes_header_rows(
+    drawer: Rect,
+    items: &[TreeItem],
+    filter_mode: bool,
+    filter_query: &str,
+    view_mode: FileViewMode,
+    language: Language,
+) -> u16 {
+    if items.is_empty() {
+        // "No matching files" is drawn instead of a header.
+        return 1;
+    }
+    let inner = Block::default().borders(Borders::ALL).inner(drawer);
+    let file_count = items
+        .iter()
+        .filter(|item| item.file_index.is_some())
+        .count();
+    changes_header(
+        inner.width,
+        changes_header_budget(inner.height, true),
+        file_count,
+        view_mode,
+        language,
+        filter_mode.then_some(filter_query),
+    )
+    .len() as u16
+}
+
+/// Lay out the Changes header as one row when it fits, or as two rows
+/// (`max_rows >= 2`) keeping the same information. Only when even two rows do
+/// not fit is the text reduced, step by step: drop the `Mode:` label, shorten
+/// `(N files)` to `(N)`, drop the mode icon, drop the `[t]` hint, then drop the
+/// mode itself. In filter mode the query is cut last, and the file count is
+/// always the final thing left: it is shown whole or not at all, never partial.
+/// Always returns at least one (possibly empty) row.
 fn changes_header(
     width: u16,
+    max_rows: u16,
     file_count: usize,
     view_mode: FileViewMode,
     language: Language,
     filter_query: Option<&str>,
-) -> String {
+) -> Vec<String> {
+    let max_width = usize::from(width);
+    let fits = |text: &str| Line::from(text).width() <= max_width;
     let (icon, mode) = match (view_mode, language) {
         (FileViewMode::Tree, Language::En) => ("", "Folders"),
         (FileViewMode::Tree, Language::Pt) => ("", "Pastas"),
@@ -863,43 +923,99 @@ fn changes_header(
         Language::En => ("Mode", "files"),
         Language::Pt => ("Modo", "arquivos"),
     };
-    let count = format!("({file_count} {files})");
+    let full_count = format!("({file_count} {files})");
     let compact_count = format!("({file_count})");
-    let mut candidates = if let Some(query) = filter_query {
+
+    // Place `lead` and `count` on one row, else lead on row 1 and count on row 2.
+    let place = |lead: &str, count: &str| -> Option<Vec<String>> {
+        let joined = format!("{lead} · {count}");
+        if fits(&joined) {
+            return Some(vec![joined]);
+        }
+        let second = format!(" {count}");
+        (max_rows >= 2 && fits(lead) && fits(&second)).then(|| vec![lead.to_string(), second])
+    };
+
+    // (lead, count) pairs, from the most to the least informative.
+    let steps: Vec<(String, &str)> = if let Some(query) = filter_query {
         let filter = match language {
             Language::En => "Filter",
             Language::Pt => "Filtro",
         };
-        // Keep the count before an abbreviated query so filtering remains usable.
-        let prefix = format!(" {compact_count} · 󰍉 {filter}: ");
-        let mut abbreviated_query = String::new();
-        for ch in query.chars() {
-            let next = format!("{prefix}{abbreviated_query}{ch}_");
-            if Line::from(next.as_str()).width() > usize::from(width) {
-                break;
-            }
-            abbreviated_query.push(ch);
-        }
         vec![
-            format!(" 󰍉 {filter}: {query}_ · {count}"),
-            format!("{prefix}{abbreviated_query}_"),
+            (format!(" 󰍉 {filter}: {query}_"), full_count.as_str()),
+            (format!(" 󰍉 {filter}: {query}_"), compact_count.as_str()),
+            (format!(" 󰍉 {query}_"), compact_count.as_str()),
         ]
     } else {
         vec![
-            format!(" {label}: {icon} {mode} [t] · {count}"),
-            format!(" {icon} {mode} [t] · {count}"),
-            format!(" {mode} · {count}"),
-            format!(" {mode} {compact_count}"),
+            (format!(" {label}: {icon} {mode} [t]"), full_count.as_str()),
+            (format!(" {icon} {mode} [t]"), full_count.as_str()),
+            (format!(" {icon} {mode} [t]"), compact_count.as_str()),
+            (format!(" {mode} [t]"), compact_count.as_str()),
+            (format!(" {mode}"), compact_count.as_str()),
         ]
     };
-    candidates.extend([format!(" {count}"), compact_count, file_count.to_string()]);
-    candidates
-        .into_iter()
-        .find(|text| Line::from(text.as_str()).width() <= usize::from(width))
-        // Below the width of the number itself, show nothing rather than a partial number.
-        .unwrap_or_default()
+    for (lead, count) in &steps {
+        if let Some(rows) = place(lead, count) {
+            return rows;
+        }
+    }
+
+    if let Some(query) = filter_query {
+        let filter = match language {
+            Language::En => "Filter",
+            Language::Pt => "Filtro",
+        };
+        // The query is the last thing cut. On two rows it gets a whole row of its own.
+        if max_rows >= 2 {
+            let second = [&full_count, &compact_count]
+                .into_iter()
+                .map(|count| format!(" {count}"))
+                .find(|text| fits(text));
+            if let (Some(second), Some(first)) = (
+                second,
+                abbreviate_query(&format!(" 󰍉 {filter}: "), query, max_width),
+            ) {
+                return vec![first, second];
+            }
+        }
+        // On one row the count stays in front of the abbreviated query.
+        let prefix = format!(" {compact_count} · 󰍉 {filter}: ");
+        if let Some(row) = abbreviate_query(&prefix, query, max_width) {
+            return vec![row];
+        }
+    }
+
+    [
+        format!(" {full_count}"),
+        compact_count,
+        file_count.to_string(),
+    ]
+    .into_iter()
+    .find(|text| fits(text))
+    .map(|text| vec![text])
+    // Below the width of the number itself, show nothing rather than a partial number.
+    .unwrap_or_else(|| vec![String::new()])
 }
 
+/// `prefix` + the longest start of `query` that fits `max_width`, followed by
+/// the `_` cursor; `None` when not even one character of the query fits.
+fn abbreviate_query(prefix: &str, query: &str, max_width: usize) -> Option<String> {
+    let mut abbreviated = String::new();
+    for ch in query.chars() {
+        let next = format!("{prefix}{abbreviated}{ch}_");
+        if Line::from(next.as_str()).width() > max_width {
+            break;
+        }
+        abbreviated.push(ch);
+    }
+    (!abbreviated.is_empty()).then(|| format!("{prefix}{abbreviated}_"))
+}
+
+/// `allow_wrap`: whether the header may take a second row. Only the main
+/// Changes tab does; the commit / stash file lists keep their one-row header
+/// because their click mapping assumes it.
 fn render_changes_tab(
     frame: &mut Frame,
     area: Rect,
@@ -910,6 +1026,7 @@ fn render_changes_tab(
     filter_query: &str,
     view_mode: FileViewMode,
     language: Language,
+    allow_wrap: bool,
     theme: &Theme,
 ) {
     if items.is_empty() {
@@ -929,21 +1046,23 @@ fn render_changes_tab(
         .count();
     let sub_header = changes_header(
         area.width,
+        changes_header_budget(area.height, allow_wrap),
         file_count,
         view_mode,
         language,
         filter_mode.then_some(filter_query),
     );
 
-    let mut lines = Vec::new();
-    lines.push(Line::from(Span::styled(
-        sub_header,
-        Style::default()
-            .fg(theme.key_fg)
-            .add_modifier(Modifier::DIM),
-    )));
+    let header_style = Style::default()
+        .fg(theme.key_fg)
+        .add_modifier(Modifier::DIM);
+    let header_rows = sub_header.len();
+    let mut lines: Vec<Line> = sub_header
+        .into_iter()
+        .map(|row| Line::from(Span::styled(row, header_style)))
+        .collect();
 
-    let max_rows = area.height.saturating_sub(1) as usize;
+    let max_rows = (area.height as usize).saturating_sub(header_rows);
     let start_idx = scroll_offset;
     let end_idx = (scroll_offset + max_rows).min(items.len());
 
@@ -1359,6 +1478,7 @@ pub fn render_drawer_line_overlay(
     stash_scroll: usize,
     active_commit_info: Option<&CommitEntry>,
     active_stash_info: Option<&StashEntry>,
+    changes_header_rows: u16,
     theme: &Theme,
 ) {
     if file_tree_area.width == 0 || file_tree_area.height < 4 {
@@ -1469,7 +1589,11 @@ pub fn render_drawer_line_overlay(
                     + commit_header_h
                     + (selected_file_idx.saturating_sub(file_scroll)) as u16
             } else {
-                file_tree_area.y + 2 + (selected_file_idx.saturating_sub(file_scroll)) as u16
+                // Border, then the (possibly wrapped) Changes header, then the list.
+                file_tree_area.y
+                    + 1
+                    + changes_header_rows.max(1)
+                    + (selected_file_idx.saturating_sub(file_scroll)) as u16
             };
             (s, y)
         }
@@ -1715,11 +1839,324 @@ mod tests {
         }
     }
 
+    const TREE_ICON: &str = "\u{f07b}";
+    const FLAT_ICON: &str = "\u{f021a}";
+    const SEARCH_ICON: &str = "\u{f0349}";
+
+    /// Every (mode, language) with its full, unreduced mode text and count word.
+    fn header_cases() -> Vec<(FileViewMode, Language, String, &'static str)> {
+        vec![
+            (
+                FileViewMode::Tree,
+                Language::En,
+                format!(" Mode: {TREE_ICON} Folders [t]"),
+                "files",
+            ),
+            (
+                FileViewMode::Tree,
+                Language::Pt,
+                format!(" Modo: {TREE_ICON} Pastas [t]"),
+                "arquivos",
+            ),
+            (
+                FileViewMode::Flat,
+                Language::En,
+                format!(" Mode: {FLAT_ICON} Flat [t]"),
+                "files",
+            ),
+            (
+                FileViewMode::Flat,
+                Language::Pt,
+                format!(" Modo: {FLAT_ICON} Lista [t]"),
+                "arquivos",
+            ),
+        ]
+    }
+
+    fn filter_lead(language: Language, query: &str) -> String {
+        let filter = match language {
+            Language::En => "Filter",
+            Language::Pt => "Filtro",
+        };
+        format!(" {SEARCH_ICON} {filter}: {query}_")
+    }
+
+    fn text_width(text: &str) -> usize {
+        Line::from(text).width()
+    }
+
+    /// Narrowest width at which `rows` shows everything unreduced (two rows
+    /// when `wrapped`, else one joined row).
+    fn full_width(lead: &str, count: &str, wrapped: bool) -> usize {
+        if wrapped {
+            text_width(lead).max(text_width(&format!(" {count}")))
+        } else {
+            text_width(&format!("{lead} · {count}"))
+        }
+    }
+
     #[test]
-    fn changes_count_survives_drawer_width_modes_and_languages() {
+    fn changes_header_uses_one_row_when_everything_fits() {
+        for count in [1, 12, 1234] {
+            for (mode, language, lead, files) in header_cases() {
+                let count_text = format!("({count} {files})");
+                for width in [full_width(&lead, &count_text, false) as u16, 80, 200] {
+                    for max_rows in [1, 2] {
+                        let plain = changes_header(width, max_rows, count, mode, language, None);
+                        assert_eq!(plain, vec![format!("{lead} · {count_text}")]);
+
+                        let query = "abc";
+                        let filter_lead = filter_lead(language, query);
+                        let filtered =
+                            changes_header(200, max_rows, count, mode, language, Some(query));
+                        assert_eq!(filtered, vec![format!("{filter_lead} · {count_text}")]);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            changes_header(80, 2, 1234, FileViewMode::Tree, Language::En, None),
+            vec![format!(" Mode: {TREE_ICON} Folders [t] · (1234 files)")]
+        );
+        assert_eq!(
+            changes_header(80, 2, 1234, FileViewMode::Flat, Language::Pt, None),
+            vec![format!(" Modo: {FLAT_ICON} Lista [t] · (1234 arquivos)")]
+        );
+    }
+
+    #[test]
+    fn changes_header_wraps_to_a_second_row_keeping_every_piece_of_information() {
+        for count in [1, 12, 1234] {
+            for (mode, language, lead, files) in header_cases() {
+                let count_text = format!("({count} {files})");
+                let one_row = full_width(&lead, &count_text, false);
+                let two_rows = full_width(&lead, &count_text, true);
+                assert!(two_rows < one_row);
+                for width in two_rows..one_row {
+                    let rows = changes_header(width as u16, 2, count, mode, language, None);
+                    assert_eq!(
+                        rows,
+                        vec![lead.clone(), format!(" {count_text}")],
+                        "width={width}"
+                    );
+                }
+
+                // Filter mode wraps the same way: whole query on row 1, count on row 2.
+                let query = "abc";
+                let filter_lead = filter_lead(language, query);
+                let one_row = full_width(&filter_lead, &count_text, false);
+                let two_rows = full_width(&filter_lead, &count_text, true);
+                for width in two_rows..one_row {
+                    let rows = changes_header(width as u16, 2, count, mode, language, Some(query));
+                    assert_eq!(rows, vec![filter_lead.clone(), format!(" {count_text}")]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn changes_header_reduces_only_when_two_rows_do_not_fit() {
+        for count in [1, 12, 1234] {
+            for (mode, language, lead, files) in header_cases() {
+                let count_text = format!("({count} {files})");
+                let two_rows = full_width(&lead, &count_text, true);
+                let mode_name = lead
+                    .split_whitespace()
+                    .nth(2)
+                    .expect("mode name")
+                    .to_string();
+                for width in 0..=120u16 {
+                    let rows = changes_header(width, 2, count, mode, language, None);
+                    let text = rows.join("\n");
+                    let intact = text.contains(&lead) && text.contains(&count_text);
+                    assert_eq!(
+                        intact,
+                        usize::from(width) >= two_rows,
+                        "width={width} count={count} {mode:?}/{language:?}: {rows:?}"
+                    );
+                    // Reduction is progressive: a piece is only gone once every
+                    // cheaper-to-lose piece before it is gone.
+                    if text.contains("Mode:") || text.contains("Modo:") {
+                        assert!(text.contains("[t]") && text.contains(&count_text));
+                    }
+                    if text.contains("[t]") {
+                        assert!(text.contains(&mode_name), "{rows:?}");
+                    }
+                    if text.contains(&mode_name) {
+                        assert!(text.contains(&format!("({count}")), "{rows:?}");
+                    }
+                }
+
+                // Without room for a second row the single row is reduced instead.
+                let one_row = full_width(&lead, &count_text, false);
+                for width in two_rows..one_row {
+                    let rows = changes_header(width as u16, 1, count, mode, language, None);
+                    assert_eq!(rows.len(), 1);
+                    assert!(text_width(&rows[0]) <= width);
+                    assert!(rows[0].contains(&count.to_string()));
+                    assert_ne!(rows[0], format!("{lead} · {count_text}"));
+                }
+            }
+        }
+
+        // Exact single-row ladder for EN / Folders / 1234 files: each rung is
+        // the previous one minus one thing, down to the bare number.
+        let ladder = |width| changes_header(width, 1, 1234, FileViewMode::Tree, Language::En, None);
+        let rungs = [
+            (35, format!(" Mode: {TREE_ICON} Folders [t] · (1234 files)")),
+            (29, format!(" {TREE_ICON} Folders [t] · (1234 files)")),
+            (23, format!(" {TREE_ICON} Folders [t] · (1234)")),
+            (21, " Folders [t] · (1234)".to_string()),
+            (17, " Folders · (1234)".to_string()),
+            (13, " (1234 files)".to_string()),
+            (6, "(1234)".to_string()),
+            (4, "1234".to_string()),
+            (0, String::new()),
+        ];
+        for (i, (min_width, text)) in rungs.iter().enumerate() {
+            assert_eq!(ladder(*min_width), vec![text.clone()], "width={min_width}");
+            if let Some((next_min, _)) = rungs.get(i + 1) {
+                // One column narrower than a rung's minimum falls to the next rung
+                // (or lower), never straight to a partial number.
+                assert_eq!(
+                    ladder(min_width - 1).concat(),
+                    rungs[i + 1..]
+                        .iter()
+                        .find(|(m, _)| *m < *min_width)
+                        .map(|(_, t)| t.clone())
+                        .unwrap(),
+                    "width={}",
+                    min_width - 1
+                );
+                assert!(next_min < min_width);
+            }
+        }
+    }
+
+    #[test]
+    fn changes_header_count_is_never_partial() {
+        for language in [Language::En, Language::Pt] {
+            for mode in [FileViewMode::Tree, FileViewMode::Flat] {
+                for count in [1, 12, 1234, usize::MAX] {
+                    let digits = count.to_string();
+                    for filter in [None, Some("very long filter query 界")] {
+                        for max_rows in [1, 2] {
+                            for width in 0..=80u16 {
+                                let rows =
+                                    changes_header(width, max_rows, count, mode, language, filter);
+                                assert!(!rows.is_empty() && rows.len() <= usize::from(max_rows));
+                                assert!(rows.iter().all(|r| text_width(r) <= usize::from(width)));
+                                let text = rows.join(" ");
+                                // Every digit run in the header is the whole number.
+                                for run in text
+                                    .split(|c: char| !c.is_ascii_digit())
+                                    .filter(|run| !run.is_empty())
+                                {
+                                    assert_eq!(run, digits, "partial count: {rows:?}");
+                                }
+                                if usize::from(width) >= digits.len() {
+                                    assert!(text.contains(&digits), "width={width}: {rows:?}");
+                                } else {
+                                    assert_eq!(rows, vec![String::new()]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn changes_filter_header_cuts_the_query_last_and_keeps_the_count() {
+        let query = "very long filter query 界";
+        // The query gets a whole row of its own before it is abbreviated.
+        let rows = changes_header(40, 2, 1234, FileViewMode::Tree, Language::En, Some(query));
+        assert_eq!(rows[0], filter_lead(Language::En, query));
+        assert_eq!(rows[1], " (1234 files)");
+
+        // Too narrow even for that: the query is abbreviated, the count stays whole.
+        let rows = changes_header(20, 2, 1234, FileViewMode::Tree, Language::En, Some(query));
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].starts_with(&format!(" {SEARCH_ICON} Filter: very")));
+        assert_eq!(rows[1], " (1234 files)");
+
+        // One row: the count is kept in front of the abbreviated query.
+        let rows = changes_header(30, 1, 1234, FileViewMode::Tree, Language::En, Some(query));
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].starts_with(" (1234) · "), "{rows:?}");
+        assert!(text_width(&rows[0]) <= 30);
+
+        // No room for any of the query: only the count survives.
+        let rows = changes_header(10, 2, 1234, FileViewMode::Tree, Language::En, Some(query));
+        assert_eq!(rows, vec!["(1234)".to_string()]);
+    }
+
+    #[test]
+    fn changes_header_wraps_only_in_panes_tall_enough_to_keep_a_list() {
+        assert_eq!(CHANGES_WRAP_MIN_HEIGHT, 7);
+        for height in 0..CHANGES_WRAP_MIN_HEIGHT {
+            assert_eq!(changes_header_budget(height, true), 1, "height={height}");
+        }
+        for height in CHANGES_WRAP_MIN_HEIGHT..40 {
+            assert_eq!(changes_header_budget(height, true), 2, "height={height}");
+            // A two-row header always leaves at least five list rows.
+            assert!(height - 2 >= 5);
+        }
+        assert_eq!(changes_header_budget(40, false), 1);
+    }
+
+    /// Renders the whole drawer and returns its interior rows (border columns cut).
+    fn drawer_rows(
+        items: &[TreeItem],
+        width: u16,
+        height: u16,
+        filter_mode: bool,
+        mode: FileViewMode,
+        language: Language,
+    ) -> Vec<String> {
         use ratatui::{backend::TestBackend, Terminal};
 
         let theme = Theme::vscode_dark();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_drawer(
+                    frame,
+                    frame.area(),
+                    DrawerTab::Changes,
+                    items,
+                    0,
+                    0,
+                    &[],
+                    0,
+                    0,
+                    &[],
+                    0,
+                    0,
+                    None,
+                    None,
+                    true,
+                    filter_mode,
+                    "very long filter query 界",
+                    mode,
+                    language,
+                    &theme,
+                    None,
+                );
+            })
+            .unwrap();
+        (1..height - 1)
+            .map(|y| {
+                (1..width - 1)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn changes_count_survives_drawer_width_modes_and_languages() {
         for count in [1, 12, 1234] {
             let files: Vec<_> = (0..count)
                 .map(|i| file(&format!("src/file{i}.rs"), DiffSection::Changes))
@@ -1730,47 +2167,36 @@ mod tests {
                     let items = build_tree_items(&files, &indices, &HashSet::new(), mode, language);
                     for width in [20, 30, 40, 60, 80] {
                         for filter_mode in [false, true] {
-                            let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
-                            terminal
-                                .draw(|frame| {
-                                    render_drawer(
-                                        frame,
-                                        frame.area(),
-                                        DrawerTab::Changes,
-                                        &items,
-                                        0,
-                                        0,
-                                        &[],
-                                        0,
-                                        0,
-                                        &[],
-                                        0,
-                                        0,
-                                        None,
-                                        None,
-                                        true,
-                                        filter_mode,
-                                        "very long filter query 界",
-                                        mode,
-                                        language,
-                                        &theme,
-                                        None,
-                                    );
-                                })
-                                .unwrap();
-                            let row = |y| -> String {
-                                (1..width - 1)
-                                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
-                                    .collect()
-                            };
-                            let header = row(1);
-                            assert!(
-                                header.contains(&format!("({count})"))
-                                    || header.contains(&format!("({count} files)"))
-                                    || header.contains(&format!("({count} arquivos)")),
-                                "width={width}, count={count}, mode={mode:?}, language={language:?}, filter={filter_mode}: {header}"
-                            );
-                            assert!(row(2).contains("src"), "list must start on the next row");
+                            // 6 rows: a short pane (reduced single-row header);
+                            // 14 rows: tall enough for the wrapped header.
+                            for height in [6u16, 14] {
+                                let rows =
+                                    drawer_rows(&items, width, height, filter_mode, mode, language);
+                                let header_rows = changes_header_rows(
+                                    Rect::new(0, 0, width, height),
+                                    &items,
+                                    filter_mode,
+                                    "very long filter query 界",
+                                    mode,
+                                    language,
+                                ) as usize;
+                                let header = rows[..header_rows].join("\n");
+                                assert!(
+                                    header.contains(&format!("({count})"))
+                                        || header.contains(&format!("({count} files)"))
+                                        || header.contains(&format!("({count} arquivos)")),
+                                    "width={width}, height={height}, count={count}, mode={mode:?}, language={language:?}, filter={filter_mode}: {header}"
+                                );
+                                assert!(
+                                    rows[header_rows].contains("src"),
+                                    "list must start right below the header: {rows:?}"
+                                );
+                                assert!(
+                                    rows[header_rows - 1].trim() != ""
+                                        && !rows[header_rows - 1].contains("src/"),
+                                    "last header row is not a list row"
+                                );
+                            }
                         }
                     }
                 }
@@ -1779,30 +2205,43 @@ mod tests {
     }
 
     #[test]
-    fn changes_header_fits_even_at_extreme_widths() {
-        for language in [Language::En, Language::Pt] {
-            for mode in [FileViewMode::Tree, FileViewMode::Flat] {
-                for count in [1, 12, 1234, usize::MAX] {
-                    for width in 0..=80 {
-                        let header = changes_header(width, count, mode, language, None);
-                        assert!(Line::from(header.as_str()).width() <= usize::from(width));
-                        if usize::from(width) >= count.to_string().len() {
-                            assert!(header.contains(&count.to_string()));
-                        } else {
-                            assert!(header.is_empty(), "never show only part of the number");
-                        }
-                    }
-                }
-            }
+    fn changes_drawer_wraps_without_losing_info_and_keeps_the_list() {
+        let files: Vec<_> = (0..40)
+            .map(|i| file(&format!("src/file{i}.rs"), DiffSection::Changes))
+            .collect();
+        let indices: Vec<_> = (0..40).collect();
+        let items = build_tree_items(
+            &files,
+            &indices,
+            &HashSet::new(),
+            FileViewMode::Flat,
+            Language::En,
+        );
+
+        // 28 columns: the single-row header does not fit, two rows do.
+        let rows = drawer_rows(&items, 28, 14, false, FileViewMode::Flat, Language::En);
+        assert_eq!(rows[0].trim_end(), format!(" Mode: {FLAT_ICON} Flat [t]"));
+        assert_eq!(rows[1].trim_end(), " (40 files)");
+        assert!(rows[2].contains("file0.rs"));
+
+        // At 80 columns it all stays on one row, so the list gains a row.
+        let rows = drawer_rows(&items, 80, 14, false, FileViewMode::Flat, Language::En);
+        assert_eq!(
+            rows[0].trim_end(),
+            format!(" Mode: {FLAT_ICON} Flat [t] · (40 files)")
+        );
+        assert!(rows[1].contains("file0.rs"));
+
+        // Short panes keep one (reduced) header row and every row below it is list.
+        for height in 4..=8u16 {
+            let rows = drawer_rows(&items, 22, height, false, FileViewMode::Flat, Language::En);
+            let list = rows.iter().filter(|r| r.contains(".rs")).count();
+            assert_eq!(list, usize::from(height - 3), "height={height}: {rows:?}");
         }
-        assert_eq!(
-            changes_header(80, 1234, FileViewMode::Tree, Language::En, None),
-            " Mode:  Folders [t] · (1234 files)"
-        );
-        assert_eq!(
-            changes_header(80, 1234, FileViewMode::Flat, Language::Pt, None),
-            " Modo: 󰈚 Lista [t] · (1234 arquivos)"
-        );
+
+        // Tall enough to wrap: at least five list rows remain.
+        let rows = drawer_rows(&items, 22, 9, false, FileViewMode::Flat, Language::En);
+        assert_eq!(rows.iter().filter(|r| r.contains(".rs")).count(), 5);
     }
 
     fn paths(list: &[&str]) -> Vec<PathBuf> {

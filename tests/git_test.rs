@@ -2244,3 +2244,88 @@ fn builtin_picker_shows_a_preview_that_follows_the_cursor() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn wrapped_changes_header_keeps_clicks_and_list_aligned() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use diffv::ui::app::{App, AppMode};
+    use diffv::ui::components::file_tree::FileViewMode;
+    let dir = std::env::temp_dir().join(format!("diffv_wrapped_header_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Header Tester"]);
+    git(&["config", "user.email", "header@example.com"]);
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        fs::write(dir.join(name), "one\n").unwrap();
+    }
+    git(&["add", "."]);
+    git(&["commit", "-m", "base"]);
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        fs::write(dir.join(name), "two\n").unwrap();
+    }
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    app.language = diffv::core::models::Language::En;
+    app.file_view_mode = FileViewMode::Flat;
+    app.file_tree_width = 28;
+    app.update_filter();
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let row = |terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, y: u16| -> String {
+        (1..27)
+            .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+            .collect()
+    };
+    // Terminal rows: 3 = first drawer row (header row 1), 4 = wrapped header row 2.
+    assert!(row(&terminal, 3).contains("Mode:") && row(&terminal, 3).contains("[t]"));
+    assert!(row(&terminal, 4).contains("(3 files)"));
+    assert!(row(&terminal, 5).contains("a.txt"));
+
+    let click = |app: &mut App, y: u16| {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    };
+    // Row 4 is still header: it toggles the mode instead of selecting a file.
+    click(&mut app, 4);
+    assert_eq!(app.file_view_mode, FileViewMode::Tree);
+    click(&mut app, 4);
+    assert_eq!(app.file_view_mode, FileViewMode::Flat);
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    // The list starts on row 5 and each row maps to the file drawn there.
+    click(&mut app, 5);
+    assert_eq!(app.selected_filtered_idx, 0);
+    click(&mut app, 7);
+    assert_eq!(app.selected_filtered_idx, 2);
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    // The selection overlay is drawn on the row of the selected file.
+    assert!(row(&terminal, 7).contains("c.txt"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
