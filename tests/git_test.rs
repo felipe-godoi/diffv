@@ -1,8 +1,81 @@
 use diffv::core::models::{FileStatus, StageStatus};
 use diffv::git::actions::{stage_file, stage_hunk, unstage_file, unstage_hunk};
 use diffv::git::provider::GitProvider;
+use std::ffi::OsString;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
+
+/// Serializes tests that change process-wide environment variables: `set_var`
+/// while other tests run in parallel threads is a race.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// Points `HOME` and `XDG_CONFIG_HOME` at `root` for the guard's lifetime and
+/// restores the previous values on drop (also when the test panics). Both are
+/// needed: `dirs::config_dir()` honours `XDG_CONFIG_HOME` only on Linux and uses
+/// `$HOME/Library/Application Support` on macOS.
+struct IsolatedConfig {
+    saved: Vec<(&'static str, Option<OsString>)>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl IsolatedConfig {
+    fn new(root: &Path) -> Self {
+        let lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vars = [
+            ("HOME", root.join("home")),
+            ("XDG_CONFIG_HOME", root.join("xdg")),
+        ];
+        let saved = vars
+            .iter()
+            .map(|(name, _)| (*name, std::env::var_os(name)))
+            .collect();
+        for (name, value) in &vars {
+            fs::create_dir_all(value).unwrap();
+            std::env::set_var(name, value);
+        }
+        Self { saved, _lock: lock }
+    }
+}
+
+impl Drop for IsolatedConfig {
+    fn drop(&mut self) {
+        for (name, value) in &self.saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+#[test]
+fn isolated_config_points_config_into_the_temp_dir_and_restores_env() {
+    let root = std::env::temp_dir().join(format!("diffv_env_guard_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let (home, xdg) = {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        (
+            std::env::var_os("HOME"),
+            std::env::var_os("XDG_CONFIG_HOME"),
+        )
+    };
+    // A panic inside the guarded section must still restore the variables.
+    let result = std::panic::catch_unwind(|| {
+        let _env = IsolatedConfig::new(&root);
+        let path = diffv::config::Config::config_path().unwrap();
+        assert!(path.starts_with(&root), "{}", path.display());
+        panic!("simulated test failure");
+    });
+    assert!(result.is_err());
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    assert_eq!(std::env::var_os("HOME"), home);
+    assert_eq!(std::env::var_os("XDG_CONFIG_HOME"), xdg);
+    let _ = fs::remove_dir_all(&root);
+}
 
 #[test]
 fn test_git_provider_lifecycle() {
@@ -2013,7 +2086,13 @@ fn ctrl_g_inside_the_search_switches_engine_and_keeps_the_query() {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     // Engine changes are persisted; keep them out of the real user config.
-    std::env::set_var("XDG_CONFIG_HOME", dir.join("config"));
+    let _env = IsolatedConfig::new(&dir);
+    let config_path = diffv::config::Config::config_path().expect("config dir resolves");
+    assert!(
+        config_path.starts_with(&dir),
+        "config must resolve inside the test dir, got {}",
+        config_path.display()
+    );
     fs::write(dir.join("a.txt"), "a\n").unwrap();
     fs::write(dir.join("b.txt"), "b\n").unwrap();
     let mut app = App::new(
@@ -2058,7 +2137,8 @@ fn ctrl_g_inside_the_search_switches_engine_and_keeps_the_query() {
         .unwrap()
         .0
         .contains("built-in picker"));
-    let saved = fs::read_to_string(dir.join("config/diffv/config.toml")).unwrap();
+    // Read where the app itself saves (platform-specific), never a hardcoded path.
+    let saved = fs::read_to_string(&config_path).unwrap();
     assert!(saved.contains("engine = \"builtin\""));
 
     // Built-in -> Ctrl+G with no fzf on PATH: say so and keep the picker and query.
