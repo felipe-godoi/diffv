@@ -55,7 +55,7 @@ cargo install --git https://github.com/felipe-godoi/diffv.git
 
 ### Optional: `fzf`
 
-[`fzf`](https://github.com/junegunn/fzf) is **optional**. When it is on your `PATH`, `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open it full-screen for the fastest fuzzy matching in the terminal. Without it, `diffv` falls back to a **built-in picker** popup with the same candidates (fuzzy/substring filter, `↑`/`↓`, `Enter` to open, `Esc` to cancel) — searching keeps working, you just get the simpler in-app list instead of fzf's interface.
+[`fzf`](https://github.com/junegunn/fzf) is **optional**. When it is on your `PATH`, `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open it full-screen for the fastest fuzzy matching in the terminal. Without it, `diffv` falls back to a **built-in picker** popup with the same candidates (fuzzy/substring filter, `↑`/`↓`, `Enter` to open, `Esc` / `Ctrl+C` / `Ctrl+Q` to cancel like fzf — `Shift+Q` types a "Q" there) — searching keeps working, you just get the simpler in-app list instead of fzf's interface.
 
 ```bash
 # macOS

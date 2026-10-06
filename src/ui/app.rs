@@ -26,7 +26,9 @@ use crate::ui::components::file_tree::{
 };
 use crate::ui::components::header::render_header;
 use crate::ui::components::help_popup::{render_confirm_popup, render_help_popup};
-use crate::ui::components::picker::{render_picker_popup, PickerState};
+use crate::ui::components::picker::{
+    picker_key_action, render_picker_popup, PickerAction, PickerState,
+};
 use crate::ui::components::ruler::render_ruler;
 use crate::ui::components::settings_popup::{render_settings_popup, SettingItem, SETTING_ITEMS};
 use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
@@ -1148,11 +1150,9 @@ impl App {
         let Some(picker) = &mut self.picker else {
             return;
         };
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Esc => self.picker = None,
-            KeyCode::Char('c' | 'g') if ctrl => self.picker = None,
-            KeyCode::Enter => {
+        match picker_key_action(key) {
+            PickerAction::Cancel => self.picker = None,
+            PickerAction::Accept => {
                 let request = picker.request;
                 let selected = picker.selected_item().cloned();
                 self.picker = None;
@@ -1162,25 +1162,20 @@ impl App {
                     (None, _) => {}
                 }
             }
-            KeyCode::Up => picker.move_by(-1),
-            KeyCode::Down => picker.move_by(1),
-            KeyCode::Char('p' | 'k') if ctrl => picker.move_by(-1),
-            KeyCode::Char('n' | 'j') if ctrl => picker.move_by(1),
-            KeyCode::PageUp => picker.move_by(-10),
-            KeyCode::PageDown => picker.move_by(10),
-            KeyCode::Char('u') if ctrl => {
+            PickerAction::Move(delta) => picker.move_by(delta),
+            PickerAction::ClearQuery => {
                 picker.query.clear();
                 picker.refilter();
             }
-            KeyCode::Backspace => {
+            PickerAction::Backspace => {
                 picker.query.pop();
                 picker.refilter();
             }
-            KeyCode::Char(c) if !ctrl => {
+            PickerAction::Type(c) => {
                 picker.query.push(c);
                 picker.refilter();
             }
-            _ => {}
+            PickerAction::Ignore => {}
         }
     }
 

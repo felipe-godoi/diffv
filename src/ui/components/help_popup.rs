@@ -95,6 +95,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                             "Ctrl+f",
                             "Search text in file/commit/changes (fzf or built-in)",
                         ),
+                        (
+                            "Esc/Ctrl+C/Ctrl+Q",
+                            "Close search picker (like fzf; Shift+Q types Q)",
+                        ),
                         ("b", "Toggle File Drawer sidebar visible ↔ hidden"),
                         ("t", "Toggle Folders (Tree) ↔ Flat List view"),
                         ("< / > or , / .", "Resize File Drawer sidebar width"),
@@ -188,6 +192,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                         (
                             "Ctrl+f",
                             "Buscar texto no arquivo/commit/mudanças (fzf ou interno)",
+                        ),
+                        (
+                            "Esc/Ctrl+C/Ctrl+Q",
+                            "Fechar a busca (como no fzf; Shift+Q digita Q)",
                         ),
                         ("b", "Exibir ↔ ocultar painel lateral (sidebar)"),
                         ("t", "Alternar entre Pastas (Tree) ↔ Lista Plana"),

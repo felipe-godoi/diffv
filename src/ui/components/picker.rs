@@ -1,3 +1,4 @@
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -50,6 +51,38 @@ impl PickerState {
 
     pub fn selected_item(&self) -> Option<&String> {
         self.matches.get(self.selected).map(|&i| &self.items[i])
+    }
+}
+
+/// What a key does in the picker. Mirrors fzf's default bindings: Esc, Ctrl+C,
+/// Ctrl+G and Ctrl+Q abort; every printable key (including Shift+Q) is query text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerAction {
+    Cancel,
+    Accept,
+    Move(isize),
+    ClearQuery,
+    Backspace,
+    Type(char),
+    Ignore,
+}
+
+pub fn picker_key_action(key: KeyEvent) -> PickerAction {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => PickerAction::Cancel,
+        KeyCode::Char('c' | 'g' | 'q') if ctrl => PickerAction::Cancel,
+        KeyCode::Enter => PickerAction::Accept,
+        KeyCode::Up => PickerAction::Move(-1),
+        KeyCode::Down => PickerAction::Move(1),
+        KeyCode::Char('p' | 'k') if ctrl => PickerAction::Move(-1),
+        KeyCode::Char('n' | 'j') if ctrl => PickerAction::Move(1),
+        KeyCode::PageUp => PickerAction::Move(-10),
+        KeyCode::PageDown => PickerAction::Move(10),
+        KeyCode::Char('u') if ctrl => PickerAction::ClearQuery,
+        KeyCode::Backspace => PickerAction::Backspace,
+        KeyCode::Char(c) if !ctrl => PickerAction::Type(c),
+        _ => PickerAction::Ignore,
     }
 }
 
@@ -330,6 +363,31 @@ mod tests {
             display_item(&lines[1], FzfRequest::Text),
             "src/parser.rs:3    fn run() {}  [staged]"
         );
+    }
+
+    #[test]
+    fn exit_keys_match_fzf_defaults() {
+        let key = |code, modifiers| picker_key_action(KeyEvent::new(code, modifiers));
+        let ctrl = KeyModifiers::CONTROL;
+        assert_eq!(key(KeyCode::Esc, KeyModifiers::NONE), PickerAction::Cancel);
+        for c in ['c', 'g', 'q'] {
+            assert_eq!(key(KeyCode::Char(c), ctrl), PickerAction::Cancel);
+        }
+        // Like in fzf, Shift+Q (and q) are just query text.
+        assert_eq!(
+            key(KeyCode::Char('Q'), KeyModifiers::SHIFT),
+            PickerAction::Type('Q')
+        );
+        assert_eq!(
+            key(KeyCode::Char('q'), KeyModifiers::NONE),
+            PickerAction::Type('q')
+        );
+        assert_eq!(
+            key(KeyCode::Enter, KeyModifiers::NONE),
+            PickerAction::Accept
+        );
+        assert_eq!(key(KeyCode::Char('n'), ctrl), PickerAction::Move(1));
+        assert_eq!(key(KeyCode::Char('x'), ctrl), PickerAction::Ignore);
     }
 
     #[test]
