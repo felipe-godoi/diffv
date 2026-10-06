@@ -57,6 +57,8 @@ cargo install --git https://github.com/felipe-godoi/diffv.git
 
 [`fzf`](https://github.com/junegunn/fzf) is **optional**. When it is on your `PATH`, `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open it full-screen for the fastest fuzzy matching in the terminal. Without it, `diffv` falls back to a **built-in picker** popup with the same candidates (fuzzy/substring filter, `↑`/`↓`, `Enter` to open, `Esc` / `Ctrl+C` / `Ctrl+Q` to cancel like fzf — `Shift+Q` types a "Q" there) — searching keeps working, you just get the simpler in-app list instead of fzf's interface.
 
+Press `Ctrl+G` (outside the picker) to switch the search engine: `auto` (fzf when installed, otherwise the built-in picker) → `fzf` → `builtin` → `auto`. `fzf` is skipped when it is not installed, a toast shows the engine in use, and the choice is saved as `[search] engine` in `config.toml` (also editable in Settings, `C`). With `engine = "fzf"` and fzf missing, diffv says so and falls back to the built-in picker.
+
 ```bash
 # macOS
 brew install fzf
@@ -148,6 +150,7 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `x` | General | **Expand full file** ↔ changes only (keeps file and cursor line) |
 | `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash). Uses `fzf` when installed, otherwise the built-in picker |
 | `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched. Uses `fzf` when installed, otherwise the built-in picker |
+| `Ctrl+g` | General | Switch the search engine: **auto** → **fzf** → **built-in** (fzf skipped when not installed; saved to `config.toml`) |
 | `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in your editor |
 | `e` | Diff | Open file in your editor (`$EDITOR`; system default editor, then `vi`/`nano` when unset) at cursor line (`+line`) |
 | `s` | Diff | **Stage** current hunk (or Visual lines) of a file under **Changes** |
@@ -207,6 +210,9 @@ context_lines = 3
 enabled = true
 debounce_ms = 150
 watch_untracked = true
+
+[search]
+engine = "auto"                # auto (fzf if installed, else built-in), fzf, or builtin · Ctrl+G cycles
 
 [editor]
 command = "vi"                 # Default: $GIT_EDITOR > $VISUAL > $EDITOR > system `editor` > vi > nano

@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::config::{Config, UpdateChannel};
+use crate::config::{Config, SearchEngine, UpdateChannel};
 use crate::core::models::Language;
 use crate::ui::components::style::{centered_rect, help_line, render_card};
 use crate::ui::theme::Theme;
@@ -21,6 +21,7 @@ pub enum SettingItem {
     DiffAlgorithm,
     IgnoreWhitespace,
     WatcherEnabled,
+    SearchEngine,
 }
 
 pub const SETTING_ITEMS: &[SettingItem] = &[
@@ -34,6 +35,7 @@ pub const SETTING_ITEMS: &[SettingItem] = &[
     SettingItem::DiffAlgorithm,
     SettingItem::IgnoreWhitespace,
     SettingItem::WatcherEnabled,
+    SettingItem::SearchEngine,
 ];
 
 pub fn render_settings_popup(
@@ -318,6 +320,24 @@ pub fn render_settings_popup(
                     ("WATCH", theme.key_fg),
                 )
             }
+            SettingItem::SearchEngine => {
+                let val = match (config.search.engine, language) {
+                    (SearchEngine::Auto, Language::En) => "[ auto ]",
+                    (SearchEngine::Auto, Language::Pt) => "[ automático ]",
+                    (SearchEngine::Fzf, _) => "[ fzf ]",
+                    (SearchEngine::Builtin, Language::En) => "[ built-in ]",
+                    (SearchEngine::Builtin, Language::Pt) => "[ interno ]",
+                };
+                (
+                    "󰈞",
+                    match language {
+                        Language::En => "Search Engine (Ctrl+p / Ctrl+f)",
+                        Language::Pt => "Motor de Busca (Ctrl+p / Ctrl+f)",
+                    },
+                    val,
+                    ("SEARCH", theme.key_fg),
+                )
+            }
         };
 
         let pointer = if is_selected { " ▸ " } else { "   " };
@@ -433,6 +453,16 @@ pub fn render_settings_popup(
             match language {
                 Language::En => "Toggle in terminal with 'diffv -i' or 'diffv -W'.",
                 Language::Pt => "Ative no terminal com 'diffv -i' ou 'diffv -W'.",
+            }
+        ),
+        SettingItem::SearchEngine => (
+            match language {
+                Language::En => "auto: fzf when installed, otherwise the built-in picker · fzf: always fzf · built-in: always the in-app picker.",
+                Language::Pt => "automático: fzf se instalado, senão o picker interno · fzf: sempre o fzf · interno: sempre o picker do app.",
+            },
+            match language {
+                Language::En => "Switch it anytime with Ctrl+G (fzf is skipped when it is not installed).",
+                Language::Pt => "Alterne a qualquer momento com Ctrl+G (o fzf é pulado se não estiver instalado).",
             }
         ),
         SettingItem::WatcherEnabled => (

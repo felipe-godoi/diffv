@@ -204,3 +204,4 @@ Ao pressionar `e` em uma linha da diff:
 `Ctrl+p` / `Ctrl+f` geram a lista de candidatos (`App::prepare_fzf`) e o resultado escolhido volta por `handle_fzf_file_result` / `handle_fzf_text_result`:
 1. Se o `fzf` estiver no `PATH` (`is_fzf_available`), a TUI é suspensa e o `fzf` roda em tela cheia com os candidatos.
 2. Se não, abre o picker interno (`ui/components/picker.rs`): popup com filtro fuzzy/substring (smart-case, termos separados por espaço, em `Ctrl+f` só o conteúdo da linha é comparado, como o `--nth=2` do fzf). O item escolhido entra pelos mesmos handlers, então o comportamento após a escolha é idêntico.
+3. O motor é configurável em `[search] engine` (`auto` | `fzf` | `builtin`, padrão `auto`) e alternado com `Ctrl+G` fora do picker (`auto` → `fzf` → `builtin`, pulando `fzf` quando não instalado; a escolha é salva no `config.toml`). Com `fzf` escolhido e ausente, o app avisa e usa o picker interno.

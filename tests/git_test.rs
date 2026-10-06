@@ -1854,7 +1854,7 @@ fn builtin_picker_feeds_the_fzf_result_handlers() {
     };
 
     // Files: filter, pick, and land on the chosen file.
-    app.open_builtin_picker(FzfRequest::Files);
+    app.open_builtin_picker(FzfRequest::Files, true);
     assert_eq!(app.picker.as_ref().unwrap().matches.len(), 2);
     type_text(&mut app, "beta");
     assert_eq!(app.picker.as_ref().unwrap().matches.len(), 1);
@@ -1863,7 +1863,7 @@ fn builtin_picker_feeds_the_fzf_result_handlers() {
     assert_eq!(app.current_file().unwrap().display_path(), "beta.txt");
 
     // The popup renders on top of the UI.
-    app.open_builtin_picker(FzfRequest::Files);
+    app.open_builtin_picker(FzfRequest::Files, true);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
     terminal.draw(|frame| app.render(frame)).unwrap();
     let screen: String = terminal
@@ -1881,7 +1881,7 @@ fn builtin_picker_feeds_the_fzf_result_handlers() {
 
     // Text: matches line content and jumps to the file + line.
     app.focus = Focus::FileTree;
-    app.open_builtin_picker(FzfRequest::Text);
+    app.open_builtin_picker(FzfRequest::Text, true);
     type_text(&mut app, "alpha_mark");
     assert_eq!(app.picker.as_ref().unwrap().matches.len(), 1);
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

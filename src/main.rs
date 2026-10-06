@@ -16,7 +16,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use diffv::cli::Cli;
-use diffv::config::{Config, UpdateChannel};
+use diffv::config::{Config, ResolvedSearch, UpdateChannel};
 use diffv::git::provider::GitProvider;
 use diffv::integration::editor::open_editor;
 use diffv::integration::fzf::{is_fzf_available, search_diff_text_fzf, search_files_fzf};
@@ -501,9 +501,11 @@ fn run_app(
 
         // Check if an interactive fzf search request is pending
         if let Some(fzf_req) = app.fzf_request.take() {
-            if !is_fzf_available() {
-                // fzf is optional: fall back to the built-in picker
-                app.open_builtin_picker(fzf_req);
+            // fzf is optional: `[search] engine` (Ctrl+G) picks fzf or the built-in picker
+            if let ResolvedSearch::Builtin { fzf_missing } =
+                app.config.search.engine.resolve(is_fzf_available())
+            {
+                app.open_builtin_picker(fzf_req, fzf_missing);
                 needs_redraw = true;
                 continue;
             }

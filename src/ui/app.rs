@@ -643,6 +643,22 @@ impl App {
                 };
                 self.set_notification(msg);
             }
+            SettingItem::SearchEngine => {
+                use crate::config::SearchEngine;
+                let fzf_available = crate::integration::fzf::is_fzf_available();
+                self.config.search.engine = if forward {
+                    self.config.search.engine.next(fzf_available)
+                } else {
+                    match self.config.search.engine {
+                        SearchEngine::Auto => SearchEngine::Builtin,
+                        SearchEngine::Builtin if fzf_available => SearchEngine::Fzf,
+                        SearchEngine::Builtin | SearchEngine::Fzf => SearchEngine::Auto,
+                    }
+                };
+                let msg =
+                    search_engine_message(self.config.search.engine, fzf_available, self.language);
+                self.set_notification(msg);
+            }
             SettingItem::WatcherEnabled => {
                 self.config.watcher.enabled = !self.config.watcher.enabled;
                 let msg = match (self.config.watcher.enabled, self.language) {
@@ -1133,16 +1149,30 @@ impl App {
     }
 
     /// Opens the built-in picker for `request` (used when fzf is not installed).
-    pub fn open_builtin_picker(&mut self, request: FzfRequest) {
+    /// Opens the built-in picker for `request`; `fzf_missing` says fzf was wanted
+    /// (search engine `auto` / `fzf`) but is not installed.
+    pub fn open_builtin_picker(&mut self, request: FzfRequest, fzf_missing: bool) {
         let query = self.prepare_fzf(request);
         if query.items.is_empty() {
             return;
         }
         self.picker = Some(PickerState::new(request, query.items, query.header));
-        let msg = match self.language {
-            Language::En => "fzf not found on PATH · using the built-in picker",
-            Language::Pt => "fzf não encontrado no PATH · usando o picker interno",
-        };
+        if fzf_missing {
+            let msg = match self.language {
+                Language::En => "fzf not found on PATH · using the built-in picker",
+                Language::Pt => "fzf não encontrado no PATH · usando o picker interno",
+            };
+            self.set_notification(msg);
+        }
+    }
+
+    /// Ctrl+G: auto → fzf → builtin → auto (fzf skipped when not installed), saved
+    /// to config.toml like a settings change.
+    pub fn cycle_search_engine(&mut self) {
+        let fzf_available = crate::integration::fzf::is_fzf_available();
+        self.config.search.engine = self.config.search.engine.next(fzf_available);
+        let _ = self.config.save();
+        let msg = search_engine_message(self.config.search.engine, fzf_available, self.language);
         self.set_notification(msg);
     }
 
@@ -1870,7 +1900,7 @@ impl App {
             self.pending_key_time = None;
             match pending {
                 'g' => match key.code {
-                    KeyCode::Char('g') => {
+                    KeyCode::Char('g') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                         // gg: jump to top of view
                         if self.focus == Focus::DiffView {
                             self.selected_row = 0;
@@ -2419,6 +2449,9 @@ impl App {
             KeyCode::Char('i') => {
                 self.show_details_popup = !self.show_details_popup;
                 self.details_popup_scroll = 0;
+            }
+            KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cycle_search_engine();
             }
             KeyCode::Char('g') => {
                 self.pending_key = Some('g');
@@ -4596,6 +4629,34 @@ fn wrapped_row_heights(
             };
             side(&r.left).max(side(&r.right)).max(1).div_ceil(width)
         }))
+    }
+}
+
+/// Toast naming the engine searches will actually use.
+fn search_engine_message(
+    engine: crate::config::SearchEngine,
+    fzf_available: bool,
+    language: Language,
+) -> String {
+    use crate::config::ResolvedSearch;
+    let effective = match (engine.resolve(fzf_available), language) {
+        (ResolvedSearch::Fzf, _) => "fzf",
+        (ResolvedSearch::Builtin { .. }, Language::En) => "built-in picker",
+        (ResolvedSearch::Builtin { .. }, Language::Pt) => "picker interno",
+    };
+    let auto = match language {
+        Language::En => "auto",
+        Language::Pt => "automático",
+    };
+    match (engine, language) {
+        (crate::config::SearchEngine::Auto, Language::En) => {
+            format!("Search engine: {} ({}) · Ctrl+G", auto, effective)
+        }
+        (crate::config::SearchEngine::Auto, Language::Pt) => {
+            format!("Motor de busca: {} ({}) · Ctrl+G", auto, effective)
+        }
+        (_, Language::En) => format!("Search engine: {} · Ctrl+G", effective),
+        (_, Language::Pt) => format!("Motor de busca: {} · Ctrl+G", effective),
     }
 }
 

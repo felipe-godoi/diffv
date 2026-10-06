@@ -54,8 +54,9 @@ impl PickerState {
     }
 }
 
-/// What a key does in the picker. Mirrors fzf's default bindings: Esc, Ctrl+C,
-/// Ctrl+G and Ctrl+Q abort; every printable key (including Shift+Q) is query text.
+/// What a key does in the picker. Follows fzf's default bindings: Esc, Ctrl+C and
+/// Ctrl+Q abort; every printable key (including Shift+Q) is query text. Ctrl+G is
+/// not an exit key here (unlike fzf): in diffv it switches the search engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerAction {
     Cancel,
@@ -71,7 +72,7 @@ pub fn picker_key_action(key: KeyEvent) -> PickerAction {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         KeyCode::Esc => PickerAction::Cancel,
-        KeyCode::Char('c' | 'g' | 'q') if ctrl => PickerAction::Cancel,
+        KeyCode::Char('c' | 'q') if ctrl => PickerAction::Cancel,
         KeyCode::Enter => PickerAction::Accept,
         KeyCode::Up => PickerAction::Move(-1),
         KeyCode::Down => PickerAction::Move(1),
@@ -370,9 +371,11 @@ mod tests {
         let key = |code, modifiers| picker_key_action(KeyEvent::new(code, modifiers));
         let ctrl = KeyModifiers::CONTROL;
         assert_eq!(key(KeyCode::Esc, KeyModifiers::NONE), PickerAction::Cancel);
-        for c in ['c', 'g', 'q'] {
+        for c in ['c', 'q'] {
             assert_eq!(key(KeyCode::Char(c), ctrl), PickerAction::Cancel);
         }
+        // Ctrl+G is reserved for switching the search engine, so it does not close.
+        assert_eq!(key(KeyCode::Char('g'), ctrl), PickerAction::Ignore);
         // Like in fzf, Shift+Q (and q) are just query text.
         assert_eq!(
             key(KeyCode::Char('Q'), KeyModifiers::SHIFT),
