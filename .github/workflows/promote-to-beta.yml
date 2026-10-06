@@ -1,0 +1,85 @@
+name: Promote main to beta
+
+# A cada push na `main`, abre (ou atualiza) uma PR `main → beta`.
+# O merge dessa PR é manual; ao cair na `beta`, o release-please abre a
+# `chore(beta): release X.Y.Z`. Ver docs/release-flow.md §4.2.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: promote-to-beta
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open or update the promotion PR
+        env:
+          # PRs criadas com GITHUB_TOKEN não disparam outros workflows (CI).
+          # Para ter checks na PR, use um token de GitHub App: secrets.PROMOTE_TOKEN.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          git fetch --quiet origin main beta
+          count=$(git rev-list --count origin/beta..origin/main)
+          if [ "$count" -eq 0 ]; then
+            echo "beta já contém tudo da main; nada a promover."
+            exit 0
+          fi
+
+          title="chore: promote main to beta"
+          commits=$(git log --no-merges --format='- %h %s' origin/beta..origin/main | head -n 50)
+          shown=$(printf '%s\n' "$commits" | wc -l)
+          total=$(git rev-list --no-merges --count origin/beta..origin/main)
+          if [ "$total" -gt "$shown" ]; then
+            commits=$(printf '%s\n- … e mais %s commits' "$commits" "$((total - shown))")
+          fi
+
+          body_file=$(mktemp)
+          cat > "$body_file" <<EOF
+          <!-- promote-to-beta -->
+          Promoção do canal **beta**: traz para a \`beta\` o que já está na \`main\`.
+          Ao mergear, o release-please abre (ou atualiza) a PR \`chore(beta): release X.Y.Z\`.
+
+          **$count commit(s)** na \`main\` ainda não estão na \`beta\` (\`origin/beta..origin/main\`, até $(git rev-parse --short origin/main); lista sem merge commits):
+
+          $commits
+
+          > [!NOTE]
+          > Os checks podem não rodar nesta PR: PRs criadas/atualizadas com \`GITHUB_TOKEN\` não disparam outros workflows (limitação do GitHub).
+          > Para ter CI aqui, configure um secret com token de GitHub App (ex.: \`PROMOTE_TOKEN\`) e troque \`GH_TOKEN\` em \`.github/workflows/promote-to-beta.yml\` pelo secret \`PROMOTE_TOKEN\`.
+
+          Esta PR é mantida automaticamente por \`promote-to-beta.yml\`; o merge é manual.
+          EOF
+
+          pr=$(gh pr list --repo "$GH_REPO" --state open --base beta --head main \
+            --json number --jq '.[0].number // empty')
+
+          if [ -z "$pr" ]; then
+            gh pr create --repo "$GH_REPO" --base beta --head main \
+              --title "$title" --body-file "$body_file"
+            exit 0
+          fi
+
+          current=$(gh pr view "$pr" --repo "$GH_REPO" --json body --jq .body)
+          if [ "$current" = "$(cat "$body_file")" ]; then
+            echo "PR #$pr já está atualizada."
+          else
+            # REST direto: `gh pr edit` quebra em algumas versões (Projects classic).
+            gh api -X PATCH "repos/$GH_REPO/pulls/$pr" -F "body=@$body_file" --silent
+            echo "PR #$pr atualizada ($count commits)."
+          fi
