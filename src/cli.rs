@@ -11,7 +11,7 @@ const VERSION: &str = match option_env!("DIFFV_VERSION") {
 #[command(
     name = "diffv",
     version = VERSION,
-    about = "High-performance VS Code style CLI diff viewer and companion for AI coding agents",
+    about = "High-performance VS Code style CLI diff viewer to use alongside your AI coding agent",
     long_about = "diffv is a high-performance terminal diff viewer featuring dual-column side-by-side view, \
     intra-line word/character highlighting, live file watching for AI coding agents, \
     seamless Neovim and Tmux integration, interactive hunk/file staging and discarding, \

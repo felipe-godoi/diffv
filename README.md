@@ -1,5 +1,5 @@
 # diffv ⚡
-> High-performance VS Code style CLI diff viewer and companion for AI coding agents.
+> High-performance VS Code style CLI diff viewer to use alongside your AI coding agent.
 
 [![CI](https://github.com/felipe-godoi/diffv/actions/workflows/ci.yml/badge.svg)](https://github.com/felipe-godoi/diffv/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/felipe-godoi/diffv?color=blue)](https://github.com/felipe-godoi/diffv/releases)
