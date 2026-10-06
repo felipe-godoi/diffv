@@ -45,7 +45,7 @@ Or from a local cloned repository:
 ./install.sh
 ```
 
-The installer detects your OS and architecture, downloads the latest release binary, verifies its SHA-256 checksum, and installs it to `~/.local/bin/diffv`. Remote installation needs no Rust toolchain or GitHub login. Running the installer from a source checkout builds the local code. If `fzf` is not installed, the script offers it as an **optional** extra with a `(y/N)` prompt — pressing Enter skips it — and in non-interactive runs (`curl … | bash`) it only prints a one-line tip; a missing or failed `fzf` install never fails the diffv installation.
+The installer detects your OS and architecture, downloads the latest release binary, verifies its SHA-256 checksum, and installs it to `~/.local/bin/diffv`. Remote installation needs no Rust toolchain or GitHub login. Running the installer from a source checkout builds the local code. If `fzf` is not installed, the script offers it as an **optional** extra with a `(y/N)` prompt — the default is **no** (Enter, or no answer within 60 seconds, skips it). The question is read from your terminal (`/dev/tty`), so it also appears with `curl … | bash`; only when there is no terminal at all (CI, containers) or `$CI` is set does it print a one-line tip instead. Skip the question with `curl … | bash -s -- --no-fzf`, or every question with `--non-interactive`. A missing or failed `fzf` install never fails the diffv installation.
 
 ### Manual Install via Cargo
 
