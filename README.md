@@ -22,7 +22,7 @@
 - ⚡ **AI Companion Mode (`--watch`)**: Listens to disk changes via debounced filesystem events (150ms). Silently reloads diffs in real-time without resetting your scroll position or active file.
 - 🎨 **Adaptive Terminal Theme & Built-in Themes**: Adapts naturally to your terminal's active palette, transparency, and dark/light mode by default (`auto`), with optional built-in themes (`vscode-dark`, `tokyonight`, `catppuccin`, `gruvbox`).
 - 🌲 **Interactive File Drawer & Quick Filter**: Fast navigation with `j`/`k`, status indicators (`M`, `A`, `D`, `?`, `[S]`, `[U]`), and instant fuzzy search filtering (`/`).
-- 🎯 **Granular Staging & Discarding**: Stage (`s`), unstage (`u`), or discard (`d`) individual hunks, or stage (`S`), unstage (`U`), or discard (`D`) entire files with quick confirmation dialogs.
+- 🎯 **Granular Staging & Discarding**: Stage (`s`), unstage (`u`), or discard (`d`) individual hunks, or stage (`S`), unstage (`U`), or discard (`D`) entire files with quick confirmation dialogs. In the file list, `s` / `u` stage or unstage the selected file, a whole folder, or a whole section at once.
 - 📋 **AI Context Copying (`c`)**: One-key copy of the active hunk or file diff formatted in Markdown directly to your system clipboard (`arboard`) to easily paste into AI agent prompts.
 - ✏️ **Instant Editor Jump (`e` or `Enter`)**: Opens `$EDITOR +<line> <file>` (`$GIT_EDITOR` and `$VISUAL` take precedence, as in git). With none of them set it uses the system default editor (`editor`, the Debian/Ubuntu `update-alternatives` entry), then `vi`, then `nano`. Optionally, when you run diffv inside Neovim (`$NVIM` set) with `use_nvr = true` and `nvr` (neovim-remote) installed, the file opens in that running instance.
 - 📂 **Multi-Mode Comparison**: Works with Git working trees, `--staged` mode, specific Git branches/commits (`HEAD~1`, `main..feat`), arbitrary local files (`diffv a.rs b.rs`), local directories (`diffv dir1 dir2`), and standard input pipes (`git diff | diffv -`).
@@ -156,6 +156,8 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `e` | Diff | Open file in your editor (`$EDITOR`; system default editor, then `vi`/`nano` when unset) at cursor line (`+line`) |
 | `s` | Diff | **Stage** current hunk (or Visual lines) of a file under **Changes** |
 | `u` | Diff | **Unstage** current hunk (or Visual lines) of a file under **Staged** |
+| `s` | File Tree | **Stage** the item under the cursor: the whole **file**, every file below a **folder** (recursive, untracked files included), or every file of a **Staged** / **Changes** section header. Works in Tree and Flat views; with a filter active only the visible files are affected |
+| `u` | File Tree | **Unstage** the item under the cursor: whole file, folder (recursive) or section |
 | `d` | Diff | **Discard** current hunk under **Changes** (with `y/n` confirmation) |
 | `S` | General | **Stage** entire file |
 | `U` | General | **Unstage** entire file |
