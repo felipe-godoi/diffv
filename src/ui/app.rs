@@ -37,10 +37,12 @@ use crate::ui::components::side_by_side::{render_side_by_side, ColumnSide};
 use crate::ui::components::style::centered_rect;
 use crate::ui::components::toast::{render_toast, TOAST_DURATION};
 use crate::ui::components::unified::render_unified;
+use crate::ui::components::update_popup::render_update_popup;
 use crate::ui::components::worktree_popup::{render_worktree_popup, WorktreeCreationState};
 use crate::ui::scroll::{clamp_cursor, max_list_offset, scroll_offset, SCROLLOFF, WHEEL_STEP};
 use crate::ui::selection::{extract_text, is_selected, pane_lines, MouseSelection, TextMap};
 use crate::ui::theme::Theme;
+use crate::update::UpdateEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -98,6 +100,8 @@ pub struct App {
     pub is_unified: bool,
     pub watch_mode: bool,
     pub show_help: bool,
+    /// Outcome of the startup update check, shown as a popup until dismissed.
+    pub update_popup: Option<UpdateEvent>,
     pub filter_mode: bool,
     pub filter_query: String,
     pub scroll_y: usize,
@@ -266,6 +270,7 @@ impl App {
             is_unified: unified || config.ui.default_view == "unified",
             watch_mode,
             show_help: false,
+            update_popup: None,
             filter_mode: false,
             filter_query: String::new(),
             scroll_y: 0,
@@ -1621,14 +1626,10 @@ impl App {
         self.notification = Some((msg.into(), Instant::now()));
     }
 
-    /// A background auto-update replaced the binary; it is used on the next start.
-    /// Shown longer than a regular toast so it is not missed.
-    pub fn notify_update_installed(&mut self, tag: &str) {
-        let msg = match self.language {
-            Language::En => format!("✓ diffv updated to {} · restart to use it", tag),
-            Language::Pt => format!("✓ diffv atualizado para {} · reinicie para usar", tag),
-        };
-        self.notification = Some((msg, Instant::now() + Duration::from_secs(6)));
+    /// Startup update check progress: downloading, installed or failed. A result
+    /// replaces the "downloading" popup, reopening it if it was dismissed.
+    pub fn show_update_event(&mut self, event: UpdateEvent) {
+        self.update_popup = Some(event);
     }
 
     pub fn reload_diffs(&mut self) {
@@ -1853,6 +1854,16 @@ impl App {
 
     pub fn handle_key(&mut self, key: KeyEvent) {
         self.expire_notification();
+
+        // Update popup is drawn above everything else, so it takes keys first
+        if self.update_popup.is_some() {
+            match key.code {
+                KeyCode::Char('Q') => self.should_quit = true,
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.update_popup = None,
+                _ => {}
+            }
+            return;
+        }
 
         // Built-in search picker: it is a text prompt (like fzf), so every key goes to it
         if self.picker.is_some() {
@@ -3311,6 +3322,9 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        if self.update_popup.is_some() {
+            return;
+        }
         let modal_open = self.picker.is_some()
             || self.show_details_popup
             || self.show_settings
@@ -4760,6 +4774,7 @@ impl App {
             && !self.show_details_popup
             && self.confirm_action.is_none()
             && self.picker.is_none()
+            && self.update_popup.is_none()
         {
             render_drawer_line_overlay(
                 frame,
@@ -4788,6 +4803,10 @@ impl App {
         // Floating notification styled with the active theme
         if let Some((msg, _)) = &self.notification {
             render_toast(frame, size, msg, &self.theme);
+        }
+
+        if let Some(event) = &self.update_popup {
+            render_update_popup(frame, size, event, self.language, &self.theme);
         }
     }
 }

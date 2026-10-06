@@ -30,7 +30,7 @@ use diffv::watcher::service::{WatchEvent, WatchService};
 enum AppEvent {
     Input(Event),
     Reload,
-    UpdateInstalled(String),
+    Update(diffv::update::UpdateEvent),
     WatcherProgress {
         scanned: usize,
         total: Option<usize>,
@@ -123,10 +123,11 @@ fn run(args: Cli) -> Result<()> {
 
     if is_explicit_update {
         match diffv::update::check_and_install_verbose(channel) {
-            Ok(Some(path)) => {
+            Ok(Some((path, build))) => {
                 println!(
-                    "Successfully updated diffv to {} ({})!",
+                    "Successfully updated diffv at {} to {} ({}); it takes effect the next time you open diffv.",
                     path.display(),
+                    build.label(),
                     channel
                 );
             }
@@ -332,14 +333,15 @@ fn run_app(
     // Channel for unifying keyboard events, debounced filesystem events and tick timer
     let (tx, rx) = mpsc::channel();
 
-    // 0. Auto-update check off the critical path: quiet, bounded by the updater's
-    // timeouts, failures ignored (offline, rate-limited or no newer release).
+    // 0. Auto-update check off the critical path, bounded by the updater's timeouts.
+    // It never writes to the terminal; downloads, installs and failures reach the TUI
+    // as events and are shown in a popup (nothing is shown when already up to date).
     if let Some(channel) = update_channel {
         let update_tx = tx.clone();
         thread::spawn(move || {
-            if let Ok(Some(tag)) = diffv::update::check_and_install_quiet(channel) {
-                let _ = update_tx.send(AppEvent::UpdateInstalled(tag));
-            }
+            diffv::update::check_on_startup(channel, |event| {
+                let _ = update_tx.send(AppEvent::Update(event));
+            });
         });
     }
 
@@ -587,8 +589,8 @@ fn run_app(
                 terminal.autoresize()?;
                 needs_redraw = true;
             }
-            AppEvent::UpdateInstalled(tag) => {
-                app.notify_update_installed(&tag);
+            AppEvent::Update(event) => {
+                app.show_update_event(event);
                 needs_redraw = true;
             }
             AppEvent::Reload => {
