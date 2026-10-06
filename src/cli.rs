@@ -2,7 +2,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 /// Release builds set `DIFFV_VERSION` (e.g. "0.2.2 (16742ac 2026-10-02)") so binaries are identifiable.
-const VERSION: &str = match option_env!("DIFFV_VERSION") {
+pub const VERSION: &str = match option_env!("DIFFV_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };

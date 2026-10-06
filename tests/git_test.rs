@@ -2050,7 +2050,7 @@ fn mouse_wheel_scrolls_the_view_and_drags_the_cursor_only_at_edges() {
 }
 
 #[test]
-fn background_update_notice_outlives_a_regular_toast() {
+fn background_update_popup_outlives_a_regular_toast() {
     use diffv::ui::app::{App, AppMode};
     let dir = std::env::temp_dir().join(format!("diffv_update_notice_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -2069,11 +2069,16 @@ fn background_update_notice_outlives_a_regular_toast() {
     )
     .unwrap();
     app.language = diffv::core::models::Language::En;
-    app.notify_update_installed("v9.9.9");
+    let event = diffv::update::UpdateEvent::Installed(diffv::update::BuildInfo {
+        channel: diffv::config::UpdateChannel::Stable,
+        tag: "v9.9.9".into(),
+        commit: None,
+        built_at: None,
+    });
+    app.show_update_event(event.clone());
     std::thread::sleep(diffv::ui::components::toast::TOAST_DURATION);
     app.expire_notification();
-    let (msg, _) = app.notification.as_ref().expect("still visible");
-    assert!(msg.contains("v9.9.9") && msg.contains("restart"));
+    assert_eq!(app.update_popup, Some(event), "stays until dismissed");
     let _ = fs::remove_dir_all(&dir);
 }
 

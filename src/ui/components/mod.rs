@@ -14,4 +14,5 @@ pub mod side_by_side;
 pub mod style;
 pub mod toast;
 pub mod unified;
+pub mod update_popup;
 pub mod worktree_popup;
