@@ -69,6 +69,9 @@ for arg in "$@"; do
             echo "      --channel <ch> Select channel: stable, beta, or nightly"
             echo "  -U, --uninstall    Uninstall diffv and remove binaries and configurations"
             echo "  -h, --help         Show this help message"
+            echo ""
+            echo "fzf is optional: if it is missing, the installer offers to install it (default: no)."
+            echo "Without it, diffv's search uses its built-in picker."
             exit 0
             ;;
     esac
@@ -273,6 +276,59 @@ if [ "$PATH_OK" -eq 0 ]; then
         fi
         success "Updated $RC_FILE"
         echo -e "${YELLOW}Please reload your shell or run:${NC} source $RC_FILE"
+    fi
+fi
+
+# Optional extra: fzf. Never blocks or fails the installation.
+FZF_URL="https://github.com/junegunn/fzf#installation"
+
+run_as_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        return 1
+    fi
+}
+
+install_fzf() {
+    if command -v brew >/dev/null 2>&1; then
+        brew install fzf
+    elif command -v apt-get >/dev/null 2>&1; then
+        run_as_root apt-get install -y fzf
+    elif command -v dnf >/dev/null 2>&1; then
+        run_as_root dnf install -y fzf
+    elif command -v pacman >/dev/null 2>&1; then
+        run_as_root pacman -S --noconfirm fzf
+    elif command -v apk >/dev/null 2>&1; then
+        run_as_root apk add fzf
+    else
+        return 1
+    fi
+}
+
+if ! command -v fzf >/dev/null 2>&1; then
+    if [ -t 0 ]; then
+        echo ""
+        info "Optional: fzf"
+        echo "  fzf is optional. With it, diffv's file/text search (Ctrl+p / Ctrl+f) opens in fzf,"
+        echo "  with its fuzzy matching and preview. Without it, the built-in picker is used and"
+        echo "  search keeps working."
+        read -p "Would you like to install the optional fzf? (y/N) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            info "Installing fzf..."
+            if install_fzf && command -v fzf >/dev/null 2>&1; then
+                success "fzf installed."
+            else
+                warn "Could not install fzf automatically. Install it manually: $FZF_URL"
+            fi
+        else
+            echo "  Skipped. You can install fzf later: $FZF_URL"
+        fi
+    else
+        echo -e "${CYAN}Tip:${NC} optional fzf not found; diffv search uses its built-in picker (install fzf for its interface: $FZF_URL)."
     fi
 fi
 
