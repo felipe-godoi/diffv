@@ -32,6 +32,28 @@ error() {
     exit 1
 }
 
+# Asks a y/N question on the terminal; returns 0 for yes, 1 for no.
+# Reads from /dev/tty, so it also works when this script is piped (curl | bash).
+# Default is no: Enter, timeout, no usable terminal, $CI or --non-interactive.
+can_prompt() {
+    [ "$NON_INTERACTIVE" -eq 0 ] || return 1
+    [ -z "${CI:-}" ] || return 1
+    # The device node can be readable/writable with no controlling terminal
+    # (open fails with ENXIO), so check that it actually opens.
+    [ -r /dev/tty ] && [ -w /dev/tty ] && { : </dev/tty >/dev/tty; } 2>/dev/null
+}
+
+ask_yes_no() {
+    can_prompt || return 1
+    local reply=""
+    printf '%s' "$1" >/dev/tty
+    if ! read -r -n 1 -t "${DIFFV_INSTALL_PROMPT_TIMEOUT:-60}" reply </dev/tty; then
+        reply=""
+    fi
+    printf '\n' >/dev/tty
+    [[ $reply =~ ^[Yy]$ ]]
+}
+
 # Print banner
 echo -e "${BLUE}"
 echo "    ____  _ ________     "
@@ -45,6 +67,8 @@ echo -e "${BOLD}High-Performance Terminal Diff Viewer (macOS & Linux)${NC}\n"
 # Parse arguments
 INSTALL_CHANNEL="stable"
 DO_UNINSTALL=0
+NON_INTERACTIVE=0
+SKIP_FZF=0
 
 for arg in "$@"; do
     case "$arg" in
@@ -60,6 +84,12 @@ for arg in "$@"; do
         --channel=*)
             INSTALL_CHANNEL="${arg#*=}"
             ;;
+        --non-interactive)
+            NON_INTERACTIVE=1
+            ;;
+        --no-fzf)
+            SKIP_FZF=1
+            ;;
         --help|-h)
             echo "Usage: ./install.sh [OPTIONS]"
             echo ""
@@ -68,10 +98,16 @@ for arg in "$@"; do
             echo "      --nightly      Install latest nightly build from main branch"
             echo "      --channel <ch> Select channel: stable, beta, or nightly"
             echo "  -U, --uninstall    Uninstall diffv and remove binaries and configurations"
+            echo "      --no-fzf       Do not offer the optional fzf"
+            echo "      --non-interactive"
+            echo "                     Never prompt; every question takes its default (no)"
             echo "  -h, --help         Show this help message"
             echo ""
-            echo "fzf is optional: if it is missing, the installer offers to install it (default: no)."
-            echo "Without it, diffv's search uses its built-in picker."
+            echo "fzf is optional: if it is missing, the installer asks whether to install it"
+            echo "(default: no). Questions are read from the terminal (/dev/tty), so they also"
+            echo "appear with 'curl ... | bash'; with no terminal (CI, containers) or when \$CI is"
+            echo "set, a one-line tip is printed instead. Without fzf, diffv's search uses its"
+            echo "built-in picker. Pass options through a pipe with: curl ... | bash -s -- --no-fzf"
             exit 0
             ;;
     esac
@@ -157,9 +193,7 @@ fi
 if [ "$IS_LOCAL_REPO" -eq 1 ]; then
     if [ "$HAS_CARGO" -eq 0 ]; then
         warn "Cargo was not found in your PATH."
-        read -p "Would you like to install Rust & Cargo via rustup? (y/N) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if ask_yes_no "Would you like to install Rust & Cargo via rustup? (y/N) "; then
             info "Installing Rust toolchain..."
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             source "$HOME/.cargo/env"
@@ -308,16 +342,14 @@ install_fzf() {
     fi
 }
 
-if ! command -v fzf >/dev/null 2>&1; then
-    if [ -t 0 ]; then
+if [ "$SKIP_FZF" -eq 0 ] && ! command -v fzf >/dev/null 2>&1; then
+    if can_prompt; then
         echo ""
         info "Optional: fzf"
-        echo "  fzf is optional. With it, diffv's file/text search (Ctrl+p / Ctrl+f) opens in fzf,"
-        echo "  with its fuzzy matching and preview. Without it, the built-in picker is used and"
-        echo "  search keeps working."
-        read -p "Would you like to install the optional fzf? (y/N) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "  fzf is optional. With it, diffv's file/text search (Ctrl+p / Ctrl+f) can open in"
+        echo "  fzf's full-screen fuzzy finder. Without it, diffv's built-in picker (with preview)"
+        echo "  is used and search keeps working."
+        if ask_yes_no "Would you like to install the optional fzf? (y/N) "; then
             info "Installing fzf..."
             if install_fzf && command -v fzf >/dev/null 2>&1; then
                 success "fzf installed."

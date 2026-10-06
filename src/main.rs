@@ -19,7 +19,9 @@ use diffv::cli::Cli;
 use diffv::config::{Config, ResolvedSearch, UpdateChannel};
 use diffv::git::provider::GitProvider;
 use diffv::integration::editor::open_editor;
-use diffv::integration::fzf::{is_fzf_available, search_diff_text_fzf, search_files_fzf};
+use diffv::integration::fzf::{
+    is_fzf_available, search_diff_text_fzf, search_files_fzf, FzfResult,
+};
 use diffv::ui::app::{App, AppMode, FzfRequest};
 use diffv::ui::components::loading::render_loading;
 use diffv::ui::theme::Theme;
@@ -501,16 +503,21 @@ fn run_app(
 
         // Check if an interactive fzf search request is pending
         if let Some(fzf_req) = app.fzf_request.take() {
+            // Ctrl+G from the built-in picker carries its candidates and query into fzf
+            let carried = app.fzf_carry.take();
             // fzf is optional: `[search] engine` (Ctrl+G) picks fzf or the built-in picker
-            if let ResolvedSearch::Builtin { fzf_missing } =
-                app.config.search.engine.resolve(is_fzf_available())
-            {
-                app.open_builtin_picker(fzf_req, fzf_missing);
-                needs_redraw = true;
-                continue;
+            if carried.is_none() {
+                if let ResolvedSearch::Builtin { fzf_missing } =
+                    app.config.search.engine.resolve(is_fzf_available())
+                {
+                    app.open_builtin_picker(fzf_req, fzf_missing);
+                    needs_redraw = true;
+                    continue;
+                }
             }
 
-            let query = app.prepare_fzf(fzf_req);
+            let (query, initial_query) =
+                carried.unwrap_or_else(|| (app.prepare_fzf(fzf_req), String::new()));
             if query.items.is_empty() {
                 needs_redraw = true;
                 continue;
@@ -528,8 +535,10 @@ fn run_app(
             terminal.show_cursor()?;
 
             let res = match fzf_req {
-                FzfRequest::Files => search_files_fzf(&query.items, &query.header),
-                FzfRequest::Text => search_diff_text_fzf(&query.items, &query.header),
+                FzfRequest::Files => search_files_fzf(&query.items, &query.header, &initial_query),
+                FzfRequest::Text => {
+                    search_diff_text_fzf(&query.items, &query.header, &initial_query)
+                }
             };
 
             enable_raw_mode()?;
@@ -548,11 +557,14 @@ fn run_app(
             is_editor_active.store(false, Ordering::SeqCst);
 
             match res {
-                Ok(Some(selected)) => match fzf_req {
+                Ok(FzfResult::Selected(selected)) => match fzf_req {
                     FzfRequest::Files => app.handle_fzf_file_result(selected),
                     FzfRequest::Text => app.handle_fzf_text_result(selected),
                 },
-                Ok(None) => {}
+                Ok(FzfResult::SwitchEngine(text)) => {
+                    app.switch_search_to_builtin(fzf_req, query, &text)
+                }
+                Ok(FzfResult::Cancelled) => {}
                 Err(e) => app.set_notification(format!("fzf error: {}", e)),
             }
 

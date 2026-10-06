@@ -5,8 +5,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::core::models::Language;
+use crate::core::models::{FileDiff, Language};
 use crate::ui::app::FzfRequest;
+use crate::ui::components::picker_preview::{build_preview, render_preview};
 use crate::ui::components::style::{centered_rect, help_line, render_card};
 use crate::ui::theme::Theme;
 
@@ -21,7 +22,13 @@ pub struct PickerState {
     pub matches: Vec<usize>,
     pub selected: usize,
     pub scroll: usize,
+    /// Diffs of the searched scope, used by the preview pane.
+    pub files: Vec<FileDiff>,
+    pub show_preview: bool,
 }
+
+/// Minimum popup inner width for showing the preview next to the list.
+pub const PREVIEW_MIN_WIDTH: u16 = 70;
 
 impl PickerState {
     pub fn new(request: FzfRequest, items: Vec<String>, header: String) -> Self {
@@ -33,6 +40,8 @@ impl PickerState {
             matches: Vec::new(),
             selected: 0,
             scroll: 0,
+            files: Vec::new(),
+            show_preview: true,
         };
         state.refilter();
         state
@@ -49,6 +58,10 @@ impl PickerState {
         self.selected = self.selected.saturating_add_signed(delta).min(last);
     }
 
+    pub fn toggle_preview(&mut self) {
+        self.show_preview = !self.show_preview;
+    }
+
     pub fn selected_item(&self) -> Option<&String> {
         self.matches.get(self.selected).map(|&i| &self.items[i])
     }
@@ -56,7 +69,8 @@ impl PickerState {
 
 /// What a key does in the picker. Follows fzf's default bindings: Esc, Ctrl+C and
 /// Ctrl+Q abort; every printable key (including Shift+Q) is query text. Ctrl+G is
-/// not an exit key here (unlike fzf): in diffv it switches the search engine.
+/// not an exit key here (unlike fzf's default): it switches the search to fzf,
+/// carrying the typed query along.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerAction {
     Cancel,
@@ -65,6 +79,10 @@ pub enum PickerAction {
     ClearQuery,
     Backspace,
     Type(char),
+    /// Ctrl+G: continue this search in the other engine (fzf) with the same query.
+    SwitchEngine,
+    /// Ctrl+T (or Ctrl+/ where the terminal reports it): show / hide the preview.
+    TogglePreview,
     Ignore,
 }
 
@@ -81,6 +99,10 @@ pub fn picker_key_action(key: KeyEvent) -> PickerAction {
         KeyCode::PageUp => PickerAction::Move(-10),
         KeyCode::PageDown => PickerAction::Move(10),
         KeyCode::Char('u') if ctrl => PickerAction::ClearQuery,
+        KeyCode::Char('g') if ctrl => PickerAction::SwitchEngine,
+        // Ctrl+/ is fzf's preview toggle, but terminals report it inconsistently
+        // (often as Ctrl+7 or not at all), so Ctrl+T is the documented key.
+        KeyCode::Char('t' | '/' | '7') if ctrl => PickerAction::TogglePreview,
         KeyCode::Backspace => PickerAction::Backspace,
         KeyCode::Char(c) if !ctrl => PickerAction::Type(c),
         _ => PickerAction::Ignore,
@@ -230,6 +252,25 @@ pub fn render_picker_popup(
         search_area,
     );
 
+    let (list_area, preview_area) = if state.show_preview && list_area.width >= PREVIEW_MIN_WIDTH {
+        let [list, preview] =
+            Layout::horizontal([Constraint::Percentage(48), Constraint::Percentage(52)])
+                .areas(list_area);
+        (list, Some(preview))
+    } else {
+        (list_area, None)
+    };
+    if let Some(area) = preview_area {
+        let preview = build_preview(
+            &state.files,
+            state.request,
+            state.selected_item().map(String::as_str),
+            &state.query,
+            area.height.saturating_sub(2) as usize,
+        );
+        render_preview(frame, area, &preview, language, theme);
+    }
+
     let max_rows = list_area.height as usize;
     if state.matches.is_empty() {
         let msg = match language {
@@ -286,13 +327,15 @@ pub fn render_picker_popup(
             ("↑/↓", "move"),
             ("enter", "open"),
             ("esc", "cancel"),
-            ("", "built-in picker (install fzf for preview)"),
+            ("ctrl+t", "preview"),
+            ("ctrl+g", "fzf"),
         ],
         Language::Pt => [
             ("↑/↓", "mover"),
             ("enter", "abrir"),
             ("esc", "cancelar"),
-            ("", "picker interno (instale o fzf para preview)"),
+            ("ctrl+t", "preview"),
+            ("ctrl+g", "fzf"),
         ],
     };
     frame.render_widget(
@@ -374,8 +417,16 @@ mod tests {
         for c in ['c', 'q'] {
             assert_eq!(key(KeyCode::Char(c), ctrl), PickerAction::Cancel);
         }
-        // Ctrl+G is reserved for switching the search engine, so it does not close.
-        assert_eq!(key(KeyCode::Char('g'), ctrl), PickerAction::Ignore);
+        for c in ['t', '/'] {
+            assert_eq!(key(KeyCode::Char(c), ctrl), PickerAction::TogglePreview);
+        }
+        // Plain t is query text.
+        assert_eq!(
+            key(KeyCode::Char('t'), KeyModifiers::NONE),
+            PickerAction::Type('t')
+        );
+        // Ctrl+G switches the search engine instead of closing the picker.
+        assert_eq!(key(KeyCode::Char('g'), ctrl), PickerAction::SwitchEngine);
         // Like in fzf, Shift+Q (and q) are just query text.
         assert_eq!(
             key(KeyCode::Char('Q'), KeyModifiers::SHIFT),
@@ -391,6 +442,16 @@ mod tests {
         );
         assert_eq!(key(KeyCode::Char('n'), ctrl), PickerAction::Move(1));
         assert_eq!(key(KeyCode::Char('x'), ctrl), PickerAction::Ignore);
+    }
+
+    #[test]
+    fn preview_toggle_flips_and_starts_on() {
+        let mut state = PickerState::new(FzfRequest::Files, items(&["a.rs"]), String::new());
+        assert!(state.show_preview);
+        state.toggle_preview();
+        assert!(!state.show_preview);
+        state.toggle_preview();
+        assert!(state.show_preview);
     }
 
     #[test]
