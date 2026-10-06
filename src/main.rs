@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -21,6 +21,8 @@ use diffv::git::provider::GitProvider;
 use diffv::integration::editor::open_editor;
 use diffv::integration::fzf::{is_fzf_available, search_diff_text_fzf, search_files_fzf};
 use diffv::ui::app::{App, AppMode, FzfRequest};
+use diffv::ui::components::loading::render_loading;
+use diffv::ui::theme::Theme;
 use diffv::watcher::service::{WatchEvent, WatchService};
 
 enum AppEvent {
@@ -213,6 +215,71 @@ fn run(args: Cli) -> Result<()> {
     app_result
 }
 
+/// Collects the initial git/diff state on a worker thread while drawing a loading
+/// indicator, so the first frame shows up immediately. Keys pressed meanwhile are
+/// returned to be replayed once the app exists; Shift+Q / Ctrl+C quit right away
+/// (returns `None`).
+fn load_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    mode: AppMode,
+    config: Config,
+    args: &Cli,
+    watch_enabled: bool,
+) -> Result<Option<(App, Vec<KeyEvent>)>> {
+    let theme = Theme::from_name(args.theme.as_deref().unwrap_or(&config.ui.theme));
+    let (staged, unified, theme_override, ignore_whitespace, history) = (
+        args.staged,
+        args.unified,
+        args.theme.clone(),
+        args.ignore_whitespace,
+        args.history,
+    );
+    let loader = thread::spawn(move || {
+        App::new(
+            mode,
+            config,
+            watch_enabled,
+            staged,
+            unified,
+            theme_override,
+            ignore_whitespace,
+            history,
+        )
+    });
+
+    let mut queued_keys = Vec::new();
+    let started = Instant::now();
+    let mut spinner_idx = usize::MAX;
+    while !loader.is_finished() {
+        // Advance the spinner every 80ms but check for completion more often.
+        let frame = started.elapsed().as_millis() as usize / 80;
+        if frame != spinner_idx {
+            spinner_idx = frame;
+            terminal.draw(|f| render_loading(f, spinner_idx, &theme))?;
+        }
+        if !event::poll(Duration::from_millis(10))? {
+            continue;
+        }
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                let ctrl_c =
+                    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+                if key.code == KeyCode::Char('Q') || ctrl_c {
+                    return Ok(None);
+                }
+                queued_keys.push(key);
+            }
+            Event::Resize(_, _) => terminal.autoresize()?,
+            _ => {}
+        }
+    }
+
+    let app = loader
+        .join()
+        .map_err(|_| anyhow::anyhow!("initial diff loading panicked"))??;
+    Ok(Some((app, queued_keys)))
+}
+
 fn determine_app_mode(args: &Cli, cwd: &Path) -> Result<AppMode> {
     // Check if stdin is piped or requested as "-"
     if (!io::stdin().is_terminal() && args.targets.is_empty())
@@ -274,16 +341,10 @@ fn run_app(
     let watch_enabled =
         args.watch || (config.watcher.enabled && matches!(mode, AppMode::Git { .. }));
 
-    let mut app = App::new(
-        mode,
-        config,
-        watch_enabled,
-        args.staged,
-        args.unified,
-        args.theme.clone(),
-        args.ignore_whitespace,
-        args.history,
-    )?;
+    let Some((mut app, queued_keys)) = load_app(terminal, mode, config, args, watch_enabled)?
+    else {
+        return Ok(());
+    };
 
     // Channel for unifying keyboard events, debounced filesystem events and tick timer
     let (tx, rx) = mpsc::channel();
@@ -370,6 +431,14 @@ fn run_app(
             }
         }
     });
+
+    // Keys typed while loading run now, in order, against the first real frame
+    if !queued_keys.is_empty() {
+        terminal.draw(|f| app.render(f))?;
+        for key in queued_keys {
+            app.handle_key(key);
+        }
+    }
 
     // Main event loop with dirty tracking for 0.0% idle CPU
     let mut needs_redraw = true;

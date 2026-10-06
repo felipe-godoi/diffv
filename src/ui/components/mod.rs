@@ -5,6 +5,7 @@ pub mod file_tree;
 pub mod header;
 pub mod help_popup;
 pub mod horizontal;
+pub mod loading;
 pub mod ruler;
 pub mod settings_popup;
 pub mod side_by_side;
