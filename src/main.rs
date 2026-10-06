@@ -28,6 +28,7 @@ use diffv::watcher::service::{WatchEvent, WatchService};
 enum AppEvent {
     Input(Event),
     Reload,
+    UpdateInstalled(String),
     WatcherProgress {
         scanned: usize,
         total: Option<usize>,
@@ -161,24 +162,11 @@ fn run(args: Cli) -> Result<()> {
         config.update.auto_update
     };
 
-    if auto_update_enabled && std::env::var_os("DIFFV_UPDATE_RESTART").is_none() {
-        // Offline, rate-limited or no newer release: keep running the installed version.
-        if let Ok(Some(path)) = diffv::update::check_and_install(channel) {
-            eprintln!("diffv updated. Restarting…");
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                let error = std::process::Command::new(path)
-                    .args(std::env::args_os().skip(1))
-                    .env("DIFFV_UPDATE_RESTART", "1")
-                    .exec();
-                eprintln!(
-                    "Could not restart diffv: {}. Reopen to use the update.",
-                    error
-                );
-            }
-        }
-    }
+    // The check runs in the background once the TUI is up (see `run_app`), so a slow
+    // or offline network never delays the first frame.
+    let update_channel = (auto_update_enabled
+        && std::env::var_os("DIFFV_UPDATE_RESTART").is_none())
+    .then_some(channel);
 
     // Setup custom panic hook to restore terminal
     let default_panic = std::panic::take_hook();
@@ -201,7 +189,7 @@ fn run(args: Cli) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let app_result = run_app(&mut terminal, mode, config, &args, cwd);
+    let app_result = run_app(&mut terminal, mode, config, &args, cwd, update_channel);
 
     // Teardown TUI
     disable_raw_mode()?;
@@ -337,7 +325,22 @@ fn run_app(
     config: Config,
     args: &Cli,
     cwd: &Path,
+    update_channel: Option<UpdateChannel>,
 ) -> Result<()> {
+    // Channel for unifying keyboard events, debounced filesystem events and tick timer
+    let (tx, rx) = mpsc::channel();
+
+    // 0. Auto-update check off the critical path: quiet, bounded by the updater's
+    // timeouts, failures ignored (offline, rate-limited or no newer release).
+    if let Some(channel) = update_channel {
+        let update_tx = tx.clone();
+        thread::spawn(move || {
+            if let Ok(Some(tag)) = diffv::update::check_and_install_quiet(channel) {
+                let _ = update_tx.send(AppEvent::UpdateInstalled(tag));
+            }
+        });
+    }
+
     let watch_enabled =
         args.watch || (config.watcher.enabled && matches!(mode, AppMode::Git { .. }));
 
@@ -346,8 +349,6 @@ fn run_app(
         return Ok(());
     };
 
-    // Channel for unifying keyboard events, debounced filesystem events and tick timer
-    let (tx, rx) = mpsc::channel();
     let is_editor_active = Arc::new(AtomicBool::new(false));
 
     // 1. Keyboard & terminal event listener thread
@@ -570,6 +571,10 @@ fn run_app(
             }
             AppEvent::Input(Event::Resize(_, _)) => {
                 terminal.autoresize()?;
+                needs_redraw = true;
+            }
+            AppEvent::UpdateInstalled(tag) => {
+                app.notify_update_installed(&tag);
                 needs_redraw = true;
             }
             AppEvent::Reload => {

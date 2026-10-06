@@ -1975,3 +1975,31 @@ fn mouse_wheel_scrolls_the_view_and_drags_the_cursor_only_at_edges() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn background_update_notice_outlives_a_regular_toast() {
+    use diffv::ui::app::{App, AppMode};
+    let dir = std::env::temp_dir().join(format!("diffv_update_notice_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("a.txt"), "a\n").unwrap();
+    fs::write(dir.join("b.txt"), "b\n").unwrap();
+    let mut app = App::new(
+        AppMode::FilePair(dir.join("a.txt"), dir.join("b.txt")),
+        diffv::config::Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    app.language = diffv::core::models::Language::En;
+    app.notify_update_installed("v9.9.9");
+    std::thread::sleep(diffv::ui::components::toast::TOAST_DURATION);
+    app.expire_notification();
+    let (msg, _) = app.notification.as_ref().expect("still visible");
+    assert!(msg.contains("v9.9.9") && msg.contains("restart"));
+    let _ = fs::remove_dir_all(&dir);
+}

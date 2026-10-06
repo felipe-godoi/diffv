@@ -1526,6 +1526,16 @@ impl App {
         self.notification = Some((msg.into(), Instant::now()));
     }
 
+    /// A background auto-update replaced the binary; it is used on the next start.
+    /// Shown longer than a regular toast so it is not missed.
+    pub fn notify_update_installed(&mut self, tag: &str) {
+        let msg = match self.language {
+            Language::En => format!("✓ diffv updated to {} · restart to use it", tag),
+            Language::Pt => format!("✓ diffv atualizado para {} · reinicie para usar", tag),
+        };
+        self.notification = Some((msg, Instant::now() + Duration::from_secs(6)));
+    }
+
     pub fn reload_diffs(&mut self) {
         if let Err(e) = self.reload_diffs_internal(true) {
             self.set_notification(format!("Reload error: {}", e));
