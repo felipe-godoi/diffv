@@ -147,7 +147,7 @@ Projetado para ergonomia e memória muscular de usuários de Neovim/Vim:
 | `Tab` | Geral | Alternar foco entre File Tree e Diff View |
 | `h` / `l` ou `←` / `→` | Geral | Alternar entre coluna Old e New (ou colapsar/expandir na árvore) |
 | `Enter` | File Tree | Selecionar e carregar arquivo no diff viewer |
-| `e` | Diff | Abrir arquivo no seu editor na linha atual (`$EDITOR +<line> <file>`, vim como padrão) |
+| `e` | Diff | Abrir arquivo no seu editor na linha atual (`$EDITOR +<line> <file>`; sem `$EDITOR`, o editor padrão do sistema e depois `vi`/`nano`) |
 | `s` | Diff | Fazer stage do hunk atual |
 | `u` | Diff | Fazer unstage do hunk atual |
 | `d` | Diff | Descartar / reverter o hunk atual |

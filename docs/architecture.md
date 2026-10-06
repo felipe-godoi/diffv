@@ -67,7 +67,7 @@ graph TD
     end
 
     subgraph Integrations
-        O -->|'e' / Enter| V[$EDITOR Launcher - vim como padrão]
+        O -->|'e' / Enter| V[$EDITOR Launcher - editor do sistema / vi / nano]
         O -->|'c'| W[System Clipboard]
         O -->|'s' / 'd'| X[Git Stage / Discard Worker]
     end
@@ -148,7 +148,7 @@ cli-diffviewer/
     │
     └── integration/            # Comunicação externa
         ├── mod.rs
-        ├── editor.rs           # Invocação do $EDITOR (vim como padrão; nvr opcional)
+        ├── editor.rs           # Invocação do $EDITOR (editor do sistema / vi / nano; nvr opcional)
         ├── clipboard.rs        # Cópia de hunks/patches para o clipboard
         └── tmux.rs             # Utilitários de detecção e redimensionamento do Tmux
 ```
@@ -198,7 +198,7 @@ bind-key d display-popup -d "#{pane_current_path}" -w 92% -h 90% -E "diffv --wat
 Ao pressionar `e` em uma linha da diff:
 1. Opcional: se `use_nvr = true`, o `diffv` estiver rodando dentro do Neovim (`$NVIM` definido) e o `nvr` (neovim-remote) estiver instalado:
 2. Se sim, instrui o Neovim existente a abrir o arquivo na linha correta sem fechar a sessão.
-3. Caso contrário (caminho padrão), suspende temporariamente a TUI do `diffv` e invoca `$EDITOR +<line> <file>` — ou `vim` se `$EDITOR` não estiver definido. Ao fechar o editor, o `diffv` restaura a visualização instantaneamente.
+3. Caso contrário (caminho padrão), suspende temporariamente a TUI do `diffv` e invoca `$EDITOR +<line> <file>`. Ordem de resolução quando o config não define `command`: `$GIT_EDITOR` > `$VISUAL` > `$EDITOR` > editor padrão do sistema (`editor` no `PATH`, a alternativa do Debian/Ubuntu, ou `/usr/bin/editor`) > `vi` > `nano`. Ao fechar o editor, o `diffv` restaura a visualização instantaneamente.
 
 ### 7.3 Busca com `fzf` (opcional) e Picker Interno
 `Ctrl+p` / `Ctrl+f` geram a lista de candidatos (`App::prepare_fzf`) e o resultado escolhido volta por `handle_fzf_file_result` / `handle_fzf_text_result`:

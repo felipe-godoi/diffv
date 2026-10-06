@@ -134,13 +134,77 @@ fn default_debounce_ms() -> u64 {
     150
 }
 fn default_editor_command() -> String {
-    editor_command_from(std::env::var("EDITOR").ok())
+    let env = EditorEnv {
+        git_editor: std::env::var("GIT_EDITOR").ok(),
+        visual: std::env::var("VISUAL").ok(),
+        editor: std::env::var("EDITOR").ok(),
+    };
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    editor_command_from(
+        &env,
+        |name| dirs.iter().any(|dir| is_executable(&dir.join(name))),
+        is_executable,
+    )
 }
-/// `$EDITOR` when set, otherwise `vim` (nvr is only used for `use_nvr` inside `$NVIM`).
-fn editor_command_from(editor_env: Option<String>) -> String {
-    editor_env
-        .filter(|editor| !editor.trim().is_empty())
-        .unwrap_or_else(|| "vim".to_string())
+
+/// Editor-related environment variables, read once so the resolution stays testable.
+#[derive(Debug, Default, Clone)]
+struct EditorEnv {
+    git_editor: Option<String>,
+    visual: Option<String>,
+    editor: Option<String>,
+}
+
+/// Default `[editor] command` when the config file sets none (nvr is handled
+/// separately, only with `use_nvr` inside `$NVIM`):
+/// 1. the first non-empty of `$GIT_EDITOR`, `$VISUAL`, `$EDITOR` (git's order);
+/// 2. the system default editor: `editor` on the `PATH` (the Debian/Ubuntu
+///    `update-alternatives` entry), else `/usr/bin/editor` if executable;
+/// 3. `vi`, then `nano`, whichever is on the `PATH`; `vi` as the last resort.
+///
+/// `on_path` says whether a command name resolves in the `PATH`;
+/// `is_executable` checks an absolute path. No subprocess is spawned.
+fn editor_command_from(
+    env: &EditorEnv,
+    on_path: impl Fn(&str) -> bool,
+    is_executable: impl Fn(&Path) -> bool,
+) -> String {
+    let from_env = [&env.git_editor, &env.visual, &env.editor]
+        .into_iter()
+        .flatten()
+        .map(|value| value.trim())
+        .find(|value| !value.is_empty());
+    if let Some(editor) = from_env {
+        return editor.to_string();
+    }
+    if on_path("editor") {
+        return "editor".to_string();
+    }
+    let system_editor = Path::new("/usr/bin/editor");
+    if is_executable(system_editor) {
+        return system_editor.display().to_string();
+    }
+    ["vi", "nano"]
+        .into_iter()
+        .find(|name| on_path(name))
+        .unwrap_or("vi")
+        .to_string()
+}
+
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
 }
 fn default_editor_args() -> Vec<String> {
     vec!["+{{line}}".to_string(), "{{file}}".to_string()]
@@ -247,10 +311,77 @@ impl Config {
 mod tests {
     use super::*;
 
+    fn env(git_editor: Option<&str>, visual: Option<&str>, editor: Option<&str>) -> EditorEnv {
+        EditorEnv {
+            git_editor: git_editor.map(String::from),
+            visual: visual.map(String::from),
+            editor: editor.map(String::from),
+        }
+    }
+
+    fn resolve(env: &EditorEnv, on_path: &[&str], executables: &[&str]) -> String {
+        editor_command_from(
+            env,
+            |name| on_path.contains(&name),
+            |path| executables.iter().any(|e| Path::new(e) == path),
+        )
+    }
+
     #[test]
-    fn editor_defaults_to_env_editor_then_vim() {
-        assert_eq!(editor_command_from(Some("hx".into())), "hx");
-        assert_eq!(editor_command_from(Some("  ".into())), "vim");
-        assert_eq!(editor_command_from(None), "vim");
+    fn editor_env_vars_follow_gits_order() {
+        let all = ["editor", "vi", "nano"];
+        assert_eq!(
+            resolve(&env(Some("hx"), Some("code -w"), Some("nano")), &all, &[]),
+            "hx"
+        );
+        assert_eq!(
+            resolve(&env(None, Some("code -w"), Some("nano")), &all, &[]),
+            "code -w"
+        );
+        assert_eq!(
+            resolve(&env(None, None, Some(" micro ")), &all, &[]),
+            "micro"
+        );
+        // Whitespace-only values are ignored.
+        assert_eq!(
+            resolve(&env(Some("  "), Some(""), Some("emacs")), &all, &[]),
+            "emacs"
+        );
+    }
+
+    #[test]
+    fn without_env_vars_the_system_default_editor_is_used() {
+        let none = env(None, None, None);
+        assert_eq!(resolve(&none, &["editor", "vi", "nano"], &[]), "editor");
+        // Not on the PATH, but the alternatives link exists.
+        assert_eq!(
+            resolve(&none, &["vi"], &["/usr/bin/editor"]),
+            "/usr/bin/editor"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_vi_then_nano_then_the_vi_name() {
+        let none = env(Some(" "), None, None);
+        assert_eq!(resolve(&none, &["vi", "nano"], &[]), "vi");
+        assert_eq!(resolve(&none, &["nano"], &[]), "nano");
+        assert_eq!(resolve(&none, &[], &[]), "vi");
+    }
+
+    #[test]
+    fn executable_check_needs_an_executable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("ed");
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(!is_executable(&file));
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(is_executable(&file));
+        assert!(!is_executable(dir.path()));
+        assert!(!is_executable(&dir.path().join("missing")));
     }
 }

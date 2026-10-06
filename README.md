@@ -10,7 +10,7 @@
   <img src="assets/demo.gif" alt="diffv demo" width="100%" />
 </p>
 
-`diffv` brings the visual clarity, dual-column side-by-side layout, and intra-line word/character highlighting of the VS Code Diff Editor straight into your terminal, designed specifically for seamless pairing with **tmux**, your editor (`$EDITOR`, vim by default), and autonomous AI coding agents (Antigravity CLI, Claude Code, Aider, Copilot, etc.).
+`diffv` brings the visual clarity, dual-column side-by-side layout, and intra-line word/character highlighting of the VS Code Diff Editor straight into your terminal, designed specifically for seamless pairing with **tmux**, your editor (`$EDITOR`), and autonomous AI coding agents (Antigravity CLI, Claude Code, Aider, Copilot, etc.).
 
 
 ---
@@ -24,7 +24,7 @@
 - 🌲 **Interactive File Drawer & Quick Filter**: Fast navigation with `j`/`k`, status indicators (`M`, `A`, `D`, `?`, `[S]`, `[U]`), and instant fuzzy search filtering (`/`).
 - 🎯 **Granular Staging & Discarding**: Stage (`s`), unstage (`u`), or discard (`d`) individual hunks, or stage (`S`), unstage (`U`), or discard (`D`) entire files with quick confirmation dialogs.
 - 📋 **AI Context Copying (`c`)**: One-key copy of the active hunk or file diff formatted in Markdown directly to your system clipboard (`arboard`) to easily paste into AI agent prompts.
-- ✏️ **Instant Editor Jump (`e` or `Enter`)**: Opens `$EDITOR +<line> <file>` (falls back to `vim` when `$EDITOR` is unset). Optionally, when you run diffv inside Neovim (`$NVIM` set) with `use_nvr = true` and `nvr` (neovim-remote) installed, the file opens in that running instance.
+- ✏️ **Instant Editor Jump (`e` or `Enter`)**: Opens `$EDITOR +<line> <file>` (`$GIT_EDITOR` and `$VISUAL` take precedence, as in git). With none of them set it uses the system default editor (`editor`, the Debian/Ubuntu `update-alternatives` entry), then `vi`, then `nano`. Optionally, when you run diffv inside Neovim (`$NVIM` set) with `use_nvr = true` and `nvr` (neovim-remote) installed, the file opens in that running instance.
 - 📂 **Multi-Mode Comparison**: Works with Git working trees, `--staged` mode, specific Git branches/commits (`HEAD~1`, `main..feat`), arbitrary local files (`diffv a.rs b.rs`), local directories (`diffv dir1 dir2`), and standard input pipes (`git diff | diffv -`).
 - 🔀 **Branch Comparison Selector (`B` / `--compare`)**: Interactive branch picker popup (just like VS Code) to compare your current worktree against any local or remote branch (`main`, `origin/main`, etc.), with instant fuzzy search and quick reset to default worktree changes.
 - 📜 **File Commit History (`H` / `-H`)**: Inspect commit log entries for the active file with author, relative timestamp, and commit message, and preview individual commit diffs in-place.
@@ -149,7 +149,7 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash). Uses `fzf` when installed, otherwise the built-in picker |
 | `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched. Uses `fzf` when installed, otherwise the built-in picker |
 | `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in your editor |
-| `e` | Diff | Open file in your editor (`$EDITOR`, vim by default) at cursor line (`+line`) |
+| `e` | Diff | Open file in your editor (`$EDITOR`; system default editor, then `vi`/`nano` when unset) at cursor line (`+line`) |
 | `s` | Diff | **Stage** current hunk (or Visual lines) of a file under **Changes** |
 | `u` | Diff | **Unstage** current hunk (or Visual lines) of a file under **Staged** |
 | `d` | Diff | **Discard** current hunk under **Changes** (with `y/n` confirmation) |
@@ -209,7 +209,7 @@ debounce_ms = 150
 watch_untracked = true
 
 [editor]
-command = "vim"                # Default: $EDITOR, falling back to vim
+command = "vi"                 # Default: $GIT_EDITOR > $VISUAL > $EDITOR > system `editor` > vi > nano
 args = ["+{{line}}", "{{file}}"]
 use_nvr = true                 # Optional: inside Neovim ($NVIM set) with nvr installed, open in that instance
 ```
