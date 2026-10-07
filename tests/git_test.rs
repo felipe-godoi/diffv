@@ -1,8 +1,81 @@
 use diffv::core::models::{FileStatus, StageStatus};
 use diffv::git::actions::{stage_file, stage_hunk, unstage_file, unstage_hunk};
 use diffv::git::provider::GitProvider;
+use std::ffi::OsString;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
+
+/// Serializes tests that change process-wide environment variables: `set_var`
+/// while other tests run in parallel threads is a race.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// Points `HOME` and `XDG_CONFIG_HOME` at `root` for the guard's lifetime and
+/// restores the previous values on drop (also when the test panics). Both are
+/// needed: `dirs::config_dir()` honours `XDG_CONFIG_HOME` only on Linux and uses
+/// `$HOME/Library/Application Support` on macOS.
+struct IsolatedConfig {
+    saved: Vec<(&'static str, Option<OsString>)>,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl IsolatedConfig {
+    fn new(root: &Path) -> Self {
+        let lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vars = [
+            ("HOME", root.join("home")),
+            ("XDG_CONFIG_HOME", root.join("xdg")),
+        ];
+        let saved = vars
+            .iter()
+            .map(|(name, _)| (*name, std::env::var_os(name)))
+            .collect();
+        for (name, value) in &vars {
+            fs::create_dir_all(value).unwrap();
+            std::env::set_var(name, value);
+        }
+        Self { saved, _lock: lock }
+    }
+}
+
+impl Drop for IsolatedConfig {
+    fn drop(&mut self) {
+        for (name, value) in &self.saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+#[test]
+fn isolated_config_points_config_into_the_temp_dir_and_restores_env() {
+    let root = std::env::temp_dir().join(format!("diffv_env_guard_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let (home, xdg) = {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        (
+            std::env::var_os("HOME"),
+            std::env::var_os("XDG_CONFIG_HOME"),
+        )
+    };
+    // A panic inside the guarded section must still restore the variables.
+    let result = std::panic::catch_unwind(|| {
+        let _env = IsolatedConfig::new(&root);
+        let path = diffv::config::Config::config_path().unwrap();
+        assert!(path.starts_with(&root), "{}", path.display());
+        panic!("simulated test failure");
+    });
+    assert!(result.is_err());
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    assert_eq!(std::env::var_os("HOME"), home);
+    assert_eq!(std::env::var_os("XDG_CONFIG_HOME"), xdg);
+    let _ = fs::remove_dir_all(&root);
+}
 
 #[test]
 fn test_git_provider_lifecycle() {
@@ -515,9 +588,16 @@ fn test_tab_esc_worktree_fzf_features() {
     assert_eq!(app.selected_filtered_idx, 0);
 
     terminal.draw(|frame| app.render(frame)).unwrap();
-    // Clicking diff view at row 3 selects line 0 of diff
+    // Clicking diff view at row 3 selects line 0 of diff (applied on release, so a
+    // drag can become a text selection instead)
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    });
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
         column: 50,
         row: 3,
         modifiers: KeyModifiers::NONE,
@@ -528,6 +608,12 @@ fn test_tab_esc_worktree_fzf_features() {
     // Clicking diff view at row 4 selects line 1 of diff
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,
+        row: 4,
+        modifiers: KeyModifiers::NONE,
+    });
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
         column: 50,
         row: 4,
         modifiers: KeyModifiers::NONE,
@@ -1688,4 +1774,563 @@ fn test_worktree_selector_live_filter_and_modifier_commands() {
     let _ = fs::remove_dir_all(&temp_dir);
     let _ = fs::remove_dir_all(&wt1_dir);
     let _ = fs::remove_dir_all(&wt2_dir);
+}
+
+#[test]
+fn dragging_over_diff_text_selects_the_source_text() {
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use diffv::ui::app::{App, AppMode};
+    let dir = std::env::temp_dir().join(format!("diffv_mouse_select_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Mouse Tester"]);
+    git(&["config", "user.email", "mouse@example.com"]);
+    fs::write(dir.join("notes.txt"), "alpha line\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+    fs::write(dir.join("notes.txt"), "alpha line\nbravo charlie\n").unwrap();
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        true,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+
+    // Locate "bravo" on screen, inside the diff pane.
+    let (col, row) = find_on_screen(terminal.backend().buffer(), "bravo charlie");
+
+    let mouse = |kind, column| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    let selected_row = app.selected_row;
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), col + 6));
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), col + 12));
+    // The click handlers do not run while dragging.
+    assert_eq!(app.selected_row, selected_row);
+    assert_eq!(app.mouse_selection_text().as_deref(), Some("charlie"));
+    // Dragging back past the start of the line extends the selection leftwards.
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 0));
+    assert_eq!(app.mouse_selection_text().as_deref(), Some("bravo c"));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 0));
+    assert!(app.mouse_selection.is_some());
+
+    // The selection is highlighted on the next frame and Esc clears it.
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    assert!(terminal.backend().buffer()[(col, row)]
+        .modifier
+        .contains(ratatui::style::Modifier::REVERSED));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.mouse_selection.is_none());
+
+    // Side-by-side: the selection stays in the NEW column it started in.
+    app.is_unified = false;
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let (col, row) = find_on_screen(terminal.backend().buffer(), "bravo charlie");
+    let at = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(at(MouseEventKind::Down(MouseButton::Left), col, row));
+    app.handle_mouse(at(MouseEventKind::Drag(MouseButton::Left), col + 4, row));
+    app.handle_mouse(at(MouseEventKind::Up(MouseButton::Left), col + 4, row));
+    assert_eq!(app.mouse_selection_text().as_deref(), Some("bravo"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+fn find_on_screen(buffer: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
+    let n = needle.chars().count();
+    (0..buffer.area.height)
+        .find_map(|y| {
+            let cells: Vec<&str> = (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            (0..cells.len().saturating_sub(n))
+                .find(|&x| cells[x..x + n].concat() == needle)
+                .map(|x| (x as u16, y))
+        })
+        .expect("text rendered on screen")
+}
+
+#[test]
+fn builtin_picker_feeds_the_fzf_result_handlers() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::ui::app::{App, AppMode, Focus, FzfRequest};
+    let dir = std::env::temp_dir().join(format!("diffv_builtin_picker_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Picker Tester"]);
+    git(&["config", "user.email", "picker@example.com"]);
+    fs::write(dir.join("alpha.txt"), "one\n").unwrap();
+    fs::write(dir.join("beta.txt"), "two\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+    fs::write(dir.join("alpha.txt"), "one\nalpha_marker\n").unwrap();
+    fs::write(dir.join("beta.txt"), "two\nbeta_marker\n").unwrap();
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        true,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    let type_text = |app: &mut App, text: &str| {
+        for c in text.chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+    };
+
+    // Files: filter, pick, and land on the chosen file.
+    app.open_builtin_picker(FzfRequest::Files, true);
+    assert_eq!(app.picker.as_ref().unwrap().matches.len(), 2);
+    type_text(&mut app, "beta");
+    assert_eq!(app.picker.as_ref().unwrap().matches.len(), 1);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.picker.is_none());
+    assert_eq!(app.current_file().unwrap().display_path(), "beta.txt");
+
+    // The popup renders on top of the UI.
+    app.open_builtin_picker(FzfRequest::Files, true);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("Find File"));
+    // Esc cancels without moving.
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.picker.is_none());
+    assert_eq!(app.current_file().unwrap().display_path(), "beta.txt");
+
+    // Text: matches line content and jumps to the file + line.
+    app.focus = Focus::FileTree;
+    app.open_builtin_picker(FzfRequest::Text, true);
+    type_text(&mut app, "alpha_mark");
+    assert_eq!(app.picker.as_ref().unwrap().matches.len(), 1);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.current_file().unwrap().display_path(), "alpha.txt");
+    assert_eq!(app.focus, Focus::DiffView);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn mouse_wheel_scrolls_the_view_and_drags_the_cursor_only_at_edges() {
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+    use diffv::ui::app::{App, AppMode};
+    let dir = std::env::temp_dir().join(format!("diffv_wheel_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Wheel Tester"]);
+    git(&["config", "user.email", "wheel@example.com"]);
+    let long: String = (0..200).map(|i| format!("line {}\n", i)).collect();
+    fs::write(dir.join("a00.txt"), &long).unwrap();
+    for i in 1..40 {
+        fs::write(dir.join(format!("a{:02}.txt", i)), "x\n").unwrap();
+    }
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+    fs::write(dir.join("a00.txt"), long.replace("line", "row")).unwrap();
+    for i in 1..40 {
+        fs::write(dir.join(format!("a{:02}.txt", i)), "y\n").unwrap();
+    }
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        true,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let wheel = |app: &mut App, kind, column| {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+
+    // Diff pane: the view moves, the cursor stays while it is still visible.
+    assert_eq!(app.current_file().unwrap().display_path(), "a00.txt");
+    app.selected_row = 10;
+    wheel(&mut app, MouseEventKind::ScrollDown, 100);
+    assert_eq!((app.scroll_y, app.selected_row), (3, 10));
+    // Scrolling past it drags the cursor along, keeping a 2-line margin.
+    for _ in 0..4 {
+        wheel(&mut app, MouseEventKind::ScrollDown, 100);
+    }
+    assert_eq!((app.scroll_y, app.selected_row), (15, 17));
+    wheel(&mut app, MouseEventKind::ScrollUp, 100);
+    assert_eq!((app.scroll_y, app.selected_row), (12, 17));
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    assert_eq!(app.scroll_y, 12, "render keeps the wheel-scrolled view");
+    assert!(app.diff_row_map.contains(&app.selected_row));
+
+    // Drawer: the list scrolls, the selected file only changes at the edge.
+    let first = app.selected_tree_idx;
+    wheel(&mut app, MouseEventKind::ScrollDown, 5);
+    assert_eq!(app.file_tree_scroll, 3);
+    assert_eq!(app.selected_tree_idx, first.max(5));
+    assert_eq!(app.selected_row, 0, "a new file starts at the top");
+    wheel(&mut app, MouseEventKind::ScrollUp, 5);
+    assert_eq!(app.file_tree_scroll, 0);
+    assert_eq!(app.selected_tree_idx, first.max(5));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn background_update_popup_outlives_a_regular_toast() {
+    use diffv::ui::app::{App, AppMode};
+    let dir = std::env::temp_dir().join(format!("diffv_update_notice_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("a.txt"), "a\n").unwrap();
+    fs::write(dir.join("b.txt"), "b\n").unwrap();
+    let mut app = App::new(
+        AppMode::FilePair(dir.join("a.txt"), dir.join("b.txt")),
+        diffv::config::Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    app.language = diffv::core::models::Language::En;
+    let event = diffv::update::UpdateEvent::Installed(diffv::update::BuildInfo {
+        channel: diffv::config::UpdateChannel::Stable,
+        tag: "v9.9.9".into(),
+        commit: None,
+        built_at: None,
+    });
+    app.show_update_event(event.clone());
+    std::thread::sleep(diffv::ui::components::toast::TOAST_DURATION);
+    app.expire_notification();
+    assert_eq!(app.update_popup, Some(event), "stays until dismissed");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ctrl_g_inside_the_search_switches_engine_and_keeps_the_query() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::config::SearchEngine;
+    use diffv::ui::app::{App, AppMode, FzfQuery, FzfRequest};
+    let dir = std::env::temp_dir().join(format!("diffv_engine_switch_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    // Engine changes are persisted; keep them out of the real user config.
+    let _env = IsolatedConfig::new(&dir);
+    let config_path = diffv::config::Config::config_path().expect("config dir resolves");
+    assert!(
+        config_path.starts_with(&dir),
+        "config must resolve inside the test dir, got {}",
+        config_path.display()
+    );
+    fs::write(dir.join("a.txt"), "a\n").unwrap();
+    fs::write(dir.join("b.txt"), "b\n").unwrap();
+    let mut app = App::new(
+        AppMode::FilePair(dir.join("a.txt"), dir.join("b.txt")),
+        diffv::config::Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    app.language = diffv::core::models::Language::En;
+    let items = vec![
+        "src/main.rs".to_string(),
+        "src/app.rs".to_string(),
+        "README.md".to_string(),
+    ];
+
+    // fzf -> Ctrl+G: the built-in picker opens with the fzf query already applied.
+    app.switch_search_to_builtin(
+        FzfRequest::Files,
+        FzfQuery {
+            items: items.clone(),
+            header: "Files".into(),
+            files: Vec::new(),
+        },
+        "app",
+    );
+    let picker = app.picker.as_ref().expect("built-in picker open");
+    assert_eq!(picker.query, "app");
+    assert_eq!(
+        picker.selected_item().map(String::as_str),
+        Some("src/app.rs")
+    );
+    assert_eq!(picker.items, items, "same candidates as fzf had");
+    assert_eq!(app.config.search.engine, SearchEngine::Builtin);
+    assert!(app
+        .notification
+        .as_ref()
+        .unwrap()
+        .0
+        .contains("built-in picker"));
+    // Read where the app itself saves (platform-specific), never a hardcoded path.
+    let saved = fs::read_to_string(&config_path).unwrap();
+    assert!(saved.contains("engine = \"builtin\""));
+
+    // Built-in -> Ctrl+G with no fzf on PATH: say so and keep the picker and query.
+    if !diffv::integration::fzf::is_fzf_available() {
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert_eq!(app.picker.as_ref().map(|p| p.query.as_str()), Some("app"));
+        assert!(app.fzf_request.is_none() && app.fzf_carry.is_none());
+        assert!(app
+            .notification
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("fzf not found"));
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn builtin_picker_shows_a_preview_that_follows_the_cursor() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::ui::app::{App, AppMode, FzfRequest};
+    let dir = std::env::temp_dir().join(format!("diffv_picker_preview_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Preview Tester"]);
+    git(&["config", "user.email", "preview@example.com"]);
+    fs::write(dir.join("alpha.txt"), "one\n").unwrap();
+    fs::write(dir.join("beta.txt"), "two\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "init"]);
+    fs::write(dir.join("alpha.txt"), "one\nalpha_preview_line\n").unwrap();
+    fs::write(dir.join("beta.txt"), "two\nbeta_preview_line\n").unwrap();
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        true,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    app.language = diffv::core::models::Language::En;
+    let screen = |app: &mut App, width: u16| {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>()
+    };
+
+    // Files: the preview shows the diff of the file under the cursor.
+    app.open_builtin_picker(FzfRequest::Files, false);
+    let text = screen(&mut app, 140);
+    assert!(text.contains("alpha_preview_line"), "preview of alpha.txt");
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let text = screen(&mut app, 140);
+    assert!(text.contains("beta_preview_line") && !text.contains("alpha_preview_line"));
+
+    // Small terminal: list only.
+    let narrow = screen(&mut app, 60);
+    assert!(!narrow.contains("beta_preview_line"));
+
+    // Ctrl+T hides it, and the choice sticks for the next picker.
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(!screen(&mut app, 140).contains("beta_preview_line"));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.open_builtin_picker(FzfRequest::Text, false);
+    assert!(!app.picker.as_ref().unwrap().show_preview);
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+
+    // Text: context around the matched line, query highlighted in place.
+    for c in "beta_prev".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let text = screen(&mut app, 140);
+    assert!(
+        text.matches("beta_preview_line").count() >= 2,
+        "list + preview"
+    );
+    assert!(text.contains("two"), "context line before the match");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn wrapped_changes_header_keeps_clicks_and_list_aligned() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use diffv::ui::app::{App, AppMode};
+    use diffv::ui::components::file_tree::FileViewMode;
+    let dir = std::env::temp_dir().join(format!("diffv_wrapped_header_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Header Tester"]);
+    git(&["config", "user.email", "header@example.com"]);
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        fs::write(dir.join(name), "one\n").unwrap();
+    }
+    git(&["add", "."]);
+    git(&["commit", "-m", "base"]);
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        fs::write(dir.join(name), "two\n").unwrap();
+    }
+    let provider = GitProvider::discover(Some(&dir)).unwrap();
+    let mut app = App::new(
+        AppMode::Git {
+            target_ref: None,
+            git_provider: provider,
+        },
+        diffv::config::Config::default(),
+        false,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    app.language = diffv::core::models::Language::En;
+    app.file_view_mode = FileViewMode::Flat;
+    app.file_tree_width = 28;
+    app.update_filter();
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let row = |terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, y: u16| -> String {
+        (1..27)
+            .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+            .collect()
+    };
+    // Terminal rows: 3 = first drawer row (header row 1), 4 = wrapped header row 2.
+    assert!(row(&terminal, 3).contains("Mode:") && row(&terminal, 3).contains("[t]"));
+    assert!(row(&terminal, 4).contains("(3 files)"));
+    assert!(row(&terminal, 5).contains("a.txt"));
+
+    let click = |app: &mut App, y: u16| {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+    };
+    // Row 4 is still header: it toggles the mode instead of selecting a file.
+    click(&mut app, 4);
+    assert_eq!(app.file_view_mode, FileViewMode::Tree);
+    click(&mut app, 4);
+    assert_eq!(app.file_view_mode, FileViewMode::Flat);
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    // The list starts on row 5 and each row maps to the file drawn there.
+    click(&mut app, 5);
+    assert_eq!(app.selected_filtered_idx, 0);
+    click(&mut app, 7);
+    assert_eq!(app.selected_filtered_idx, 2);
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    // The selection overlay is drawn on the row of the selected file.
+    assert!(row(&terminal, 7).contains("c.txt"));
+
+    let _ = fs::remove_dir_all(&dir);
 }

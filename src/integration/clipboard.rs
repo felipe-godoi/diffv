@@ -72,3 +72,9 @@ pub fn copy_file_diff_as_markdown(file_path: &Path, hunks: &[Hunk]) -> anyhow::R
     clipboard.set_text(text)?;
     Ok(())
 }
+
+pub fn copy_text(text: &str) -> anyhow::Result<()> {
+    let mut clipboard = Clipboard::new()?;
+    clipboard.set_text(text)?;
+    Ok(())
+}

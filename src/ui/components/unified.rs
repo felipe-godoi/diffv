@@ -8,6 +8,7 @@ use std::path::Path;
 use crate::core::models::{DiffKind, FileDiff};
 use crate::core::syntax::SyntaxHighlighter;
 use crate::ui::components::style::diff_pane_block;
+use crate::ui::selection::{layout_line, SelectionPane, TextMap, TextRow};
 use crate::ui::theme::Theme;
 
 pub fn render_unified(
@@ -19,6 +20,7 @@ pub fn render_unified(
     wrap: bool,
     wrap_skip: usize,
     row_map: &mut Vec<usize>,
+    text_map: &mut TextMap,
     selected_row: usize,
     visual_range: Option<(usize, usize)>,
     is_focused: bool,
@@ -99,11 +101,13 @@ pub fn render_unified(
     let end_idx = scroll_y + max_lines;
 
     let mut rendered_lines = Vec::with_capacity(max_lines);
+    let mut contents: Vec<Option<&str>> = Vec::with_capacity(max_lines);
     let mut current_idx = 0usize;
 
     'outer: for hunk in &file.hunks {
         if current_idx >= start_idx && current_idx < end_idx {
             row_map.push(current_idx);
+            contents.push(None);
             rendered_lines.push(Line::from(vec![Span::styled(
                 format!(" 󰦨 @@ {} @@ ", hunk.header),
                 Style::default()
@@ -125,6 +129,7 @@ pub fn render_unified(
                     .unwrap_or(false);
 
                 row_map.push(current_idx);
+                contents.push(Some(&line.content));
                 rendered_lines.push(render_unified_line(
                     line.old_line_no,
                     line.new_line_no,
@@ -146,8 +151,16 @@ pub fn render_unified(
 
     let logical_rows = std::mem::take(row_map);
     let mut output = Vec::new();
-    for (line, idx) in rendered_lines.into_iter().zip(logical_rows) {
+    let mut text_rows = Vec::new();
+    for ((line, idx), content) in rendered_lines.into_iter().zip(logical_rows).zip(contents) {
         let gutter = if line.spans.len() >= 3 { 3 } else { 0 };
+        let gutter_width: usize = line.spans.iter().take(gutter).map(Span::width).sum();
+        let available = (inner_area.width as usize).saturating_sub(gutter_width);
+        let layout = match content {
+            Some(text) if wrap => layout_line(text, Some(available), 0),
+            Some(text) => layout_line(text, None, scroll_x),
+            None => Vec::new(),
+        };
         let lines = if wrap {
             crate::ui::components::horizontal::wrap_line(line, gutter, inner_area.width as usize)
         } else {
@@ -161,11 +174,27 @@ pub fn render_unified(
             0
         };
         row_map.extend(std::iter::repeat_n(idx, lines.len() - skip));
+        for i in skip..lines.len() {
+            let (start, end, mut cells) = layout.get(i).cloned().unwrap_or_default();
+            cells.truncate(available);
+            text_rows.push(TextRow {
+                y: inner_area.y + (output.len() + i - skip) as u16,
+                x: inner_area.x + gutter_width as u16,
+                line: idx,
+                start,
+                end,
+                cells,
+            });
+        }
         output.extend(lines.into_iter().skip(skip));
         if output.len() >= max_lines {
             break;
         }
     }
+    text_rows.retain(|r| r.y < inner_area.bottom());
+    text_map
+        .panes
+        .push((SelectionPane::Unified, inner_area, text_rows));
     let paragraph = Paragraph::new(output);
     frame.render_widget(paragraph, inner_area);
 }
