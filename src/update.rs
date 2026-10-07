@@ -326,10 +326,18 @@ fn download_and_install(
     if lock.try_lock_exclusive().is_err() {
         return Err(UpdateFailure::Locked);
     }
-    let staging = tempfile::tempdir_in(parent).map_err(|err| io_failure(err, parent))?;
-    let file = staging.path().join("diffv");
-    download(&file)?;
-    install_verified(&file, executable, digest)
+    let result = tempfile::tempdir_in(parent)
+        .map_err(|err| io_failure(err, parent))
+        .and_then(|staging| {
+            let file = staging.path().join("diffv");
+            download(&file)?;
+            install_verified(&file, executable, digest)
+        });
+    // Unlock explicitly: closing our fd is not enough while a child spawned concurrently by
+    // another thread still holds an inherited copy (until its exec closes it), so a plain
+    // drop can leave the lock held for a moment and the next updater would see `Locked`.
+    let _ = lock.unlock();
+    result
 }
 
 use crate::config::UpdateChannel;
@@ -643,6 +651,33 @@ mod tests {
             Err(UpdateFailure::Locked)
         );
         assert_eq!(fs::read(&executable).unwrap(), b"old");
+    }
+    #[test]
+    fn update_lock_is_released_while_other_threads_spawn_processes() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        // Children spawned by other threads briefly inherit our lock fd; before the explicit
+        // unlock this made back-to-back updates in one test fail with `Locked`.
+        let stop = Arc::new(AtomicBool::new(false));
+        let spawner = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = exit_with(0).status();
+                }
+            })
+        };
+        let (_dir, executable) = installed_binary(b"old");
+        let results: Vec<_> = (0..300)
+            .map(|_| {
+                download_and_install(&executable, &sha(b"new"), |file| {
+                    fs::write(file, b"new").map_err(|e| UpdateFailure::Other(e.to_string()))
+                })
+            })
+            .collect();
+        stop.store(true, Ordering::Relaxed);
+        spawner.join().unwrap();
+        assert!(results.iter().all(Result::is_ok), "{:?}", results);
     }
     #[cfg(unix)]
     #[test]
