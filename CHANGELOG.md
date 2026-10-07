@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.6.0](https://github.com/felipe-godoi/diffv/compare/v0.5.0...v0.6.0) (2026-10-07)
+
+
+### Features
+
+* **git:** stage_path / unstage_path for a file or a whole directory ([56cdc21](https://github.com/felipe-godoi/diffv/commit/56cdc21bbeda631d458932ef5e0697d0b2e4ce52))
+* **install:** offer fzf as an optional, unchecked-by-default extra ([549a445](https://github.com/felipe-godoi/diffv/commit/549a445649fc8bec9c89f13123f41419452614d7))
+* melhorias anotadas — mouse, scroll, loading, fzf, editor e tagline ([6c2bb00](https://github.com/felipe-godoi/diffv/commit/6c2bb00a7f40c0ee4e40943c83c9e6c6291e806d))
+* **search:** built-in picker fallback when fzf is not installed ([400f5f0](https://github.com/felipe-godoi/diffv/commit/400f5f012f20962584cb55590ad4de9200f9079f))
+* **search:** Ctrl+G dentro do filtro, preview no picker interno e prompt do fzf no instalador ([3d0219e](https://github.com/felipe-godoi/diffv/commit/3d0219e27eb213440152b78772a47e47810fdcf9))
+* **search:** Ctrl+G switches between fzf and the built-in picker ([e739727](https://github.com/felipe-godoi/diffv/commit/e7397270160dd15987e57da4a047176a65ba3408))
+* **search:** preview pane in the built-in picker ([35b2963](https://github.com/felipe-godoi/diffv/commit/35b2963049ab3636f5e0fb499f4b2348f356f836))
+* **search:** switch engine with Ctrl+G from inside the filter, carrying the query ([e06e74d](https://github.com/felipe-godoi/diffv/commit/e06e74dc244fedb159ea2514126e7be3188883bb))
+* **ui:** mouse wheel scrolls the view and drags the cursor only at the edges ([d150ebc](https://github.com/felipe-godoi/diffv/commit/d150ebc8e63cfff7ea1015e0895d1f31790b8f3d))
+* **ui:** popup avisando o resultado da atualização na inicialização ([2ff0797](https://github.com/felipe-godoi/diffv/commit/2ff0797234821fbb326e9dcfb8b475bed23ab8ef))
+* **ui:** s / u in the Changes list stage the selected file, folder or section ([4a894af](https://github.com/felipe-godoi/diffv/commit/4a894af2ebaf5efcf81e6fdebcea6e39ad412b8b))
+* **ui:** s/u no painel de Changes agem no arquivo, pasta ou seção inteiros ([724d55f](https://github.com/felipe-godoi/diffv/commit/724d55fde73ee42f107d9ccff514373de867014e))
+* **ui:** select and copy diff text with the mouse ([7016f39](https://github.com/felipe-godoi/diffv/commit/7016f39415344e7eb2fd307aa606590609c22ee2))
+
+
+### Bug Fixes
+
+* **ci:** tag e release rolantes (nightly/beta) voltam a acompanhar o commit do push ([8732b2a](https://github.com/felipe-godoi/diffv/commit/8732b2a00ac6dbf93971c6d711f6f1e9d4b63315))
+* **editor:** resolve $GIT_EDITOR/$VISUAL/$EDITOR, then the system default, then vi/nano ([8c3c846](https://github.com/felipe-godoi/diffv/commit/8c3c8469810431389a21323d121f679f057a916e))
+* **install:** ask about the optional fzf even when the script is piped ([c08efbd](https://github.com/felipe-godoi/diffv/commit/c08efbd7784f4eeaa78dd593cfd3dc7826d4ce3c))
+* preserve Changes file count in narrow panes ([abfc80f](https://github.com/felipe-godoi/diffv/commit/abfc80f37deec4d94f88b5bbda033155ac3a8662))
+* **search:** make the built-in picker exit keys match fzf ([398cdae](https://github.com/felipe-godoi/diffv/commit/398cdaee71dd4a1c33a275bad62fd95626faebe6))
+* **ui:** cabeçalho de Changes quebra linha antes de perder texto ([b97105d](https://github.com/felipe-godoi/diffv/commit/b97105db2e0855ef15e6c8c03d36d3e72031d86e))
+* **ui:** contagem de arquivos do painel de Changes não é mais cortada (leva o [#11](https://github.com/felipe-godoi/diffv/issues/11) para a main) ([69d60e1](https://github.com/felipe-godoi/diffv/commit/69d60e1046b7a2e6d104edb1eb61c686ec2a5234))
+* **ui:** wrap the Changes header instead of dropping its text ([734ef57](https://github.com/felipe-godoi/diffv/commit/734ef574c127832201f67af417534fa7107ba5e7))
+* **update:** libera o lock da atualização explicitamente (destrava a CI e a release) ([7a4e6a8](https://github.com/felipe-godoi/diffv/commit/7a4e6a81aa1a25c15e3b7ae4e0d42a46b18eb74d))
+* **update:** show the startup update result in a popup ([62820ca](https://github.com/felipe-godoi/diffv/commit/62820cacd3a671edbe97e5e9f3a2f990762e94eb))
+
+
+### Performance Improvements
+
+* **startup:** keep the auto-update check off the first frame ([579d5b9](https://github.com/felipe-godoi/diffv/commit/579d5b9a6580495005b005c940f04643c9a687bb))
+* **startup:** show a loading indicator while the initial diff loads ([3621471](https://github.com/felipe-godoi/diffv/commit/3621471a33f4abe0216ede2a59e6f34024616d7a))
+
 ## [0.5.0](https://github.com/felipe-godoi/diffv/compare/v0.4.0...v0.5.0) (2026-10-02)
 
 
