@@ -82,12 +82,17 @@ mod tests {
         assert!(search().is_empty());
         let first = root.path().join("projects/first");
         init(&first);
+        let first = std::fs::canonicalize(first).unwrap();
         assert_eq!(search(), vec![first.clone()]);
         let nested = first.join("nested/repo");
         let second = root.path().join("other/repo");
         init(&nested);
         init(&second);
-        let mut expected = vec![first, nested, second];
+        let mut expected = vec![
+            first,
+            std::fs::canonicalize(nested).unwrap(),
+            std::fs::canonicalize(second).unwrap(),
+        ];
         expected.sort();
         assert_eq!(search(), expected);
     }
