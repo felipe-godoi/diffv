@@ -183,7 +183,18 @@ fn run(args: Cli) -> Result<()> {
     let cwd = args.cwd.as_deref().unwrap_or(Path::new("."));
 
     // Determine App Mode
-    let mode = determine_app_mode(&args, cwd)?;
+    let directory_target = args
+        .targets
+        .first()
+        .filter(|_| args.targets.len() == 1)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir());
+    let cwd = directory_target.as_deref().unwrap_or(cwd);
+    let mut effective_args = args.clone();
+    if directory_target.is_some() {
+        effective_args.targets.clear();
+    }
+    let mode = determine_app_mode(&effective_args, cwd, directory_target.is_none());
 
     // Start TUI
     enable_raw_mode()?;
@@ -192,7 +203,34 @@ fn run(args: Cli) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let app_result = run_app(&mut terminal, mode, config, &args, cwd, update_channel);
+    let app_result = (|| {
+        let mode = match mode {
+            Ok(mode) => mode,
+            Err(err) => {
+                if GitProvider::discover(Some(cwd)).is_ok() {
+                    return Err(err);
+                }
+                let Some(provider) = choose_repository(&mut terminal, cwd)? else {
+                    return Ok(());
+                };
+                AppMode::Git {
+                    target_ref: effective_args
+                        .compare
+                        .clone()
+                        .or_else(|| effective_args.targets.first().cloned()),
+                    git_provider: provider,
+                }
+            }
+        };
+        run_app(
+            &mut terminal,
+            mode,
+            config,
+            &effective_args,
+            cwd,
+            update_channel,
+        )
+    })();
 
     // Teardown TUI
     disable_raw_mode()?;
@@ -204,6 +242,86 @@ fn run(args: Cli) -> Result<()> {
     terminal.show_cursor()?;
 
     app_result
+}
+
+fn choose_repository(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    root: &Path,
+) -> Result<Option<GitProvider>> {
+    use diffv::git::discovery::search_repositories;
+    use ratatui::layout::{Constraint, Layout};
+    use ratatui::style::{Modifier, Style};
+    use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+    use std::sync::atomic::AtomicUsize;
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let progress = Arc::new(AtomicUsize::new(0));
+    let worker_cancel = cancelled.clone();
+    let worker_progress = progress.clone();
+    let root = root.to_path_buf();
+    let worker = thread::spawn(move || {
+        search_repositories(&root, &worker_cancel, |count| {
+            worker_progress.store(count, Ordering::Relaxed);
+        })
+    });
+    let mut worker = Some(worker);
+    let mut result = None;
+    let mut selected = 0usize;
+    let outcome = (|| loop {
+        if worker.as_ref().is_some_and(|w| w.is_finished()) {
+            result = Some(
+                worker
+                    .take()
+                    .unwrap()
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Repository search panicked"))?,
+            );
+        }
+        terminal.draw(|frame| {
+            let [header, body] = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(frame.area());
+            let message = match &result {
+                None => format!("Searching repositories… {} directories scanned · Esc/q cancel", progress.load(Ordering::Relaxed)),
+                Some(found) => format!("Choose repository · ↑/↓ or j/k · Enter open · Esc/q cancel · {} unreadable directories skipped", found.unreadable_dirs),
+            };
+            frame.render_widget(Paragraph::new(message).block(Block::default().borders(Borders::ALL)), header);
+            if let Some(found) = &result {
+                if found.repositories.is_empty() {
+                    frame.render_widget(Paragraph::new("No Git repositories found. Hidden folders, node_modules, target and symlinks are excluded. Press Esc/q to close."), body);
+                } else {
+                    let items: Vec<_> = found.repositories.iter().map(|p| ListItem::new(p.display().to_string())).collect();
+                    let mut state = ListState::default().with_selected(Some(selected));
+                    frame.render_stateful_widget(List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED)), body, &mut state);
+                }
+            }
+        })?;
+        if !event::poll(Duration::from_millis(80))? {
+            continue;
+        }
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                KeyCode::Esc | KeyCode::Char('q' | 'Q') => return Ok(None),
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return Ok(None)
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if let Some(found) = &result {
+                        selected = (selected + 1).min(found.repositories.len().saturating_sub(1));
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
+                KeyCode::Enter => {
+                    if let Some(path) = result.as_ref().and_then(|r| r.repositories.get(selected)) {
+                        return GitProvider::discover(Some(path)).map(Some);
+                    }
+                }
+                _ => {}
+            },
+            Event::Resize(_, _) => terminal.autoresize()?,
+            _ => {}
+        }
+    })();
+    cancelled.store(true, Ordering::Relaxed);
+    outcome
 }
 
 /// Collects the initial git/diff state on a worker thread while drawing a loading
@@ -271,9 +389,9 @@ fn load_app(
     Ok(Some((app, queued_keys)))
 }
 
-fn determine_app_mode(args: &Cli, cwd: &Path) -> Result<AppMode> {
+fn determine_app_mode(args: &Cli, cwd: &Path, allow_stdin: bool) -> Result<AppMode> {
     // Check if stdin is piped or requested as "-"
-    if (!io::stdin().is_terminal() && args.targets.is_empty())
+    if (allow_stdin && !io::stdin().is_terminal() && args.targets.is_empty())
         || (args.targets.len() == 1 && args.targets[0] == "-")
     {
         return Ok(AppMode::Stdin);
