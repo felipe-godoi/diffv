@@ -738,5 +738,9 @@ fn run_app(
         }
     }
 
+    if let Err(err) = app.save_view_preferences() {
+        eprintln!("diffv: could not save view preferences: {err:#}");
+    }
+
     Ok(())
 }

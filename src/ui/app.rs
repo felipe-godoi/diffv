@@ -259,6 +259,7 @@ impl App {
             _ => (Vec::new(), Vec::new()),
         };
 
+        let wrap_lines = config.ui.wrap_lines;
         let mut app = Self {
             mode,
             files: Vec::new(),
@@ -290,7 +291,7 @@ impl App {
             column_side: ColumnSide::Right,
             scroll_x: [0, 0],
             diff_width: 0,
-            wrap_lines: true,
+            wrap_lines,
             wrap_skip: 0,
             diff_row_map: Vec::new(),
             file_view_mode: FileViewMode::Tree, // Folders ("Pastas") is default!
@@ -466,6 +467,27 @@ impl App {
             AppMode::Git { target_ref, .. } => target_ref.as_deref(),
             _ => None,
         }
+    }
+
+    /// Save the active view, including a CLI override, on normal shutdown.
+    pub fn save_view_preferences_to_path(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        self.config.ui.wrap_lines = self.wrap_lines;
+        self.config.ui.default_view = if self.is_unified {
+            "unified"
+        } else {
+            "side-by-side"
+        }
+        .to_string();
+        self.config.save_to_path(path)
+    }
+
+    pub fn save_view_preferences(&mut self) -> anyhow::Result<()> {
+        let path = Config::config_path()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine user config directory"))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        self.save_view_preferences_to_path(&path)
     }
 
     pub fn save_settings(&mut self) {
