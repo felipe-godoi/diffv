@@ -195,12 +195,15 @@ tmux source-file ~/.tmux.conf
 
 ## ⚙️ Configuration
 
-Configuration is loaded from `~/.config/diffv/config.toml`. A sample configuration file:
+Configuration is loaded from the user config directory (`dirs::config_dir()`): `$XDG_CONFIG_HOME/diffv/config.toml`, or `~/.config/diffv/config.toml` on Linux; `~/Library/Application Support/diffv/config.toml` on macOS; and the roaming application data directory on Windows. Missing or invalid files fall back to the current defaults.
+
+Line wrapping (`r`) and the active diff view (`m`, including `--unified`) are saved on normal exit and restored next session as `[ui] wrap_lines` and `default_view`. The defaults remain wrapping enabled and side-by-side view. Save failures are reported without preventing exit. Other settings keep their existing save behavior. A sample configuration file:
 
 ```toml
 [ui]
 theme = "vscode-dark"          # vscode-dark, tokyonight, catppuccin, gruvbox
-default_view = "side-by-side"  # side-by-side or unified
+default_view = "side-by-side"  # side-by-side or unified; last active view
+wrap_lines = true              # last active line-wrapping preference
 show_line_numbers = true
 syntax_highlighting = true
 overview_ruler = true
