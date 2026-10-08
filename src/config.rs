@@ -80,6 +80,8 @@ pub struct UiConfig {
     #[serde(default = "default_view")]
     pub default_view: String,
     #[serde(default = "default_true")]
+    pub wrap_lines: bool,
+    #[serde(default = "default_true")]
     pub show_line_numbers: bool,
     #[serde(default = "default_true")]
     pub syntax_highlighting: bool,
@@ -273,6 +275,7 @@ impl Default for UiConfig {
         Self {
             theme: default_theme(),
             default_view: default_view(),
+            wrap_lines: default_true(),
             show_line_numbers: default_true(),
             syntax_highlighting: default_true(),
             overview_ruler: default_true(),
@@ -331,7 +334,15 @@ impl Config {
         let Some(path) = Self::config_path().filter(|p| p.exists()) else {
             return Config::default();
         };
-        Self::load_from_path(&path).unwrap_or_else(|err| {
+        Self::load_or_default_from_path(&path)
+    }
+
+    /// Uses the current defaults when the file is missing or unreadable/invalid.
+    pub fn load_or_default_from_path(path: &Path) -> Self {
+        if !path.exists() {
+            return Self::default();
+        }
+        Self::load_from_path(path).unwrap_or_else(|err| {
             eprintln!(
                 "diffv: ignoring invalid config {}: {:#}",
                 path.display(),
@@ -368,6 +379,57 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_view_defaults(cfg: &Config) {
+        assert!(cfg.ui.wrap_lines);
+        assert_eq!(cfg.ui.default_view, "side-by-side");
+    }
+
+    #[test]
+    fn view_preferences_defaults_cover_old_configs() {
+        assert_view_defaults(&Config::default());
+        assert_view_defaults(&toml::from_str::<Config>("").unwrap());
+        assert_view_defaults(&toml::from_str::<Config>("[ui]\ntheme = 'gruvbox'").unwrap());
+    }
+
+    #[test]
+    fn view_preferences_missing_file_uses_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.toml");
+        assert_view_defaults(&Config::load_or_default_from_path(&path));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn view_preferences_invalid_file_uses_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for invalid in [
+            "[ui",
+            "[ui]\nwrap_lines = 'invalid'",
+            "[ui]\ndefault_view = 1",
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(Config::load_from_path(&path).is_err());
+            assert_view_defaults(&Config::load_or_default_from_path(&path));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
+        }
+    }
+
+    #[test]
+    fn view_preferences_read_write_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut cfg = Config::default();
+        cfg.ui.wrap_lines = false;
+        cfg.ui.default_view = "unified".into();
+        cfg.ui.theme = "gruvbox".into();
+        cfg.save_to_path(&path).unwrap();
+        let loaded = Config::load_from_path(&path).unwrap();
+        assert!(!loaded.ui.wrap_lines);
+        assert_eq!(loaded.ui.default_view, "unified");
+        assert_eq!(loaded.ui.theme, "gruvbox");
+    }
 
     fn env(git_editor: Option<&str>, visual: Option<&str>, editor: Option<&str>) -> EditorEnv {
         EditorEnv {
