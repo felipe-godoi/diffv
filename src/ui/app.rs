@@ -259,6 +259,7 @@ impl App {
             _ => (Vec::new(), Vec::new()),
         };
 
+        let wrap_lines = config.ui.wrap_lines;
         let mut app = Self {
             mode,
             files: Vec::new(),
@@ -290,7 +291,7 @@ impl App {
             column_side: ColumnSide::Right,
             scroll_x: [0, 0],
             diff_width: 0,
-            wrap_lines: true,
+            wrap_lines,
             wrap_skip: 0,
             diff_row_map: Vec::new(),
             file_view_mode: FileViewMode::Tree, // Folders ("Pastas") is default!
@@ -466,6 +467,27 @@ impl App {
             AppMode::Git { target_ref, .. } => target_ref.as_deref(),
             _ => None,
         }
+    }
+
+    /// Save the active view, including a CLI override, on normal shutdown.
+    pub fn save_view_preferences_to_path(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        self.config.ui.wrap_lines = self.wrap_lines;
+        self.config.ui.default_view = if self.is_unified {
+            "unified"
+        } else {
+            "side-by-side"
+        }
+        .to_string();
+        self.config.save_to_path(path)
+    }
+
+    pub fn save_view_preferences(&mut self) -> anyhow::Result<()> {
+        let path = Config::config_path()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine user config directory"))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        self.save_view_preferences_to_path(&path)
     }
 
     pub fn save_settings(&mut self) {
@@ -1786,6 +1808,63 @@ impl App {
         }
     }
 
+    pub fn set_folder_collapse(&mut self, collapse: bool, selected_only: bool) {
+        if self.focus != Focus::FileTree || self.file_view_mode != FileViewMode::Tree {
+            return;
+        }
+        let selected = self
+            .tree_items
+            .get(self.selected_tree_idx)
+            .map(|i| i.path.clone());
+        let scope = if selected_only {
+            let Some(item) = self
+                .tree_items
+                .get(self.selected_tree_idx)
+                .filter(|i| i.is_dir)
+            else {
+                return;
+            };
+            Some(item.path.clone())
+        } else {
+            None
+        };
+        // Build an expanded tree so hidden descendants participate too. Include
+        // filtered-out files to make the whole-tree action truly global.
+        let indices: Vec<_> = (0..self.files.len()).collect();
+        let expanded = build_tree_items(
+            &self.files,
+            &indices,
+            &HashSet::new(),
+            FileViewMode::Tree,
+            self.language,
+        );
+        for item in expanded
+            .into_iter()
+            .filter(|i| i.is_dir && scope.as_ref().is_none_or(|p| i.path.starts_with(p)))
+        {
+            if collapse {
+                self.collapsed_dirs.insert(item.path);
+            } else {
+                self.collapsed_dirs.remove(&item.path);
+            }
+        }
+        self.update_filter();
+        if let Some(path) = selected {
+            // Preserve the selected folder, or its nearest visible ancestor.
+            if let Some(idx) = self
+                .tree_items
+                .iter()
+                .enumerate()
+                .filter(|(_, i)| i.path == path || (i.is_dir && path.starts_with(&i.path)))
+                .max_by_key(|(_, i)| i.path.components().count())
+                .map(|(idx, _)| idx)
+            {
+                self.selected_tree_idx = idx;
+            }
+        }
+        self.file_tree_scroll = self.file_tree_scroll.min(self.selected_tree_idx);
+    }
+
     pub fn return_to_changes(&mut self) {
         self.show_history = false;
         self.active_commit_info = None;
@@ -2020,6 +2099,10 @@ impl App {
                     _ => {}
                 },
                 'z' => match key.code {
+                    KeyCode::Char(c @ ('M' | 'R' | 'c' | 'o')) => {
+                        self.set_folder_collapse(matches!(c, 'M' | 'c'), matches!(c, 'c' | 'o'));
+                        return;
+                    }
                     KeyCode::Char('z') => {
                         // zz: center cursor in viewport
                         let vp = self.viewport_height.saturating_sub(3).max(1);
@@ -2580,7 +2663,7 @@ impl App {
                 }
             }
             KeyCode::Char('z') => {
-                if self.focus == Focus::DiffView {
+                if self.focus == Focus::DiffView || self.file_view_mode == FileViewMode::Tree {
                     self.pending_key = Some('z');
                     self.pending_key_time = Some(Instant::now());
                 }
@@ -4991,4 +5074,128 @@ fn diff_text_lines(files: &[&FileDiff]) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+    use crate::core::models::{ChangeStats, FileStatus, StageStatus};
+    use std::path::Path;
+
+    fn app() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old");
+        let new = dir.path().join("new");
+        std::fs::write(&old, "a\n").unwrap();
+        std::fs::write(&new, "b\n").unwrap();
+        let mut app = App::new(
+            AppMode::FilePair(old, new),
+            Config::default(),
+            false,
+            false,
+            false,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+        app.files = ["src/a", "src/ui/widgets/b", "srcfoo/sub/c"]
+            .into_iter()
+            .map(|path| FileDiff {
+                old_path: None,
+                new_path: path.into(),
+                status: FileStatus::Modified,
+                stage_status: StageStatus::Unstaged,
+                section: DiffSection::Changes,
+                stats: ChangeStats::default(),
+                hunks: vec![],
+                aligned_rows: vec![],
+                is_binary: false,
+            })
+            .collect();
+        app.focus = Focus::FileTree;
+        app.file_view_mode = FileViewMode::Tree;
+        app.update_filter();
+        (dir, app)
+    }
+
+    fn sequence(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn whole_tree_collapses_hidden_descendants_and_expands_all() {
+        let (_dir, mut app) = app();
+        app.filter_query = "src/ui".into();
+        app.update_filter();
+        sequence(&mut app, 'M');
+        assert_eq!(app.collapsed_dirs.len(), 5);
+        assert!(app
+            .collapsed_dirs
+            .contains(&PathBuf::from("src/ui/widgets")));
+        sequence(&mut app, 'R');
+        assert!(app.collapsed_dirs.is_empty());
+    }
+
+    #[test]
+    fn selected_subtree_is_recursive_and_preserves_siblings_and_selection() {
+        let (_dir, mut app) = app();
+        app.collapsed_dirs.insert("srcfoo/sub".into());
+        app.update_filter();
+        app.selected_tree_idx = app
+            .tree_items
+            .iter()
+            .position(|i| i.path == Path::new("src"))
+            .unwrap();
+        sequence(&mut app, 'c');
+        for path in ["src", "src/ui", "src/ui/widgets", "srcfoo/sub"] {
+            assert!(app.collapsed_dirs.contains(&PathBuf::from(path)));
+        }
+        assert_eq!(app.tree_items[app.selected_tree_idx].path, Path::new("src"));
+        sequence(&mut app, 'o');
+        assert_eq!(
+            app.collapsed_dirs,
+            HashSet::from([PathBuf::from("srcfoo/sub")])
+        );
+    }
+
+    #[test]
+    fn selected_folder_in_a_section_does_not_change_other_section() {
+        let (_dir, mut app) = app();
+        let mut staged = app.files[1].clone();
+        staged.section = DiffSection::Staged;
+        app.files.push(staged);
+        app.update_filter();
+        app.selected_tree_idx = app
+            .tree_items
+            .iter()
+            .position(|i| i.path == Path::new(":changes/src"))
+            .unwrap();
+        sequence(&mut app, 'c');
+        assert!(app
+            .collapsed_dirs
+            .contains(&PathBuf::from(":changes/src/ui/widgets")));
+        assert!(!app.collapsed_dirs.contains(&PathBuf::from(":staged/src")));
+        sequence(&mut app, 'o');
+        assert!(app.collapsed_dirs.is_empty());
+        sequence(&mut app, 'M');
+        assert!(app.collapsed_dirs.contains(&PathBuf::from(":staged")));
+        assert!(app
+            .collapsed_dirs
+            .contains(&PathBuf::from(":changes/src/ui/widgets")));
+        sequence(&mut app, 'R');
+        assert!(app.collapsed_dirs.is_empty());
+    }
+
+    #[test]
+    fn selected_file_and_diff_focus_do_not_collapse_folders() {
+        let (_dir, mut app) = app();
+        app.selected_tree_idx = app.tree_items.iter().position(|i| !i.is_dir).unwrap();
+        sequence(&mut app, 'c');
+        assert!(app.collapsed_dirs.is_empty());
+        app.focus = Focus::DiffView;
+        sequence(&mut app, 'M');
+        assert!(app.collapsed_dirs.is_empty());
+    }
 }
