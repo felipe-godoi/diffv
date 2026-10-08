@@ -139,6 +139,8 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `L` | General | Toggle UI language: **English** ↔ **Português** |
 | `h` / `l` or `←` / `→` | General | Tree: collapse/expand folder. Diff: switch Old/New column |
 | `Space` | File Tree | Toggle collapse/expand on current folder |
+| `zM` / `zR` | File Tree | Collapse / expand all folders (including filtered-out paths) |
+| `zc` / `zo` | File Tree | Collapse / expand the selected folder and every descendant folder |
 | `<` / `>` or `,` / `.` | General | **Resize Panes**: shrink / expand File Tree width |
 | `Mouse Wheel` | General | **Scroll the view** of the hovered pane (File Tree or Diff); the cursor stays put and is only dragged along when it would leave the screen |
 | `Mouse Click` | General | **Select** file / line, collapse/expand folders, switch focus, or click branch badge to open Branch Selector |
@@ -262,3 +264,9 @@ At startup, `diffv` checks for updates on GitHub, downloads newer binaries for t
 Use `diffv --no-update` or `DIFFV_NO_UPDATE=1 diffv` to skip the check. Help and version commands do not make network requests. Installation and updates use public HTTPS downloads; no GitHub account or authentication is required.
 
 For full details on the development lifecycle, branch model, and CI/CD pipelines, see [docs/release-flow.md](docs/release-flow.md).
+
+### Opening a parent folder
+
+Run `diffv --cwd <folder>` or `diffv <folder>` to open a directory. If Git cannot discover a repository there (or in its parents), diffv searches recursively and shows a repository selector, even when only one repository is found. Use `j`/`k` or arrows and `Enter` to open it; `Esc`, `q`, or `Ctrl+C` cancels. An empty result shows “No Git repositories found”.
+
+The search runs on a background thread with a live directory counter, so navigation and cancellation remain responsive. Hidden directories (including `.git`), `node_modules`, `target`, and symbolic links are excluded. Repositories nested inside other repositories are included, and `.git` files used by worktrees are supported. Unreadable directories are skipped and counted in the selector. There is no depth limit; large visible trees may take time to finish.
