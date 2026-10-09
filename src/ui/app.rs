@@ -4849,6 +4849,7 @@ impl App {
 
         // 5. Drawer Line Overlay (extends row over right border if name exceeds drawer width)
         if self.show_drawer
+            && self.focus == Focus::FileTree
             && !self.show_settings
             && !self.show_help
             && !self.show_worktrees
@@ -5117,6 +5118,81 @@ mod folder_tests {
         app.file_view_mode = FileViewMode::Tree;
         app.update_filter();
         (dir, app)
+    }
+
+    fn overlay_app() -> (tempfile::TempDir, App) {
+        let (dir, mut app) = app();
+        app.files.truncate(1);
+        app.files[0].new_path =
+            "selected_file_with_a_name_longer_than_the_drawer_overlay_marker.rs".into();
+        app.file_view_mode = FileViewMode::Flat;
+        app.file_tree_width = 24;
+        app.show_drawer = true;
+        app.update_filter();
+        (dir, app)
+    }
+
+    fn assert_file_overlay(app: &mut App, visible: bool) {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let area = Rect::new(0, 2, app.file_tree_width, 22);
+        let row = area.y
+            + 1
+            + changes_header_rows(
+                area,
+                &app.tree_items,
+                app.filter_mode,
+                &app.filter_query,
+                app.file_view_mode,
+                app.language,
+            )
+            .max(1);
+        let text: String = (area.width..120)
+            .map(|x| terminal.backend().buffer()[(x, row)].symbol())
+            .collect();
+        assert_eq!(text.contains("overlay_marker.rs"), visible, "{text}");
+    }
+
+    #[test]
+    fn drawer_file_overlay_requires_file_tree_focus() {
+        let (_dir, mut app) = overlay_app();
+        for (focus, visible) in [(Focus::FileTree, true), (Focus::DiffView, false)] {
+            app.focus = focus;
+            assert_file_overlay(&mut app, visible);
+        }
+        app.focus = Focus::FileTree;
+        app.show_drawer = false;
+        assert_file_overlay(&mut app, false);
+    }
+
+    #[test]
+    fn drawer_file_overlay_tracks_enter_and_return_to_changes() {
+        let (_dir, mut app) = overlay_app();
+        assert_file_overlay(&mut app, true);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.focus, Focus::DiffView);
+        assert_file_overlay(&mut app, false);
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.focus, Focus::FileTree);
+        assert_file_overlay(&mut app, true);
+    }
+
+    #[test]
+    fn drawer_file_overlay_tracks_tab_and_return_to_changes() {
+        let (_dir, mut app) = overlay_app();
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.focus, Focus::DiffView);
+        assert_file_overlay(&mut app, false);
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        for tab in [DrawerTab::Commits, DrawerTab::Stashes, DrawerTab::Changes] {
+            app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            assert_eq!(app.drawer_tab, tab);
+            assert_eq!(app.focus, Focus::FileTree);
+        }
+        assert_file_overlay(&mut app, true);
     }
 
     fn sequence(app: &mut App, c: char) {
