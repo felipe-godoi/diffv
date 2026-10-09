@@ -1828,6 +1828,29 @@ impl App {
         } else {
             None
         };
+        self.update_folder_collapse(collapse, scope);
+        self.update_filter();
+        if let Some(path) = selected {
+            // Preserve the selected folder, or its nearest visible ancestor.
+            if let Some(idx) = self
+                .tree_items
+                .iter()
+                .enumerate()
+                .filter(|(_, i)| i.path == path || (i.is_dir && path.starts_with(&i.path)))
+                .max_by_key(|(_, i)| i.path.components().count())
+                .map(|(idx, _)| idx)
+            {
+                self.selected_tree_idx = idx;
+            }
+        }
+        self.file_tree_scroll = self.file_tree_scroll.min(self.selected_tree_idx);
+    }
+
+    fn collapse_folder(&mut self, path: PathBuf) {
+        self.update_folder_collapse(true, Some(path));
+    }
+
+    fn update_folder_collapse(&mut self, collapse: bool, scope: Option<PathBuf>) {
         // Build an expanded tree so hidden descendants participate too. Include
         // filtered-out files to make the whole-tree action truly global.
         let indices: Vec<_> = (0..self.files.len()).collect();
@@ -1848,21 +1871,6 @@ impl App {
                 self.collapsed_dirs.remove(&item.path);
             }
         }
-        self.update_filter();
-        if let Some(path) = selected {
-            // Preserve the selected folder, or its nearest visible ancestor.
-            if let Some(idx) = self
-                .tree_items
-                .iter()
-                .enumerate()
-                .filter(|(_, i)| i.path == path || (i.is_dir && path.starts_with(&i.path)))
-                .max_by_key(|(_, i)| i.path.components().count())
-                .map(|(idx, _)| idx)
-            {
-                self.selected_tree_idx = idx;
-            }
-        }
-        self.file_tree_scroll = self.file_tree_scroll.min(self.selected_tree_idx);
     }
 
     pub fn return_to_changes(&mut self) {
@@ -2845,7 +2853,7 @@ impl App {
                     // Collapse directory
                     if let Some(item) = self.tree_items.get(self.selected_tree_idx) {
                         if item.is_dir && !item.is_collapsed {
-                            self.collapsed_dirs.insert(item.path.clone());
+                            self.collapse_folder(item.path.clone());
                             self.update_filter();
                         }
                     }
@@ -2899,7 +2907,7 @@ impl App {
                             if item.is_collapsed {
                                 self.collapsed_dirs.remove(&item.path);
                             } else {
-                                self.collapsed_dirs.insert(item.path.clone());
+                                self.collapse_folder(item.path.clone());
                             }
                             self.update_filter();
                         }
@@ -2986,7 +2994,7 @@ impl App {
                                         if item.is_collapsed {
                                             self.collapsed_dirs.remove(&item.path);
                                         } else {
-                                            self.collapsed_dirs.insert(item.path.clone());
+                                            self.collapse_folder(item.path.clone());
                                         }
                                         self.update_filter();
                                     } else {
@@ -3006,7 +3014,7 @@ impl App {
                                             if item.is_collapsed {
                                                 self.collapsed_dirs.remove(&item.path);
                                             } else {
-                                                self.collapsed_dirs.insert(item.path.clone());
+                                                self.collapse_folder(item.path.clone());
                                             }
                                             self.update_filter();
                                         } else {
@@ -3029,7 +3037,7 @@ impl App {
                                             if item.is_collapsed {
                                                 self.collapsed_dirs.remove(&item.path);
                                             } else {
-                                                self.collapsed_dirs.insert(item.path.clone());
+                                                self.collapse_folder(item.path.clone());
                                             }
                                             self.update_filter();
                                         } else {
@@ -3798,7 +3806,7 @@ impl App {
                                         if item.is_collapsed {
                                             self.collapsed_dirs.remove(&item.path);
                                         } else {
-                                            self.collapsed_dirs.insert(item.path.clone());
+                                            self.collapse_folder(item.path.clone());
                                         }
                                         self.update_filter();
                                     }
@@ -3841,7 +3849,7 @@ impl App {
                                         if item.is_collapsed {
                                             self.collapsed_dirs.remove(&item.path);
                                         } else {
-                                            self.collapsed_dirs.insert(item.path.clone());
+                                            self.collapse_folder(item.path.clone());
                                         }
                                         self.update_filter();
                                     }
@@ -3883,7 +3891,7 @@ impl App {
                                             if item.is_collapsed {
                                                 self.collapsed_dirs.remove(&item.path);
                                             } else {
-                                                self.collapsed_dirs.insert(item.path.clone());
+                                                self.collapse_folder(item.path.clone());
                                             }
                                             self.update_filter();
                                         }
@@ -5158,6 +5166,73 @@ mod folder_tests {
             app.collapsed_dirs,
             HashSet::from([PathBuf::from("srcfoo/sub")])
         );
+    }
+
+    #[test]
+    fn ordinary_collapse_is_recursive_and_reopening_keeps_children_collapsed() {
+        for key in [
+            KeyCode::Char('h'),
+            KeyCode::Left,
+            KeyCode::Enter,
+            KeyCode::Char(' '),
+        ] {
+            let (_dir, mut app) = app();
+            app.selected_tree_idx = app
+                .tree_items
+                .iter()
+                .position(|i| i.path == Path::new("src"))
+                .unwrap();
+            app.handle_key(KeyEvent::new(key, KeyModifiers::NONE));
+            for path in ["src", "src/ui", "src/ui/widgets"] {
+                assert!(
+                    app.collapsed_dirs.contains(Path::new(path)),
+                    "{key:?}: {path}"
+                );
+            }
+            app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+            assert!(!app.collapsed_dirs.contains(Path::new("src")));
+            for path in ["src/ui", "src/ui/widgets"] {
+                assert!(app.collapsed_dirs.contains(Path::new(path)));
+            }
+            assert!(app
+                .tree_items
+                .iter()
+                .any(|i| i.path == Path::new("src/ui") && i.is_collapsed));
+            assert!(!app
+                .tree_items
+                .iter()
+                .any(|i| i.path == Path::new("src/ui/widgets")));
+            sequence(&mut app, 'o');
+            assert!(app.collapsed_dirs.is_empty());
+            assert!(app
+                .tree_items
+                .iter()
+                .any(|i| i.path == Path::new("src/ui/widgets") && !i.is_collapsed));
+        }
+    }
+
+    #[test]
+    fn expand_selection_and_all_reach_filtered_out_descendants() {
+        let (_dir, mut app) = app();
+        sequence(&mut app, 'M');
+        app.filter_query = "src/a".into();
+        app.update_filter();
+        sequence(&mut app, 'o');
+        for path in ["src", "src/ui", "src/ui/widgets"] {
+            assert!(!app.collapsed_dirs.contains(Path::new(path)));
+        }
+        for path in ["srcfoo", "srcfoo/sub"] {
+            assert!(app.collapsed_dirs.contains(Path::new(path)));
+        }
+        sequence(&mut app, 'R');
+        assert!(app.collapsed_dirs.is_empty());
+        app.filter_query.clear();
+        app.update_filter();
+        assert!(app
+            .tree_items
+            .iter()
+            .filter(|i| i.is_dir)
+            .all(|i| !i.is_collapsed));
     }
 
     #[test]
