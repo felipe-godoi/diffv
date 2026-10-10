@@ -1,14 +1,24 @@
 use anyhow::{Context, Result};
+use rayon::prelude::*;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::core::aligner::align_hunks_side_by_side;
+use crate::core::aligner::{align_files, align_hunks_side_by_side};
 use crate::core::models::{
     ChangeStats, CommitEntry, DiffKind, DiffLine, DiffSection, FileDiff, FileStatus, Hunk,
     RepoStats, StageStatus, StashEntry, WorktreeEntry,
 };
 use crate::git::patch::parse_unified_diff;
 
+/// Joins a scoped worker, re-raising its panic on the caller.
+fn join_scoped<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    handle
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+#[derive(Debug, Clone)]
 pub struct GitProvider {
     pub repo_root: PathBuf,
     pub context_lines: usize,
@@ -112,40 +122,52 @@ impl GitProvider {
         // Working-tree mode splits HEAD → index (staged) from index → worktree
         // (changes) so every hunk is exactly the patch git needs to (un)stage it.
         let split = target_ref.is_none() && !staged_only;
-        let mut files = if split {
-            let mut staged = self.run_git_diff(&["--cached".to_string()], ignore_whitespace)?;
-            for file in &mut staged {
-                file.section = DiffSection::Staged;
-            }
-            staged.extend(self.run_git_diff(&[], ignore_whitespace)?);
-            staged
-        } else {
-            let mut args = Vec::new();
-            match target_ref {
-                Some(r)
-                    if !self.is_ref(r)
-                        && (self.repo_root.join(r).exists() || Path::new(r).exists()) =>
-                {
-                    if staged_only {
-                        args.push("--cached".to_string());
-                    } else if self.has_head() {
-                        args.push("HEAD".to_string());
-                    }
-                    args.push("--".to_string());
-                    args.push(r.to_string());
-                }
-                Some(r) => args.push(r.to_string()),
-                None => args.push("--cached".to_string()),
-            }
-            self.run_git_diff(&args, ignore_whitespace)?
-        };
 
-        // Fetch file statuses from `git status --porcelain -uall`
-        // `-z` keeps paths verbatim (spaces, unicode) and lists rename sources separately.
-        let status_output = git_command()
-            .args(["status", "--porcelain=v1", "-z", "-uall"])
-            .current_dir(&self.repo_root)
-            .output();
+        // The git processes are independent: run them side by side so a load costs
+        // as much as the slowest one (usually `git status` on big trees), not the sum.
+        let (files, status_output, branch) = std::thread::scope(|s| {
+            // `-z` keeps paths verbatim (spaces, unicode) and lists rename sources separately.
+            let status = s.spawn(|| {
+                git_command()
+                    .args(["status", "--porcelain=v1", "-z", "-uall"])
+                    .current_dir(&self.repo_root)
+                    .output()
+            });
+            let branch = s.spawn(|| self.get_branch());
+            let files = if split {
+                let staged =
+                    s.spawn(|| self.run_git_diff(&["--cached".to_string()], ignore_whitespace));
+                let changes = self.run_git_diff(&[], ignore_whitespace);
+                join_scoped(staged).and_then(|mut staged| {
+                    for file in &mut staged {
+                        file.section = DiffSection::Staged;
+                    }
+                    staged.extend(changes?);
+                    Ok(staged)
+                })
+            } else {
+                let mut args = Vec::new();
+                match target_ref {
+                    Some(r)
+                        if !self.is_ref(r)
+                            && (self.repo_root.join(r).exists() || Path::new(r).exists()) =>
+                    {
+                        if staged_only {
+                            args.push("--cached".to_string());
+                        } else if self.has_head() {
+                            args.push("HEAD".to_string());
+                        }
+                        args.push("--".to_string());
+                        args.push(r.to_string());
+                    }
+                    Some(r) => args.push(r.to_string()),
+                    None => args.push("--cached".to_string()),
+                }
+                self.run_git_diff(&args, ignore_whitespace)
+            };
+            (files, join_scoped(status), join_scoped(branch))
+        });
+        let mut files = files?;
 
         let mut status_map = std::collections::HashMap::new();
         let mut untracked_paths = Vec::new();
@@ -202,20 +224,17 @@ impl GitProvider {
         // Add untracked files if requested and we are in working tree mode (not comparing commit ranges)
         let is_commit_range = target_ref.is_some_and(|r| r.contains(".."));
         if include_untracked && !is_commit_range && !staged_only {
-            for untracked_path in untracked_paths {
-                // If not already in files
-                if !files.iter().any(|f| f.new_path == untracked_path) {
-                    if let Ok(untracked_diff) = self.create_untracked_diff(&untracked_path) {
-                        files.push(untracked_diff);
-                    }
-                }
-            }
+            let known: HashSet<&Path> = files.iter().map(|f| f.new_path.as_path()).collect();
+            let untracked: Vec<FileDiff> = untracked_paths
+                .par_iter()
+                .filter(|path| !known.contains(path.as_path()))
+                .filter_map(|path| self.create_untracked_diff(path).ok())
+                .collect();
+            files.extend(untracked);
         }
 
         // Precompute side-by-side aligned rows for each file
-        for file in &mut files {
-            file.aligned_rows = align_hunks_side_by_side(&file.hunks);
-        }
+        align_files(&mut files);
 
         // Calculate repository stats
         let mut total_additions = 0;
@@ -227,18 +246,52 @@ impl GitProvider {
 
         let repo_stats = RepoStats {
             repo_name: self.get_repo_name(),
-            branch: self.get_branch(),
+            branch,
             root_dir: self.repo_root.clone(),
             total_additions,
             total_deletions,
             file_count: files
                 .iter()
                 .map(|f| &f.new_path)
-                .collect::<std::collections::HashSet<_>>()
+                .collect::<HashSet<_>>()
                 .len(),
         };
 
         Ok((files, repo_stats))
+    }
+
+    /// Diff of one file as `load_diffs` would produce it (same comparison and
+    /// section), with this provider's context — used to load a single file in
+    /// full-file view. `None` when git reports no change for it anymore.
+    pub fn load_worktree_file(
+        &self,
+        target_ref: Option<&str>,
+        staged_only: bool,
+        file: &FileDiff,
+        ignore_whitespace: bool,
+    ) -> Result<Option<FileDiff>> {
+        let mut args = Vec::new();
+        match target_ref {
+            None if staged_only || file.section == DiffSection::Staged => {
+                args.push("--cached".to_string())
+            }
+            None => {}
+            Some(r) => args.push(r.to_string()),
+        }
+        args.push("--".to_string());
+        // Both sides of a rename, so git still pairs them.
+        if let Some(old) = file.old_path.as_ref().filter(|old| **old != file.new_path) {
+            args.push(old.to_string_lossy().into_owned());
+        }
+        args.push(file.new_path.to_string_lossy().into_owned());
+        let found = self
+            .run_git_diff(&args, ignore_whitespace)?
+            .into_iter()
+            .find(|f| f.new_path == file.new_path);
+        Ok(found.map(|mut f| {
+            f.aligned_rows = align_hunks_side_by_side(&f.hunks);
+            f
+        }))
     }
 
     fn run_git_diff(&self, args: &[String], ignore_whitespace: bool) -> Result<Vec<FileDiff>> {
@@ -272,24 +325,28 @@ impl GitProvider {
                 hunks: Vec::new(),
                 aligned_rows: Vec::new(),
                 is_binary: true,
+                full_file: false,
             });
         }
 
-        let content = match std::fs::read_to_string(&full_path) {
-            Ok(c) => c,
-            Err(_) => {
-                return Ok(FileDiff {
-                    old_path: None,
-                    new_path: relative_path.to_path_buf(),
-                    status: FileStatus::Untracked,
-                    stage_status: StageStatus::Untracked,
-                    section: DiffSection::Changes,
-                    stats: ChangeStats::default(),
-                    hunks: Vec::new(),
-                    aligned_rows: Vec::new(),
-                    is_binary: true,
-                });
-            }
+        // Like git, a NUL byte in the first 8 KB means binary; so does invalid UTF-8.
+        let content = std::fs::read(&full_path)
+            .ok()
+            .filter(|bytes| !bytes[..bytes.len().min(8000)].contains(&0))
+            .and_then(|bytes| String::from_utf8(bytes).ok());
+        let Some(content) = content else {
+            return Ok(FileDiff {
+                old_path: None,
+                new_path: relative_path.to_path_buf(),
+                status: FileStatus::Untracked,
+                stage_status: StageStatus::Untracked,
+                section: DiffSection::Changes,
+                stats: ChangeStats::default(),
+                hunks: Vec::new(),
+                aligned_rows: Vec::new(),
+                is_binary: true,
+                full_file: false,
+            });
         };
 
         let file_lines: Vec<&str> = content.lines().collect();
@@ -329,6 +386,7 @@ impl GitProvider {
             aligned_rows: Vec::new(),
             hunks: vec![hunk],
             is_binary: false,
+            full_file: false,
         })
     }
 
@@ -443,9 +501,7 @@ impl GitProvider {
 
         let diff_text = String::from_utf8_lossy(&output.stdout);
         let mut files = parse_unified_diff(&diff_text);
-        for file in &mut files {
-            file.aligned_rows = align_hunks_side_by_side(&file.hunks);
-        }
+        align_files(&mut files);
         Ok(files)
     }
 
@@ -489,9 +545,7 @@ impl GitProvider {
 
         let diff_text = String::from_utf8_lossy(&output.stdout);
         let mut files = parse_unified_diff(&diff_text);
-        for file in &mut files {
-            file.aligned_rows = align_hunks_side_by_side(&file.hunks);
-        }
+        align_files(&mut files);
         Ok(files)
     }
 

@@ -457,8 +457,8 @@ pub fn render_settings_popup(
         ),
         SettingItem::SearchEngine => (
             match language {
-                Language::En => "auto: fzf when installed, otherwise the built-in picker · fzf: always fzf · built-in: always the in-app picker.",
-                Language::Pt => "automático: fzf se instalado, senão o picker interno · fzf: sempre o fzf · interno: sempre o picker do app.",
+                Language::En => "auto / built-in: the in-app picker (SIMD fuzzy matching by frizbee, the engine behind fff) · fzf: run the external fzf.",
+                Language::Pt => "automático / interno: o picker do app (busca fuzzy SIMD do frizbee, o motor do fff) · fzf: usa o fzf externo.",
             },
             match language {
                 Language::En => "Switch it anytime with Ctrl+G (fzf is skipped when it is not installed).",

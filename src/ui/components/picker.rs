@@ -20,10 +20,13 @@ pub struct PickerState {
     pub header: String,
     pub query: String,
     pub matches: Vec<usize>,
+    /// Query `matches` was computed for, to narrow them when the query only grows.
+    matched_query: String,
     pub selected: usize,
     pub scroll: usize,
-    /// Diffs of the searched scope, used by the preview pane.
-    pub files: Vec<FileDiff>,
+    /// Diffs of the searched scope, used by the preview pane (`None`: the app's
+    /// loaded files, passed in when rendering).
+    pub files: Option<Vec<FileDiff>>,
     pub show_preview: bool,
 }
 
@@ -38,9 +41,10 @@ impl PickerState {
             header,
             query: String::new(),
             matches: Vec::new(),
+            matched_query: String::new(),
             selected: 0,
             scroll: 0,
-            files: Vec::new(),
+            files: None,
             show_preview: true,
         };
         state.refilter();
@@ -48,7 +52,20 @@ impl PickerState {
     }
 
     pub fn refilter(&mut self) {
-        self.matches = filter_items(&self.items, &self.query, self.request);
+        // Typing one more char can only drop items (no typos, AND of terms), so only
+        // the current matches need another look. Negations and `$` anchors can
+        // widen the result while typed, so those queries start over.
+        let narrows = !self.matched_query.is_empty()
+            && self.query.starts_with(&self.matched_query)
+            && !self.query.contains(['!', '$']);
+        self.matches = if narrows {
+            let mut candidates = std::mem::take(&mut self.matches);
+            candidates.sort_unstable();
+            filter_subset(&self.items, &candidates, &self.query, self.request)
+        } else {
+            filter_items(&self.items, &self.query, self.request)
+        };
+        self.matched_query = self.query.clone();
         self.selected = 0;
         self.scroll = 0;
     }
@@ -118,64 +135,55 @@ fn match_field(item: &str, request: FzfRequest) -> &str {
     }
 }
 
-/// Scores one search term against `haystack`: contiguous substrings beat scattered
-/// (fuzzy subsequence) matches, and earlier / tighter matches rank higher.
-/// Smart case: the match is case-insensitive unless the term has an uppercase letter.
-pub fn fuzzy_score(haystack: &str, term: &str) -> Option<i64> {
-    let case_sensitive = term.chars().any(char::is_uppercase);
-    let fold = |s: &str| -> Vec<char> {
-        if case_sensitive {
-            s.chars().collect()
-        } else {
-            s.chars().flat_map(char::to_lowercase).collect()
-        }
-    };
-    let hay = fold(haystack);
-    let needle = fold(term);
-    if needle.is_empty() {
-        return Some(0);
-    }
-    if let Some(pos) = hay
-        .windows(needle.len())
-        .position(|w| w == needle.as_slice())
-    {
-        return Some(100_000 - pos as i64);
-    }
-    let mut chars = needle.iter().peekable();
-    let (mut first, mut last) = (None, 0);
-    for (idx, ch) in hay.iter().enumerate() {
-        if chars.peek() == Some(&ch) {
-            chars.next();
-            first.get_or_insert(idx);
-            last = idx;
-        }
-    }
-    if chars.peek().is_some() {
-        return None;
-    }
-    let first = first.unwrap_or(0);
-    let gaps = (last - first + 1 - needle.len()) as i64;
-    Some(50_000 - gaps * 100 - first as i64)
+/// Matcher settings: smart case and no typos, like fzf, with its extended syntax
+/// (`'exact`, `^prefix`, `suffix$`, `!negation`; whitespace separates terms that
+/// must all match).
+fn matcher_config() -> frizbee::Config {
+    frizbee::Config::default()
+        .max_typos(Some(0))
+        .casing(frizbee::CaseMatching::Smart)
 }
 
 /// Indices of the items matching every whitespace-separated term of `query`, best
 /// first; ties (and an empty query) keep the original order.
+///
+/// Matching runs on frizbee — the SIMD Smith-Waterman engine behind fff — split
+/// over all cores for big lists, so it keeps up with fzf on 100k+ candidates.
 pub fn filter_items(items: &[String], query: &str, request: FzfRequest) -> Vec<usize> {
-    let terms: Vec<&str> = query.split_whitespace().collect();
-    let mut scored: Vec<(i64, usize)> = items
+    let all: Vec<usize> = (0..items.len()).collect();
+    filter_subset(items, &all, query, request)
+}
+
+/// `filter_items` over the items listed in `subset` (ascending indices).
+fn filter_subset(
+    items: &[String],
+    subset: &[usize],
+    query: &str,
+    request: FzfRequest,
+) -> Vec<usize> {
+    if query.split_whitespace().next().is_none() {
+        return subset.to_vec();
+    }
+    let fields: Vec<&str> = subset
         .iter()
-        .enumerate()
-        .filter_map(|(idx, item)| {
-            let field = match_field(item, request);
-            terms
-                .iter()
-                .map(|t| fuzzy_score(field, t))
-                .sum::<Option<i64>>()
-                .map(|score| (score, idx))
+        .map(|&idx| match_field(&items[idx], request))
+        .collect();
+    let mut matcher = frizbee::Matcher::from_query(query, &matcher_config());
+    let mut matches: Vec<(u16, usize, usize)> = matcher
+        .match_list_parallel(&fields, 0)
+        .into_iter()
+        .map(|m| {
+            (
+                m.score,
+                fields[m.index as usize].len(),
+                subset[m.index as usize],
+            )
         })
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    scored.into_iter().map(|(_, idx)| idx).collect()
+    // Like fzf's default tiebreak: best score, then the shorter candidate, then
+    // the original order.
+    matches.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    matches.into_iter().map(|(_, _, idx)| idx).collect()
 }
 
 /// `path:line  content  [staged]` for text candidates, the path for files.
@@ -198,6 +206,7 @@ pub fn render_picker_popup(
     frame: &mut Frame,
     area: Rect,
     state: &mut PickerState,
+    loaded_files: &[FileDiff],
     language: Language,
     theme: &Theme,
 ) {
@@ -262,7 +271,7 @@ pub fn render_picker_popup(
     };
     if let Some(area) = preview_area {
         let preview = build_preview(
-            &state.files,
+            state.files.as_deref().unwrap_or(loaded_files),
             state.request,
             state.selected_item().map(String::as_str),
             &state.query,
@@ -384,14 +393,16 @@ mod tests {
     #[test]
     fn every_term_must_match_and_case_is_smart() {
         let files = items(&["src/ui/App.rs", "src/ui/app.rs", "tests/app_test.rs"]);
+        // Both match; the one whose case matches the query ranks first.
         assert_eq!(
             filter_items(&files, "ui app", FzfRequest::Files),
-            vec![0, 1]
+            vec![1, 0]
         );
         // An uppercase letter makes the search case-sensitive.
         assert_eq!(filter_items(&files, "App", FzfRequest::Files), vec![0]);
-        assert!(fuzzy_score("Cargo.toml", "ctl").is_some());
-        assert!(fuzzy_score("Cargo.toml", "cT").is_none());
+        let cargo = items(&["Cargo.toml"]);
+        assert_eq!(filter_items(&cargo, "ctl", FzfRequest::Files), vec![0]);
+        assert!(filter_items(&cargo, "cT", FzfRequest::Files).is_empty());
     }
 
     #[test]
@@ -406,6 +417,51 @@ mod tests {
         assert_eq!(
             display_item(&lines[1], FzfRequest::Text),
             "src/parser.rs:3    fn run() {}  [staged]"
+        );
+    }
+
+    #[test]
+    fn extended_query_syntax_works_like_fzf() {
+        let files = items(&["src/main.rs", "src/domain.rs", "tests/main_test.rs"]);
+        // "domain" contains "main" too; the negation drops the test file.
+        assert_eq!(
+            filter_items(&files, "'main !test", FzfRequest::Files),
+            vec![0, 1]
+        );
+        assert_eq!(filter_items(&files, "^tests", FzfRequest::Files), vec![2]);
+        assert_eq!(
+            filter_items(&files, "/main.rs$", FzfRequest::Files),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn growing_query_narrows_previous_matches_and_matches_a_fresh_filter() {
+        let files: Vec<String> = (0..5_000)
+            .map(|i| format!("src/module_{i}/file_{}.rs", i % 7))
+            .collect();
+        let mut state = PickerState::new(FzfRequest::Files, files.clone(), String::new());
+        for query in [
+            "m",
+            "mo",
+            "mod 1",
+            "mod 12",
+            "mod 12 file_3",
+            "mod 12 !file_3",
+        ] {
+            state.query = query.into();
+            state.refilter();
+            assert_eq!(
+                state.matches,
+                filter_items(&files, query, FzfRequest::Files),
+                "query {query:?}"
+            );
+        }
+        state.query = "mod 1".into();
+        state.refilter();
+        assert_eq!(
+            state.matches,
+            filter_items(&files, "mod 1", FzfRequest::Files)
         );
     }
 

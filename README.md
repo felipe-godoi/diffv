@@ -55,9 +55,9 @@ cargo install --git https://github.com/felipe-godoi/diffv.git
 
 ### Optional: `fzf`
 
-[`fzf`](https://github.com/junegunn/fzf) is **optional**. When it is on your `PATH`, `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open it full-screen for the fastest fuzzy matching in the terminal. Without it, `diffv` falls back to a **built-in picker** popup with the same candidates (fuzzy/substring filter, `↑`/`↓`, `Enter` to open, `Esc` / `Ctrl+C` / `Ctrl+Q` to cancel like fzf — `Shift+Q` types a "Q" there) — searching keeps working, with a **preview pane** next to the list: the diff around the file under the cursor (`Ctrl+p`), or the context around the matched line with the query highlighted (`Ctrl+f`). `Ctrl+T` shows/hides the preview (fzf's `Ctrl+/` is also accepted where the terminal reports it); on narrow terminals only the list is shown.
+[`fzf`](https://github.com/junegunn/fzf) is **optional**. By default `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open the **built-in picker**: an in-app popup that matches with [frizbee](https://github.com/saghen/frizbee) — the SIMD Smith-Waterman engine behind [fff](https://github.com/dmtrKovalenko/fff.nvim) — on all CPU cores, in-process (no subprocess, no screen switch, nothing piped). It understands fzf's extended syntax (`'exact`, `^prefix`, `suffix$`, `!negate`, space-separated terms that must all match, smart case), ranks like fzf (best score, then the shorter candidate), and only re-checks the previous matches while you keep typing. Keys follow fzf (`↑`/`↓`, `Enter` to open, `Esc` / `Ctrl+C` / `Ctrl+Q` to cancel — `Shift+Q` types a "Q" there), with a **preview pane** next to the list: the diff around the file under the cursor (`Ctrl+p`), or the context around the matched line with the query highlighted (`Ctrl+f`). `Ctrl+T` shows/hides the preview (fzf's `Ctrl+/` is also accepted where the terminal reports it); on narrow terminals only the list is shown. Pick `fzf` as the engine to run your installed fzf full-screen instead.
 
-Press `Ctrl+G` (outside the picker) to switch the search engine: `auto` (fzf when installed, otherwise the built-in picker) → `fzf` → `builtin` → `auto`. `fzf` is skipped when it is not installed, a toast shows the engine in use, and the choice is saved as `[search] engine` in `config.toml` (also editable in Settings, `C`). With `engine = "fzf"` and fzf missing, diffv says so and falls back to the built-in picker. `Ctrl+G` also works **inside** a search: from the built-in picker it reopens the same candidates in fzf with your query pre-filled, and from fzf it returns to the built-in picker already filtered by fzf's query (diffv runs fzf with `--print-query --expect=ctrl-g`, so inside diffv `Ctrl+G` no longer aborts fzf). Without fzf, `Ctrl+G` in the picker just says so and keeps you there.
+Press `Ctrl+G` (outside the picker) to switch the search engine: `auto` (the built-in picker) → `fzf` → `builtin` → `auto`. `fzf` is skipped when it is not installed, a toast shows the engine in use, and the choice is saved as `[search] engine` in `config.toml` (also editable in Settings, `C`). With `engine = "fzf"` and fzf missing, diffv says so and falls back to the built-in picker. `Ctrl+G` also works **inside** a search: from the built-in picker it reopens the same candidates in fzf with your query pre-filled, and from fzf it returns to the built-in picker already filtered by fzf's query (diffv runs fzf with `--print-query --expect=ctrl-g`, so inside diffv `Ctrl+G` no longer aborts fzf). Without fzf, `Ctrl+G` in the picker just says so and keeps you there.
 
 ```bash
 # macOS
@@ -139,6 +139,8 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `L` | General | Toggle UI language: **English** ↔ **Português** |
 | `h` / `l` or `←` / `→` | General | Tree: collapse/expand folder. Diff: switch Old/New column |
 | `Space` | File Tree | Toggle collapse/expand on current folder |
+| `zM` / `zR` | File Tree | Collapse / expand all folders (including filtered-out paths) |
+| `zc` / `zo` | File Tree | Collapse / expand the selected folder and every descendant folder |
 | `<` / `>` or `,` / `.` | General | **Resize Panes**: shrink / expand File Tree width |
 | `Mouse Wheel` | General | **Scroll the view** of the hovered pane (File Tree or Diff); the cursor stays put and is only dragged along when it would leave the screen |
 | `Mouse Click` | General | **Select** file / line, collapse/expand folders, switch focus, or click branch badge to open Branch Selector |
@@ -148,8 +150,8 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `v` | Diff | Toggle **Visual Mode** for line-level partial staging / unstaging |
 | `o` | Commits / History | Open the selected commit's **GitHub pull request** in the browser (falls back to the commit page; uses `gh` when available) |
 | `x` | General | **Expand full file** ↔ changes only (keeps file and cursor line) |
-| `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash). Uses `fzf` when installed, otherwise the built-in picker |
-| `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched. Uses `fzf` when installed, otherwise the built-in picker |
+| `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash). Uses the built-in picker (or `fzf` when chosen as the engine) |
+| `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched. Uses the built-in picker (or `fzf` when chosen as the engine) |
 | `Ctrl+t` | Built-in search | Show / hide the picker's **preview pane** (diff around the file or matched line) |
 | `Ctrl+g` | General / Search | Main screen: switch the search engine **auto** → **fzf** → **built-in** (fzf skipped when not installed; saved to `config.toml`). Inside a search (fzf or the built-in picker): continue the same search in the other engine with the typed query |
 | `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in your editor |
@@ -193,12 +195,15 @@ tmux source-file ~/.tmux.conf
 
 ## ⚙️ Configuration
 
-Configuration is loaded from `~/.config/diffv/config.toml`. A sample configuration file:
+Configuration is loaded from the user config directory (`dirs::config_dir()`): `$XDG_CONFIG_HOME/diffv/config.toml`, or `~/.config/diffv/config.toml` on Linux; `~/Library/Application Support/diffv/config.toml` on macOS; and the roaming application data directory on Windows. Missing or invalid files fall back to the current defaults.
+
+Line wrapping (`r`) and the active diff view (`m`, including `--unified`) are saved on normal exit and restored next session as `[ui] wrap_lines` and `default_view`. The defaults remain wrapping enabled and side-by-side view. Save failures are reported without preventing exit. Other settings keep their existing save behavior. A sample configuration file:
 
 ```toml
 [ui]
 theme = "vscode-dark"          # vscode-dark, tokyonight, catppuccin, gruvbox
-default_view = "side-by-side"  # side-by-side or unified
+default_view = "side-by-side"  # side-by-side or unified; last active view
+wrap_lines = true              # last active line-wrapping preference
 show_line_numbers = true
 syntax_highlighting = true
 overview_ruler = true
@@ -215,7 +220,7 @@ debounce_ms = 150
 watch_untracked = true
 
 [search]
-engine = "auto"                # auto (fzf if installed, else built-in), fzf, or builtin · Ctrl+G cycles
+engine = "auto"                # auto / builtin (in-app frizbee picker) or fzf · Ctrl+G cycles
 
 [editor]
 command = "vi"                 # Default: $GIT_EDITOR > $VISUAL > $EDITOR > system `editor` > vi > nano
@@ -262,3 +267,9 @@ At startup, `diffv` checks for updates on GitHub, downloads newer binaries for t
 Use `diffv --no-update` or `DIFFV_NO_UPDATE=1 diffv` to skip the check. Help and version commands do not make network requests. Installation and updates use public HTTPS downloads; no GitHub account or authentication is required.
 
 For full details on the development lifecycle, branch model, and CI/CD pipelines, see [docs/release-flow.md](docs/release-flow.md).
+
+### Opening a parent folder
+
+Run `diffv --cwd <folder>` or `diffv <folder>` to open a directory. If Git cannot discover a repository there (or in its parents), diffv searches recursively and shows a repository selector, even when only one repository is found. Use `j`/`k` or arrows and `Enter` to open it; `Esc`, `q`, or `Ctrl+C` cancels. An empty result shows “No Git repositories found”.
+
+The search runs on a background thread with a live directory counter, so navigation and cancellation remain responsive. Hidden directories (including `.git`), `node_modules`, `target`, and symbolic links are excluded. Repositories nested inside other repositories are included, and `.git` files used by worktrees are supported. Unreadable directories are skipped and counted in the selector. There is no depth limit; large visible trees may take time to finish.

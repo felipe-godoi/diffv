@@ -40,13 +40,21 @@ fn tokenize_line(line: &str) -> Vec<&str> {
     tokens
 }
 
+/// Lines longer than this get no word-level highlight: the token diff grows
+/// quadratically and such lines (minified code, data blobs) are unreadable anyway.
+pub const MAX_INTRALINE_LEN: usize = 2_000;
+
 /// Computes intra-line character/word highlight spans for a pair of modified lines.
 /// Returns (old_spans, new_spans).
 pub fn compute_intraline_spans(
     old_line: &str,
     new_line: &str,
 ) -> (Vec<HighlightSpan>, Vec<HighlightSpan>) {
-    if old_line.is_empty() || new_line.is_empty() {
+    if old_line.is_empty()
+        || new_line.is_empty()
+        || old_line.len() > MAX_INTRALINE_LEN
+        || new_line.len() > MAX_INTRALINE_LEN
+    {
         return (Vec::new(), Vec::new());
     }
 
@@ -174,6 +182,16 @@ mod tests {
         let new_line = "let x = 42 * 100 + calculate_foo();";
         let (old_spans, _new_spans) = compute_intraline_spans(old_line, new_line);
         assert!(old_spans.is_empty() || !old_spans.is_empty());
+    }
+
+    #[test]
+    fn huge_lines_skip_the_word_diff() {
+        let old_line = "a ".repeat(MAX_INTRALINE_LEN);
+        let new_line = "b ".repeat(MAX_INTRALINE_LEN);
+        assert_eq!(
+            compute_intraline_spans(&old_line, &new_line),
+            (Vec::new(), Vec::new())
+        );
     }
 
     #[test]

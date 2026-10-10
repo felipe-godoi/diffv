@@ -33,6 +33,8 @@ semver = "1"
 tempfile = "3"
 fs2 = "0.4"
 ignore = "0.4.33"
+rayon = "1"
+frizbee = "0.13"
 
 [profile.dev]
 debug = "line-tables-only"

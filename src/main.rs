@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -22,7 +24,7 @@ use diffv::integration::editor::open_editor;
 use diffv::integration::fzf::{
     is_fzf_available, search_diff_text_fzf, search_files_fzf, FzfResult,
 };
-use diffv::ui::app::{App, AppMode, FzfRequest};
+use diffv::ui::app::{App, AppMode, FzfRequest, ReloadDone};
 use diffv::ui::components::loading::render_loading;
 use diffv::ui::theme::Theme;
 use diffv::watcher::service::{WatchEvent, WatchService};
@@ -30,6 +32,8 @@ use diffv::watcher::service::{WatchEvent, WatchService};
 enum AppEvent {
     Input(Event),
     Reload,
+    /// A watcher-triggered reload finished on its worker thread.
+    Reloaded(ReloadDone),
     Update(diffv::update::UpdateEvent),
     WatcherProgress {
         scanned: usize,
@@ -183,7 +187,18 @@ fn run(args: Cli) -> Result<()> {
     let cwd = args.cwd.as_deref().unwrap_or(Path::new("."));
 
     // Determine App Mode
-    let mode = determine_app_mode(&args, cwd)?;
+    let directory_target = args
+        .targets
+        .first()
+        .filter(|_| args.targets.len() == 1)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir());
+    let cwd = directory_target.as_deref().unwrap_or(cwd);
+    let mut effective_args = args.clone();
+    if directory_target.is_some() {
+        effective_args.targets.clear();
+    }
+    let mode = determine_app_mode(&effective_args, cwd, directory_target.is_none());
 
     // Start TUI
     enable_raw_mode()?;
@@ -192,7 +207,34 @@ fn run(args: Cli) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let app_result = run_app(&mut terminal, mode, config, &args, cwd, update_channel);
+    let app_result = (|| {
+        let mode = match mode {
+            Ok(mode) => mode,
+            Err(err) => {
+                if GitProvider::discover(Some(cwd)).is_ok() {
+                    return Err(err);
+                }
+                let Some(provider) = choose_repository(&mut terminal, cwd)? else {
+                    return Ok(());
+                };
+                AppMode::Git {
+                    target_ref: effective_args
+                        .compare
+                        .clone()
+                        .or_else(|| effective_args.targets.first().cloned()),
+                    git_provider: provider,
+                }
+            }
+        };
+        run_app(
+            &mut terminal,
+            mode,
+            config,
+            &effective_args,
+            cwd,
+            update_channel,
+        )
+    })();
 
     // Teardown TUI
     disable_raw_mode()?;
@@ -204,6 +246,86 @@ fn run(args: Cli) -> Result<()> {
     terminal.show_cursor()?;
 
     app_result
+}
+
+fn choose_repository(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    root: &Path,
+) -> Result<Option<GitProvider>> {
+    use diffv::git::discovery::search_repositories;
+    use ratatui::layout::{Constraint, Layout};
+    use ratatui::style::{Modifier, Style};
+    use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+    use std::sync::atomic::AtomicUsize;
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let progress = Arc::new(AtomicUsize::new(0));
+    let worker_cancel = cancelled.clone();
+    let worker_progress = progress.clone();
+    let root = root.to_path_buf();
+    let worker = thread::spawn(move || {
+        search_repositories(&root, &worker_cancel, |count| {
+            worker_progress.store(count, Ordering::Relaxed);
+        })
+    });
+    let mut worker = Some(worker);
+    let mut result = None;
+    let mut selected = 0usize;
+    let outcome = (|| loop {
+        if worker.as_ref().is_some_and(|w| w.is_finished()) {
+            result = Some(
+                worker
+                    .take()
+                    .unwrap()
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Repository search panicked"))?,
+            );
+        }
+        terminal.draw(|frame| {
+            let [header, body] = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(frame.area());
+            let message = match &result {
+                None => format!("Searching repositories… {} directories scanned · Esc/q cancel", progress.load(Ordering::Relaxed)),
+                Some(found) => format!("Choose repository · ↑/↓ or j/k · Enter open · Esc/q cancel · {} unreadable directories skipped", found.unreadable_dirs),
+            };
+            frame.render_widget(Paragraph::new(message).block(Block::default().borders(Borders::ALL)), header);
+            if let Some(found) = &result {
+                if found.repositories.is_empty() {
+                    frame.render_widget(Paragraph::new("No Git repositories found. Hidden folders, node_modules, target and symlinks are excluded. Press Esc/q to close."), body);
+                } else {
+                    let items: Vec<_> = found.repositories.iter().map(|p| ListItem::new(p.display().to_string())).collect();
+                    let mut state = ListState::default().with_selected(Some(selected));
+                    frame.render_stateful_widget(List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED)), body, &mut state);
+                }
+            }
+        })?;
+        if !event::poll(Duration::from_millis(80))? {
+            continue;
+        }
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                KeyCode::Esc | KeyCode::Char('q' | 'Q') => return Ok(None),
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    return Ok(None)
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if let Some(found) = &result {
+                        selected = (selected + 1).min(found.repositories.len().saturating_sub(1));
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
+                KeyCode::Enter => {
+                    if let Some(path) = result.as_ref().and_then(|r| r.repositories.get(selected)) {
+                        return GitProvider::discover(Some(path)).map(Some);
+                    }
+                }
+                _ => {}
+            },
+            Event::Resize(_, _) => terminal.autoresize()?,
+            _ => {}
+        }
+    })();
+    cancelled.store(true, Ordering::Relaxed);
+    outcome
 }
 
 /// Collects the initial git/diff state on a worker thread while drawing a loading
@@ -271,9 +393,9 @@ fn load_app(
     Ok(Some((app, queued_keys)))
 }
 
-fn determine_app_mode(args: &Cli, cwd: &Path) -> Result<AppMode> {
+fn determine_app_mode(args: &Cli, cwd: &Path, allow_stdin: bool) -> Result<AppMode> {
     // Check if stdin is piped or requested as "-"
-    if (!io::stdin().is_terminal() && args.targets.is_empty())
+    if (allow_stdin && !io::stdin().is_terminal() && args.targets.is_empty())
         || (args.targets.len() == 1 && args.targets[0] == "-")
     {
         return Ok(AppMode::Stdin);
@@ -447,6 +569,10 @@ fn run_app(
 
     // Main event loop with dirty tracking for 0.0% idle CPU
     let mut needs_redraw = true;
+    let mut reload = ReloadState::default();
+    // Non-input events pulled off the channel while the editor / fzf owned the
+    // terminal (stray keys are dropped, reload results must not be).
+    let mut deferred: Vec<AppEvent> = Vec::new();
 
     loop {
         if needs_redraw {
@@ -464,7 +590,7 @@ fn run_app(
             is_editor_active.store(true, Ordering::SeqCst);
 
             // Drain any pending input events already queued in rx before editor opens
-            while rx.try_recv().is_ok() {}
+            deferred.extend(drain_keeping_non_input(&rx));
 
             disable_raw_mode()?;
             execute!(
@@ -488,7 +614,7 @@ fn run_app(
             while event::poll(Duration::from_millis(40)).unwrap_or(false) {
                 let _ = event::read();
             }
-            while rx.try_recv().is_ok() {}
+            deferred.extend(drain_keeping_non_input(&rx));
 
             is_editor_active.store(false, Ordering::SeqCst);
             app.editor_request = None;
@@ -526,7 +652,7 @@ fn run_app(
             }
 
             is_editor_active.store(true, Ordering::SeqCst);
-            while rx.try_recv().is_ok() {}
+            deferred.extend(drain_keeping_non_input(&rx));
 
             disable_raw_mode()?;
             execute!(
@@ -554,7 +680,7 @@ fn run_app(
             while event::poll(Duration::from_millis(40)).unwrap_or(false) {
                 let _ = event::read();
             }
-            while rx.try_recv().is_ok() {}
+            deferred.extend(drain_keeping_non_input(&rx));
 
             is_editor_active.store(false, Ordering::SeqCst);
 
@@ -574,51 +700,131 @@ fn run_app(
             continue;
         }
 
-        match rx.recv()? {
-            AppEvent::Input(Event::Key(key)) => {
-                if key.kind == KeyEventKind::Press {
-                    app.handle_key(key);
-                    needs_redraw = true;
-                }
+        // Handle the next event, then everything already queued behind it before
+        // drawing again: key repeat, wheel bursts and watcher storms cost one frame
+        // instead of one frame per event.
+        for event in std::mem::take(&mut deferred) {
+            needs_redraw |= handle_event(event, &mut app, terminal, &mut reload, &tx)?;
+        }
+        if needs_redraw {
+            continue;
+        }
+        let mut event = rx.recv()?;
+        for _ in 0..MAX_EVENTS_PER_FRAME {
+            needs_redraw |= handle_event(event, &mut app, terminal, &mut reload, &tx)?;
+            // Editor / fzf / quit requests are served by the loop above first.
+            if app.should_quit || app.editor_request.is_some() || app.fzf_request.is_some() {
+                break;
             }
-            AppEvent::Input(Event::Mouse(mouse)) => {
-                app.handle_mouse(mouse);
-                needs_redraw = true;
+            match rx.try_recv() {
+                Ok(next) => event = next,
+                Err(_) => break,
             }
-            AppEvent::Input(Event::Resize(_, _)) => {
-                terminal.autoresize()?;
-                needs_redraw = true;
-            }
-            AppEvent::Update(event) => {
-                app.show_update_event(event);
-                needs_redraw = true;
-            }
-            AppEvent::Reload => {
-                if app.watch_mode {
-                    app.reload_diffs();
-                    needs_redraw = true;
-                }
-            }
-            AppEvent::WatcherProgress { scanned, total } => {
-                if app.watch_mode {
-                    app.update_watcher_progress(scanned, total);
-                    needs_redraw = true;
-                }
-            }
-            AppEvent::Tick => {
-                let had_notification = app.notification.is_some();
-                app.expire_notification();
-                let scanning = app.is_watcher_scanning();
-                if scanning {
-                    app.spinner_idx = (app.spinner_idx + 1) % 10;
-                }
-                if had_notification || app.pending_key.is_some() || scanning {
-                    needs_redraw = true;
-                }
-            }
-            _ => {}
         }
     }
 
+    if let Err(err) = app.save_view_preferences() {
+        eprintln!("diffv: could not save view preferences: {err:#}");
+    }
+
     Ok(())
+}
+
+/// Empties the channel, dropping input (keys typed into the editor or fzf) but
+/// returning every other event to be handled afterwards.
+fn drain_keeping_non_input(rx: &mpsc::Receiver<AppEvent>) -> Vec<AppEvent> {
+    rx.try_iter()
+        .filter(|event| !matches!(event, AppEvent::Input(_)))
+        .collect()
+}
+
+/// Upper bound of queued events handled before a frame is drawn, so a flood of
+/// input can't starve the screen.
+const MAX_EVENTS_PER_FRAME: usize = 256;
+
+/// Watcher reloads run on a worker thread; at most one at a time, with one more
+/// queued if the disk changed again meanwhile.
+#[derive(Default)]
+struct ReloadState {
+    in_flight: bool,
+    queued: bool,
+}
+
+fn start_reload(app: &mut App, reload: &mut ReloadState, tx: &mpsc::Sender<AppEvent>) {
+    if reload.in_flight {
+        reload.queued = true;
+        return;
+    }
+    match app.background_reload_job() {
+        Some(job) => {
+            reload.in_flight = true;
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let _ = tx.send(AppEvent::Reloaded(job.run()));
+            });
+        }
+        None => app.reload_diffs(),
+    }
+}
+
+/// Applies one event; returns whether the screen needs a redraw.
+fn handle_event(
+    event: AppEvent,
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    reload: &mut ReloadState,
+    tx: &mpsc::Sender<AppEvent>,
+) -> Result<bool> {
+    Ok(match event {
+        AppEvent::Input(Event::Key(key)) => {
+            if key.kind == KeyEventKind::Press {
+                app.handle_key(key);
+            }
+            key.kind == KeyEventKind::Press
+        }
+        // Mouse capture reports every pointer move; nothing reacts to plain moves.
+        AppEvent::Input(Event::Mouse(mouse)) if mouse.kind == MouseEventKind::Moved => false,
+        AppEvent::Input(Event::Mouse(mouse)) => {
+            app.handle_mouse(mouse);
+            true
+        }
+        AppEvent::Input(Event::Resize(_, _)) => {
+            terminal.autoresize()?;
+            true
+        }
+        AppEvent::Input(_) => false,
+        AppEvent::Update(event) => {
+            app.show_update_event(event);
+            true
+        }
+        AppEvent::Reload => {
+            if app.watch_mode {
+                start_reload(app, reload, tx);
+            }
+            false
+        }
+        AppEvent::Reloaded(done) => {
+            reload.in_flight = false;
+            app.apply_background_reload(done);
+            if std::mem::take(&mut reload.queued) {
+                start_reload(app, reload, tx);
+            }
+            true
+        }
+        AppEvent::WatcherProgress { scanned, total } => {
+            if app.watch_mode {
+                app.update_watcher_progress(scanned, total);
+            }
+            app.watch_mode
+        }
+        AppEvent::Tick => {
+            let had_notification = app.notification.is_some();
+            app.expire_notification();
+            let scanning = app.is_watcher_scanning();
+            if scanning {
+                app.spinner_idx = (app.spinner_idx + 1) % 10;
+            }
+            had_notification || app.pending_key.is_some() || scanning
+        }
+    })
 }

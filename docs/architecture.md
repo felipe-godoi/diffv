@@ -23,6 +23,8 @@ A ferramenta foi definida para ser desenvolvida em **Rust**, visando:
 | **`git2`** ou **`std::process::Command`** (git CLI) | `^0.19` ou CLI wrapper | Provedor de dados Git | Leitura de repositório, branches, working tree status, hunks e staging. |
 | **`arboard`** | `^3.4` | Integração com Clipboard | Cópia de hunks/patches diretamente para a área de transferência do SO (macOS/Linux). |
 | **`serde`** + **`toml`** | `^1.0` / `^0.8` | Configuração persistente | Leitura e validação do arquivo `~/.config/diffv/config.toml`. |
+| **`rayon`** | `^1` | Paralelismo de dados | Alinhamento side-by-side, intraline, untracked e comparação de diretórios em todos os núcleos. |
+| **`frizbee`** | `^0.13` | Fuzzy matching | Motor SIMD (Smith-Waterman) usado pelo fff; filtra o picker interno em paralelo, dentro do processo. |
 
 ---
 
@@ -182,6 +184,16 @@ A aplicação adota um modelo clássico de **Event Loop Reativo**:
 3. **Estado Preservado no Reload**:
    - Quando o watcher dispara um evento de reload, o `App` recalcula o diff do arquivo atual mantendo o índice do hunk focado e a porcentagem relativa de scroll.
 
+### 6.1 Performance em repositórios grandes e arquivos pesados
+
+- **Carga paralela**: `GitProvider::load_diffs` roda `git diff --cached`, `git diff`, `git status` e o branch ao mesmo tempo (`std::thread::scope`); untracked são lidos em paralelo (NUL nos primeiros 8 KB = binário) e o alinhamento/intraline usa `rayon` por arquivo e por linha. Worktrees, commits e stashes da inicialização carregam ao lado dos diffs.
+- **Reload do watcher fora da UI**: `App::background_reload_job` gera um `ReloadJob` que roda numa thread; o resultado (`ReloadDone`) volta pelo canal e só é aplicado se nenhum reload síncrono (stage, troca de branch, `x`) aconteceu depois (`reload_generation`). No máximo um reload em voo e um na fila.
+- **Loop de eventos**: eventos enfileirados são processados antes do próximo frame (até 256), movimento de mouse sem botão não redesenha, e os drains do editor/fzf descartam só entrada, nunca resultados de reload.
+- **Watcher**: em macOS/Windows um único watch recursivo na raiz (o notify reinicia o stream do FSEvents a cada `watch`, o que tornava o registro por diretório quadrático); diretórios sempre podados (`node_modules`, `target`, …) são filtrados antes do `git check-ignore`.
+- **Arquivo inteiro (`x`)**: só o arquivo visto é carregado com `-U1000000` (`ensure_full_context_file`, marcado em `FileDiff::full_file`); ligar/desligar troca apenas esses arquivos, sem recarregar a árvore.
+- **Custo por frame limitado à tela**: linhas acima de 1000 bytes não passam pelo syntect, linhas acima de 2000 bytes não têm intraline (o Patience em uma linha minificada de megabytes travava a carga), scroll horizontal/wrap/mapa de seleção processam só as colunas e linhas visíveis (`scroll_line`, `wrap_line`, `layout_line_clipped`), e `wrapped_row_heights` pula direto para a primeira linha visível. Tokens de sintaxe ficam em cache por linguagem (`Arc<[SyntaxToken]>`, sem cópia), e o syntect é pré-carregado em background durante a carga inicial.
+- **Stage de muitos caminhos**: `stage_paths` / `unstage_paths` dividem listas enormes em várias chamadas do git, abaixo do `ARG_MAX`.
+
 ---
 
 ## 7. Integração Tmux e Editor
@@ -202,6 +214,6 @@ Ao pressionar `e` em uma linha da diff:
 
 ### 7.3 Busca com `fzf` (opcional) e Picker Interno
 `Ctrl+p` / `Ctrl+f` geram a lista de candidatos (`App::prepare_fzf`) e o resultado escolhido volta por `handle_fzf_file_result` / `handle_fzf_text_result`:
-1. Se o `fzf` estiver no `PATH` (`is_fzf_available`), a TUI é suspensa e o `fzf` roda em tela cheia com os candidatos.
-2. Se não, abre o picker interno (`ui/components/picker.rs`): popup com filtro fuzzy/substring (smart-case, termos separados por espaço, em `Ctrl+f` só o conteúdo da linha é comparado, como o `--nth=2` do fzf). O item escolhido entra pelos mesmos handlers, então o comportamento após a escolha é idêntico.
+1. Por padrão (`auto` / `builtin`) abre o picker interno (`ui/components/picker.rs`): o filtro usa o `frizbee` (Smith-Waterman SIMD, o motor de matching do fff) via `Matcher::match_list_parallel`, com smart-case, sintaxe estendida do fzf e desempate por tamanho; em `Ctrl+f` só o conteúdo da linha é comparado, como o `--nth=2` do fzf. Enquanto a query só cresce, `PickerState::refilter` refiltra apenas os matches anteriores. Os candidatos do escopo carregado não são copiados (`FzfQuery::files = None` aponta para `App::files`).
+2. Com `fzf` como motor e no `PATH` (`is_fzf_available`, verificado uma vez por sessão), a TUI é suspensa e o `fzf` roda em tela cheia com os candidatos (escritos com buffer no stdin). O item escolhido entra pelos mesmos handlers, então o comportamento após a escolha é idêntico.
 3. O motor é configurável em `[search] engine` (`auto` | `fzf` | `builtin`, padrão `auto`) e alternado com `Ctrl+G` fora do picker (`auto` → `fzf` → `builtin`, pulando `fzf` quando não instalado; a escolha é salva no `config.toml`). Com `fzf` escolhido e ausente, o app avisa e usa o picker interno.

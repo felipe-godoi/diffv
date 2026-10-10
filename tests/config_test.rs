@@ -147,3 +147,49 @@ fn test_config_save_persistence() {
     assert_eq!(loaded.ui.theme, "tokyonight");
     assert_eq!(loaded.ui.default_view, "unified");
 }
+
+#[test]
+fn view_preferences_persist_across_app_instances() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::ui::app::{App, AppMode};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let old = dir.path().join("old");
+    let new = dir.path().join("new");
+    std::fs::write(&old, "old\n").unwrap();
+    std::fs::write(&new, "new\n").unwrap();
+    let instance = |unified| {
+        App::new(
+            AppMode::FilePair(old.clone(), new.clone()),
+            Config::load_or_default_from_path(&path),
+            false,
+            false,
+            unified,
+            None,
+            false,
+            false,
+        )
+        .unwrap()
+    };
+    let mut app = instance(false);
+    assert!(app.wrap_lines);
+    assert!(!app.is_unified);
+    for expected in [(false, true), (true, false)] {
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        app.save_view_preferences_to_path(&path).unwrap();
+        app = instance(false);
+        assert_eq!((app.wrap_lines, app.is_unified), expected);
+    }
+    // An active CLI override is also remembered on normal shutdown.
+    app = instance(true);
+    assert!(app.is_unified);
+    app.save_view_preferences_to_path(&path).unwrap();
+    assert!(instance(false).is_unified);
+    // The history shortcut shares the same wrap state and shutdown save.
+    app.show_history = true;
+    app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    app.save_view_preferences_to_path(&path).unwrap();
+    assert!(!instance(false).wrap_lines);
+}

@@ -1,9 +1,12 @@
+use rayon::prelude::*;
+
 use super::intraline::compute_intraline_spans;
-use super::models::{AlignedRow, DiffKind, DiffLine, Hunk};
+use super::models::{AlignedRow, DiffKind, DiffLine, FileDiff, Hunk};
 
 /// Aligns hunks into side-by-side rows with filler lines and intraline highlighting.
 pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
-    let mut aligned_rows = Vec::new();
+    let total: usize = hunks.iter().map(|h| h.lines.len()).sum();
+    let mut aligned_rows = Vec::with_capacity(total);
 
     for (hunk_idx, hunk) in hunks.iter().enumerate() {
         let mut i = 0;
@@ -22,65 +25,35 @@ pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
                     i += 1;
                 }
                 DiffKind::Deletion | DiffKind::Addition => {
-                    // Collect consecutive deletions and additions in this change block
-                    let mut deletions = Vec::new();
+                    // Indices of the consecutive deletions and additions of this block;
+                    // each line is cloned once, straight into its row.
                     let mut del_indices = Vec::new();
-                    let mut additions = Vec::new();
                     let mut add_indices = Vec::new();
-
                     while i < lines.len()
-                        && (lines[i].kind == DiffKind::Deletion
-                            || lines[i].kind == DiffKind::Addition)
+                        && matches!(lines[i].kind, DiffKind::Deletion | DiffKind::Addition)
                     {
                         if lines[i].kind == DiffKind::Deletion {
-                            deletions.push(lines[i].clone());
                             del_indices.push(i);
                         } else {
-                            additions.push(lines[i].clone());
                             add_indices.push(i);
                         }
                         i += 1;
                     }
 
-                    let max_len = deletions.len().max(additions.len());
+                    let max_len = del_indices.len().max(add_indices.len());
                     for row_idx in 0..max_len {
-                        let mut left_line = if row_idx < deletions.len() {
-                            Some(deletions[row_idx].clone())
-                        } else {
-                            Some(DiffLine::virtual_line())
-                        };
-
-                        let mut right_line = if row_idx < additions.len() {
-                            Some(additions[row_idx].clone())
-                        } else {
-                            Some(DiffLine::virtual_line())
-                        };
-
-                        let left_line_idx = if row_idx < del_indices.len() {
-                            Some(del_indices[row_idx])
-                        } else {
-                            None
-                        };
-
-                        let right_line_idx = if row_idx < add_indices.len() {
-                            Some(add_indices[row_idx])
-                        } else {
-                            None
-                        };
-
-                        // Compute intra-line highlighting for paired modified lines
-                        if row_idx < deletions.len() && row_idx < additions.len() {
-                            let left_ref = left_line.as_mut().unwrap();
-                            let right_ref = right_line.as_mut().unwrap();
-                            let (left_spans, right_spans) =
-                                compute_intraline_spans(&left_ref.content, &right_ref.content);
-                            left_ref.spans = left_spans;
-                            right_ref.spans = right_spans;
-                        }
+                        let left_line_idx = del_indices.get(row_idx).copied();
+                        let right_line_idx = add_indices.get(row_idx).copied();
+                        let left_line = left_line_idx
+                            .map(|idx| lines[idx].clone())
+                            .unwrap_or_else(DiffLine::virtual_line);
+                        let right_line = right_line_idx
+                            .map(|idx| lines[idx].clone())
+                            .unwrap_or_else(DiffLine::virtual_line);
 
                         aligned_rows.push(AlignedRow {
-                            left: left_line,
-                            right: right_line,
+                            left: Some(left_line),
+                            right: Some(right_line),
                             hunk_index: Some(hunk_idx),
                             left_line_idx,
                             right_line_idx,
@@ -94,7 +67,30 @@ pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
         }
     }
 
+    // Intra-line highlighting for paired modified lines. It is the costly part
+    // (a token diff per pair), so a file with many edits spreads it over all cores.
     aligned_rows
+        .par_iter_mut()
+        .with_min_len(512)
+        .for_each(|row| {
+            if let (Some(left), Some(right)) = (&mut row.left, &mut row.right) {
+                if left.kind == DiffKind::Deletion && right.kind == DiffKind::Addition {
+                    let (left_spans, right_spans) =
+                        compute_intraline_spans(&left.content, &right.content);
+                    left.spans = left_spans;
+                    right.spans = right_spans;
+                }
+            }
+        });
+
+    aligned_rows
+}
+
+/// Fills `aligned_rows` for every file, spreading the files over all cores.
+pub fn align_files(files: &mut [FileDiff]) {
+    files
+        .par_iter_mut()
+        .for_each(|file| file.aligned_rows = align_hunks_side_by_side(&file.hunks));
 }
 
 #[cfg(test)]

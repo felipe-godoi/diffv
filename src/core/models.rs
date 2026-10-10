@@ -25,7 +25,7 @@ impl FileStatus {
 
 /// Which side of the index a working-tree diff belongs to:
 /// `Staged` is HEAD → index, `Changes` is index → working tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DiffSection {
     #[default]
     Changes,
@@ -112,6 +112,9 @@ pub struct FileDiff {
     pub hunks: Vec<Hunk>,
     pub aligned_rows: Vec<AlignedRow>,
     pub is_binary: bool,
+    /// Swapped for its whole-file diff by full-file view (see
+    /// `App::ensure_full_context_file`).
+    pub full_file: bool,
 }
 
 impl FileDiff {

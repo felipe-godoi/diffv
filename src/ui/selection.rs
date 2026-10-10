@@ -97,10 +97,23 @@ pub fn layout_line(
     wrap_width: Option<usize>,
     scroll_x: usize,
 ) -> Vec<(usize, usize, Vec<usize>)> {
-    let char_count = text.chars().count();
+    layout_line_clipped(text, wrap_width, scroll_x, usize::MAX, usize::MAX)
+}
+
+/// `layout_line` limited to what a view can show: at most `max_cells` cells per row
+/// when scrolling horizontally and at most `max_rows` rows when wrapping, so huge
+/// lines cost as much as the screen, not as their length.
+pub fn layout_line_clipped(
+    text: &str,
+    wrap_width: Option<usize>,
+    scroll_x: usize,
+    max_cells: usize,
+    max_rows: usize,
+) -> Vec<(usize, usize, Vec<usize>)> {
     match wrap_width {
         Some(width) => {
             let available = width.max(1);
+            let max_rows = max_rows.max(1);
             let mut rows = Vec::new();
             let mut cells = Vec::new();
             let mut start = 0;
@@ -114,6 +127,9 @@ pub fn layout_line(
                 for _ in 0..count {
                     if used + cell_w > available && used > 0 {
                         rows.push((start, idx, std::mem::take(&mut cells)));
+                        if rows.len() >= max_rows {
+                            return rows;
+                        }
                         start = idx;
                         used = 0;
                     }
@@ -121,7 +137,7 @@ pub fn layout_line(
                     used += cell_w;
                 }
             }
-            rows.push((start, char_count, cells));
+            rows.push((start, text.chars().count(), cells));
             rows
         }
         None => {
@@ -129,6 +145,9 @@ pub fn layout_line(
             let mut cells = Vec::new();
             let mut start = None;
             for (idx, ch) in text.chars().enumerate() {
+                if cells.len() >= max_cells {
+                    break;
+                }
                 let w = ch.width().unwrap_or(0);
                 if offset >= w && offset > 0 {
                     offset -= w;
@@ -138,6 +157,8 @@ pub fn layout_line(
                 cells.extend(std::iter::repeat_n(idx, w - offset));
                 offset = 0;
             }
+            cells.truncate(max_cells);
+            let char_count = text.chars().count();
             vec![(start.unwrap_or(char_count), char_count, cells)]
         }
     }
@@ -284,6 +305,20 @@ mod tests {
         let rows = layout_line("a界bc", None, 2);
         assert_eq!(rows, vec![(1, 4, vec![1, 2, 3])]);
         assert_eq!(layout_line("ab", None, 5), vec![(2, 2, vec![])]);
+    }
+
+    #[test]
+    fn clipped_layout_matches_the_full_layout_on_screen() {
+        let text = "ab界\tcdefghijklmnop";
+        let full = layout_line(text, Some(4), 0);
+        assert_eq!(
+            layout_line_clipped(text, Some(4), 0, usize::MAX, 2),
+            full[..2]
+        );
+        let scrolled = layout_line(text, None, 3);
+        let clipped = layout_line_clipped(text, None, 3, 3, usize::MAX);
+        assert_eq!(clipped[0].2, scrolled[0].2[..3]);
+        assert_eq!((clipped[0].0, clipped[0].1), (scrolled[0].0, scrolled[0].1));
     }
 
     #[test]
