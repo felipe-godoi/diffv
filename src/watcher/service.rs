@@ -89,10 +89,26 @@ impl WatchService {
     }
 }
 
-/// Recursively registers non-ignored directories using `.gitignore` patterns.
+/// FSEvents (macOS) and ReadDirectoryChangesW (Windows) watch whole trees natively,
+/// while notify restarts the FSEvents stream on every `watch` call, so registering
+/// directories one by one is quadratic there. On those platforms the root gets one
+/// recursive watch and ignored paths are filtered per event (`is_relevant`).
+const NATIVE_RECURSIVE: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+
+/// Registers the watches: one recursive watch where the OS supports it, otherwise
+/// every non-ignored directory (`.gitignore` aware), plus the git metadata.
 fn setup_watches(watch_path: &Path, watcher: &mut dyn Watcher, tx: &Sender<WatchEvent>) {
     if !watch_path.is_dir() {
         let _ = watcher.watch(watch_path, RecursiveMode::NonRecursive);
+        let _ = tx.send(WatchEvent::Ready { total_dirs: 1 });
+        return;
+    }
+    if NATIVE_RECURSIVE {
+        let _ = watcher.watch(watch_path, RecursiveMode::Recursive);
+        // A linked worktree keeps its git dir elsewhere.
+        if let Some(gd) = git_dir(watch_path).filter(|gd| !gd.starts_with(watch_path)) {
+            watch_git_dir(&gd, watcher);
+        }
         let _ = tx.send(WatchEvent::Ready { total_dirs: 1 });
         return;
     }
@@ -134,35 +150,53 @@ fn setup_watches(watch_path: &Path, watcher: &mut dyn Watcher, tx: &Sender<Watch
     }
 
     // Watch .git metadata (HEAD, index, and refs) for staging, commits, and branch changes
-    let git_dir = if watch_path.join(".git").is_dir() {
-        Some(watch_path.join(".git"))
-    } else if watch_path.join(".git").is_file() {
-        // Worktree gitdir pointer
-        std::fs::read_to_string(watch_path.join(".git"))
-            .ok()
-            .and_then(|c| {
-                c.lines().next().and_then(|line| {
-                    line.strip_prefix("gitdir:")
-                        .map(|s| PathBuf::from(s.trim()))
-                })
-            })
-    } else {
-        None
-    };
-
-    if let Some(gd) = git_dir {
-        // Watch .git root non-recursively for HEAD and index
-        let _ = watcher.watch(&gd, RecursiveMode::NonRecursive);
-        // Watch .git/refs recursively for branch/tag updates
-        let refs = gd.join("refs");
-        if refs.is_dir() {
-            let _ = watcher.watch(&refs, RecursiveMode::Recursive);
-        }
+    if let Some(gd) = git_dir(watch_path) {
+        watch_git_dir(&gd, watcher);
     }
 
     let _ = tx.send(WatchEvent::Ready {
         total_dirs: dir_count,
     });
+}
+
+/// `.git`, or the directory a worktree's `.git` file points at.
+fn git_dir(watch_path: &Path) -> Option<PathBuf> {
+    let dot_git = watch_path.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git);
+    }
+    // Worktree gitdir pointer
+    std::fs::read_to_string(&dot_git).ok().and_then(|c| {
+        c.lines().next().and_then(|line| {
+            line.strip_prefix("gitdir:")
+                .map(|s| PathBuf::from(s.trim()))
+        })
+    })
+}
+
+fn watch_git_dir(gd: &Path, watcher: &mut dyn Watcher) {
+    // Watch .git root non-recursively for HEAD and index
+    let _ = watcher.watch(gd, RecursiveMode::NonRecursive);
+    // Watch .git/refs recursively for branch/tag updates
+    let refs = gd.join("refs");
+    if refs.is_dir() {
+        let _ = watcher.watch(&refs, RecursiveMode::Recursive);
+    }
+}
+
+/// Paths under the directories the walker always prunes (dependencies, build
+/// output); dropped before asking `git check-ignore`.
+fn in_pruned_dir(repo_root: &Path, path: &Path) -> bool {
+    // FSEvents reports resolved paths (`/private/var/…` for `/var/…`); only the part
+    // inside the repository counts, never the folders above it.
+    let relative = path.strip_prefix(repo_root).ok().or_else(|| {
+        let root = repo_root.canonicalize().ok()?;
+        path.strip_prefix(root).ok()
+    });
+    relative.is_some_and(|rel| {
+        rel.components()
+            .any(|c| COMMON_IGNORED_DIRS.iter().any(|&dir| c.as_os_str() == dir))
+    })
 }
 
 /// Index/HEAD/ref updates (staging or committing elsewhere) count; other
@@ -180,7 +214,7 @@ fn is_relevant<'a>(repo_root: &Path, paths: impl Iterator<Item = &'a Path>) -> b
             if name == "index" || name == "HEAD" || path_str.contains("/.git/refs/") {
                 return true;
             }
-        } else {
+        } else if !in_pruned_dir(repo_root, path) {
             worktree_paths.push(path.to_path_buf());
         }
     }
@@ -253,6 +287,60 @@ mod tests {
             root,
             [target.as_path(), source.as_path()].into_iter()
         ));
+        // Pruned dirs are dropped without asking git, even when not gitignored.
+        assert!(!is_relevant(
+            root,
+            [root.join("node_modules/pkg/index.js").as_path()].into_iter()
+        ));
+        assert!(in_pruned_dir(root, &root.join("web/dist/app.js")));
+        assert!(!in_pruned_dir(root, &root.join("src/distance.rs")));
+        // Folders above the repository don't count.
+        let nested = root.join("build/repo");
+        assert!(!in_pruned_dir(&nested, &nested.join("src/main.rs")));
+        assert!(in_pruned_dir(
+            root,
+            &root.canonicalize().unwrap().join("target/x")
+        ));
+    }
+
+    #[test]
+    fn edits_in_the_worktree_request_a_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(Command::new("git")
+            .arg("init")
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        std::fs::create_dir_all(root.join("src/deep")).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let _service = WatchService::start(root, 50, tx).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(WatchEvent::Ready { .. })
+        ) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "watcher never got ready"
+            );
+        }
+        // FSEvents may deliver events from just before the stream started.
+        std::thread::sleep(Duration::from_millis(300));
+        while rx.try_recv().is_ok() {}
+        std::fs::write(root.join("src/deep/file.rs"), "fn main() {}\n").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(WatchEvent::ReloadRequested) => break,
+                _ => assert!(
+                    std::time::Instant::now() < deadline,
+                    "no reload after editing a nested file"
+                ),
+            }
+        }
     }
 
     #[test]

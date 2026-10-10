@@ -80,6 +80,37 @@ pub enum ConfirmAction {
     DiscardFile,
 }
 
+/// Inputs of a background working-tree reload (see `App::background_reload_job`).
+pub struct ReloadJob {
+    generation: u64,
+    provider: GitProvider,
+    target_ref: Option<String>,
+    staged_only: bool,
+    include_untracked: bool,
+    ignore_whitespace: bool,
+}
+
+/// Outcome of a `ReloadJob`, applied by `App::apply_background_reload`.
+pub struct ReloadDone {
+    generation: u64,
+    result: anyhow::Result<(Vec<FileDiff>, RepoStats)>,
+}
+
+impl ReloadJob {
+    pub fn run(self) -> ReloadDone {
+        let result = self.provider.load_diffs(
+            self.target_ref.as_deref(),
+            self.staged_only,
+            self.include_untracked,
+            self.ignore_whitespace,
+        );
+        ReloadDone {
+            generation: self.generation,
+            result,
+        }
+    }
+}
+
 pub enum AppMode {
     Git {
         target_ref: Option<String>,
@@ -100,6 +131,8 @@ pub struct App {
     pub focus: Focus,
     pub is_unified: bool,
     pub watch_mode: bool,
+    /// Bumped by every synchronous reload so stale background reloads are dropped.
+    reload_generation: u64,
     pub show_help: bool,
     /// Outcome of the startup update check, shown as a popup until dismissed.
     pub update_popup: Option<UpdateEvent>,
@@ -271,6 +304,7 @@ impl App {
             focus: Focus::FileTree,
             is_unified: unified || config.ui.default_view == "unified",
             watch_mode,
+            reload_generation: 0,
             show_help: false,
             update_popup: None,
             filter_mode: false,
@@ -1682,10 +1716,47 @@ impl App {
     }
 
     fn reload_diffs_internal(&mut self, is_live_reload: bool) -> anyhow::Result<()> {
-        let previous_file = self.current_file().map(|f| (f.new_path.clone(), f.section));
-        let prev_scroll = self.scroll_y;
-        let prev_row = self.selected_row;
+        // A synchronous reload supersedes any background reload still running.
+        self.reload_generation += 1;
+        let (files, stats) = self.load_files()?;
+        self.apply_loaded_files(files, stats, is_live_reload);
+        Ok(())
+    }
 
+    /// Snapshot of what a working-tree reload needs, to run off the UI thread
+    /// (watch mode). `None` outside git mode, where reloads stay synchronous.
+    pub fn background_reload_job(&mut self) -> Option<ReloadJob> {
+        self.sync_git_context();
+        let AppMode::Git {
+            target_ref,
+            git_provider,
+        } = &self.mode
+        else {
+            return None;
+        };
+        Some(ReloadJob {
+            generation: self.reload_generation,
+            provider: git_provider.clone(),
+            target_ref: target_ref.clone(),
+            staged_only: self.staged_only,
+            include_untracked: self.config.watcher.watch_untracked,
+            ignore_whitespace: self.ignore_whitespace,
+        })
+    }
+
+    /// Applies a finished background reload, unless a synchronous reload (stage,
+    /// branch switch, full-file toggle…) happened meanwhile and made it stale.
+    pub fn apply_background_reload(&mut self, done: ReloadDone) {
+        if done.generation != self.reload_generation {
+            return;
+        }
+        match done.result {
+            Ok((files, stats)) => self.apply_loaded_files(files, stats, true),
+            Err(e) => self.set_notification(format!("Reload error: {}", e)),
+        }
+    }
+
+    fn load_files(&mut self) -> anyhow::Result<(Vec<FileDiff>, RepoStats)> {
         self.sync_git_context();
         let diff_engine = DiffEngine::new(
             &self.config.diff.algorithm,
@@ -1729,12 +1800,20 @@ impl App {
             }
             AppMode::Stdin => diff_engine.compare_stdin()?,
         };
+        Ok((files, stats))
+    }
+
+    /// Installs freshly loaded diffs, keeping the selected file, cursor and scroll.
+    fn apply_loaded_files(&mut self, files: Vec<FileDiff>, stats: RepoStats, is_live_reload: bool) {
+        let previous_file = self.current_file().map(|f| (f.new_path.clone(), f.section));
+        let prev_scroll = self.scroll_y;
+        let prev_row = self.selected_row;
 
         // While a commit or stash is open, the working tree only refreshes the
         // snapshot restored on exit; the inspected files stay untouched.
         if self.active_commit_info.is_some() || self.active_stash_info.is_some() {
             self.live_snapshot = Some((files, stats));
-            return Ok(());
+            return;
         }
         self.files = files;
         self.repo_stats = stats;
@@ -1778,8 +1857,6 @@ impl App {
         if is_live_reload {
             self.set_notification("⚡ [disk updated]");
         }
-
-        Ok(())
     }
 
     pub fn update_filter(&mut self) {

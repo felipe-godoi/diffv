@@ -2395,3 +2395,62 @@ fn untracked_files_load_in_parallel_with_binary_detection() {
         "aligned rows are precomputed"
     );
 }
+
+#[test]
+fn background_reload_applies_and_stale_results_are_dropped() {
+    use diffv::config::Config;
+    use diffv::ui::app::{App, AppMode};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Tester"]);
+    git(&["config", "user.email", "test@example.com"]);
+    fs::write(root.join("a.txt"), "a\n").unwrap();
+    git(&["add", "a.txt"]);
+    git(&["commit", "-m", "init"]);
+    fs::write(root.join("a.txt"), "a changed\n").unwrap();
+
+    let mode = AppMode::Git {
+        target_ref: None,
+        git_provider: GitProvider::discover(Some(root)).unwrap(),
+    };
+    let mut app = App::new(
+        mode,
+        Config::default(),
+        true,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    assert_eq!(app.files.len(), 1);
+
+    // A watcher reload computed off the UI thread lands in the app.
+    fs::write(root.join("b.txt"), "new\n").unwrap();
+    let job = app
+        .background_reload_job()
+        .expect("git mode reloads in background");
+    let done = std::thread::spawn(move || job.run()).join().unwrap();
+    app.apply_background_reload(done);
+    assert_eq!(app.files.len(), 2, "b.txt shows up");
+
+    // A synchronous reload (e.g. after staging) makes an older background result stale.
+    let stale = app.background_reload_job().unwrap().run();
+    fs::remove_file(root.join("b.txt")).unwrap();
+    app.reload_diffs();
+    assert_eq!(app.files.len(), 1);
+    app.apply_background_reload(stale);
+    assert_eq!(app.files.len(), 1, "stale reload must not resurrect b.txt");
+}
