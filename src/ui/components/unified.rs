@@ -181,10 +181,7 @@ pub fn render_unified(
             )
         } else {
             vec![crate::ui::components::horizontal::scroll_line(
-                line,
-                3,
-                scroll_x,
-                available,
+                line, 3, scroll_x, available,
             )]
         };
         let skip = if wrap && idx == start_idx {

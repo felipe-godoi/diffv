@@ -58,7 +58,12 @@ fn syntax_index(path: &Path) -> usize {
         .or_else(|| path.file_name())
         .map(OsString::from)
         .unwrap_or_default();
-    if let Some(&idx) = SYNTAX_BY_NAME.lock().ok().as_ref().and_then(|m| m.get(&key)) {
+    if let Some(&idx) = SYNTAX_BY_NAME
+        .lock()
+        .ok()
+        .as_ref()
+        .and_then(|m| m.get(&key))
+    {
         return idx;
     }
     let syntax: &SyntaxReference = path

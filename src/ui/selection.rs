@@ -311,7 +311,10 @@ mod tests {
     fn clipped_layout_matches_the_full_layout_on_screen() {
         let text = "ab界\tcdefghijklmnop";
         let full = layout_line(text, Some(4), 0);
-        assert_eq!(layout_line_clipped(text, Some(4), 0, usize::MAX, 2), full[..2]);
+        assert_eq!(
+            layout_line_clipped(text, Some(4), 0, usize::MAX, 2),
+            full[..2]
+        );
         let scrolled = layout_line(text, None, 3);
         let clipped = layout_line_clipped(text, None, 3, 3, usize::MAX);
         assert_eq!(clipped[0].2, scrolled[0].2[..3]);

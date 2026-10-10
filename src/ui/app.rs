@@ -5257,7 +5257,10 @@ mod preview_scroll_tests {
         ctrl(&mut app, 'e');
         ctrl(&mut app, 'e');
         assert_eq!(app.scroll_y, 2, "Ctrl+E scrolls the diff preview");
-        assert_eq!(app.selected_filtered_idx, selected, "the file selection stays");
+        assert_eq!(
+            app.selected_filtered_idx, selected,
+            "the file selection stays"
+        );
         assert_eq!(app.focus, Focus::FileTree);
         ctrl(&mut app, 'y');
         assert_eq!(app.scroll_y, 1, "Ctrl+Y scrolls the diff preview back");

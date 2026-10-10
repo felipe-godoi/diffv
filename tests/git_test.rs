@@ -2334,3 +2334,64 @@ fn wrapped_changes_header_keeps_clicks_and_list_aligned() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn untracked_files_load_in_parallel_with_binary_detection() {
+    use diffv::core::models::DiffSection;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Tester"]);
+    git(&["config", "user.email", "test@example.com"]);
+    fs::write(root.join("tracked.txt"), "a\n").unwrap();
+    git(&["add", "tracked.txt"]);
+    git(&["commit", "-m", "init"]);
+    fs::write(root.join("tracked.txt"), "b\n").unwrap();
+    for i in 0..40 {
+        fs::write(root.join(format!("new_{i:02}.txt")), format!("line {i}\n")).unwrap();
+    }
+    fs::write(root.join("blob.bin"), b"PNG\0\x01\x02 binary").unwrap();
+
+    let provider = GitProvider::discover(Some(root)).unwrap();
+    let (files, stats) = provider.load_diffs(None, false, true, false).unwrap();
+    let paths: Vec<String> = files.iter().map(|f| f.display_path()).collect();
+    assert_eq!(stats.file_count, 42, "{paths:?}");
+    assert_eq!(
+        files.len(),
+        42,
+        "every untracked file shows up exactly once"
+    );
+
+    let blob = files
+        .iter()
+        .find(|f| f.display_path() == "blob.bin")
+        .unwrap();
+    assert!(blob.is_binary && blob.hunks.is_empty());
+    let new_7 = files
+        .iter()
+        .find(|f| f.display_path() == "new_07.txt")
+        .unwrap();
+    assert_eq!(new_7.stage_status, StageStatus::Untracked);
+    assert_eq!(new_7.section, DiffSection::Changes);
+    assert_eq!(new_7.hunks[0].lines[0].content, "line 7");
+    let tracked = files
+        .iter()
+        .find(|f| f.display_path() == "tracked.txt")
+        .unwrap();
+    assert_eq!(tracked.status, FileStatus::Modified);
+    assert_eq!(
+        tracked.aligned_rows.len(),
+        1,
+        "aligned rows are precomputed"
+    );
+}

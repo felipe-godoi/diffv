@@ -57,7 +57,10 @@ pub fn scroll_line(
             used += width;
         }
         if let Some(start) = start.filter(|&s| s < end) {
-            spans.push(Span::styled(slice_cow(&span.content, start, end), span.style));
+            spans.push(Span::styled(
+                slice_cow(&span.content, start, end),
+                span.style,
+            ));
         }
     }
     line.spans = spans;
