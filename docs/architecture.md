@@ -23,6 +23,8 @@ A ferramenta foi definida para ser desenvolvida em **Rust**, visando:
 | **`git2`** ou **`std::process::Command`** (git CLI) | `^0.19` ou CLI wrapper | Provedor de dados Git | Leitura de repositório, branches, working tree status, hunks e staging. |
 | **`arboard`** | `^3.4` | Integração com Clipboard | Cópia de hunks/patches diretamente para a área de transferência do SO (macOS/Linux). |
 | **`serde`** + **`toml`** | `^1.0` / `^0.8` | Configuração persistente | Leitura e validação do arquivo `~/.config/diffv/config.toml`. |
+| **`rayon`** | `^1` | Paralelismo de dados | Alinhamento side-by-side, intraline, untracked e comparação de diretórios em todos os núcleos. |
+| **`frizbee`** | `^0.13` | Fuzzy matching | Motor SIMD (Smith-Waterman) usado pelo fff; filtra o picker interno em paralelo, dentro do processo. |
 
 ---
 
@@ -181,6 +183,16 @@ A aplicação adota um modelo clássico de **Event Loop Reativo**:
    - Uma closure no `std::panic::set_hook` garante que o modo raw do terminal seja desabilitado e a tela do terminal seja restaurada caso ocorra algum panic inesperado, evitando deixar o terminal em estado corrompido.
 3. **Estado Preservado no Reload**:
    - Quando o watcher dispara um evento de reload, o `App` recalcula o diff do arquivo atual mantendo o índice do hunk focado e a porcentagem relativa de scroll.
+
+### 6.1 Performance em repositórios grandes e arquivos pesados
+
+- **Carga paralela**: `GitProvider::load_diffs` roda `git diff --cached`, `git diff`, `git status` e o branch ao mesmo tempo (`std::thread::scope`); untracked são lidos em paralelo (NUL nos primeiros 8 KB = binário) e o alinhamento/intraline usa `rayon` por arquivo e por linha. Worktrees, commits e stashes da inicialização carregam ao lado dos diffs.
+- **Reload do watcher fora da UI**: `App::background_reload_job` gera um `ReloadJob` que roda numa thread; o resultado (`ReloadDone`) volta pelo canal e só é aplicado se nenhum reload síncrono (stage, troca de branch, `x`) aconteceu depois (`reload_generation`). No máximo um reload em voo e um na fila.
+- **Loop de eventos**: eventos enfileirados são processados antes do próximo frame (até 256), movimento de mouse sem botão não redesenha, e os drains do editor/fzf descartam só entrada, nunca resultados de reload.
+- **Watcher**: em macOS/Windows um único watch recursivo na raiz (o notify reinicia o stream do FSEvents a cada `watch`, o que tornava o registro por diretório quadrático); diretórios sempre podados (`node_modules`, `target`, …) são filtrados antes do `git check-ignore`.
+- **Arquivo inteiro (`x`)**: só o arquivo visto é carregado com `-U1000000` (`ensure_full_context_file`, marcado em `FileDiff::full_file`); ligar/desligar troca apenas esses arquivos, sem recarregar a árvore.
+- **Custo por frame limitado à tela**: linhas acima de 1000 bytes não passam pelo syntect, linhas acima de 2000 bytes não têm intraline (o Patience em uma linha minificada de megabytes travava a carga), scroll horizontal/wrap/mapa de seleção processam só as colunas e linhas visíveis (`scroll_line`, `wrap_line`, `layout_line_clipped`), e `wrapped_row_heights` pula direto para a primeira linha visível. Tokens de sintaxe ficam em cache por linguagem (`Arc<[SyntaxToken]>`, sem cópia), e o syntect é pré-carregado em background durante a carga inicial.
+- **Stage de muitos caminhos**: `stage_paths` / `unstage_paths` dividem listas enormes em várias chamadas do git, abaixo do `ARG_MAX`.
 
 ---
 
