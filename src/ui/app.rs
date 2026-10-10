@@ -2425,10 +2425,10 @@ impl App {
                     self.focus = Focus::DiffView
                 }
                 KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.file_tree_down(1)
+                    self.scroll_viewport_down(1)
                 }
                 KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.file_tree_up(1)
+                    self.scroll_viewport_up(1)
                 }
                 KeyCode::PageDown => {
                     self.file_tree_down(self.file_tree_height.saturating_sub(4).max(1))
@@ -2746,19 +2746,13 @@ impl App {
             KeyCode::Char('\\') => {
                 self.fzf_request = Some(FzfRequest::Text);
             }
+            // Like Vim, Ctrl+E / Ctrl+Y scroll the diff preview one line without
+            // moving the selection, whichever panel has the focus.
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.focus == Focus::FileTree {
-                    self.file_tree_down(1);
-                } else {
-                    self.scroll_viewport_down(1);
-                }
+                self.scroll_viewport_down(1);
             }
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.focus == Focus::FileTree {
-                    self.file_tree_up(1);
-                } else {
-                    self.scroll_viewport_up(1);
-                }
+                self.scroll_viewport_up(1);
             }
             KeyCode::Char('q') => {
                 self.should_quit = true;
@@ -4847,8 +4841,10 @@ impl App {
             render_confirm_popup(frame, size, msg, self.language, &self.theme);
         }
 
-        // 5. Drawer Line Overlay (extends row over right border if name exceeds drawer width)
+        // 5. Drawer Line Overlay (extends row over right border if name exceeds drawer width).
+        // Only while the drawer has the focus: over a focused diff it would hide its text.
         if self.show_drawer
+            && self.focus == Focus::FileTree
             && !self.show_settings
             && !self.show_help
             && !self.show_worktrees
@@ -5197,5 +5193,95 @@ mod folder_tests {
         app.focus = Focus::DiffView;
         sequence(&mut app, 'M');
         assert!(app.collapsed_dirs.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod preview_scroll_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    const LONG_NAME: &str = "a_really_long_file_name_that_cannot_fit_in_the_drawer_column.rs";
+
+    fn app() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old");
+        let new = dir.path().join(LONG_NAME);
+        let text = |tag: &str| (0..200).map(|i| format!("{tag} {i}\n")).collect::<String>();
+        std::fs::write(&old, text("old")).unwrap();
+        std::fs::write(&new, text("new")).unwrap();
+        let mut config = Config::default();
+        config.ui.wrap_lines = false;
+        let mut app = App::new(
+            AppMode::FilePair(old, new),
+            config,
+            false,
+            false,
+            false,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+        app.files[0].new_path = LONG_NAME.into();
+        app.focus = Focus::FileTree;
+        app.file_view_mode = FileViewMode::Flat;
+        app.update_filter();
+        (dir, app)
+    }
+
+    fn screen(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn ctrl(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+    }
+
+    #[test]
+    fn ctrl_e_and_ctrl_y_scroll_the_preview_from_the_changes_panel() {
+        let (_dir, mut app) = app();
+        screen(&mut app);
+        let selected = app.selected_filtered_idx;
+        ctrl(&mut app, 'e');
+        ctrl(&mut app, 'e');
+        assert_eq!(app.scroll_y, 2, "Ctrl+E scrolls the diff preview");
+        assert_eq!(app.selected_filtered_idx, selected, "the file selection stays");
+        assert_eq!(app.focus, Focus::FileTree);
+        ctrl(&mut app, 'y');
+        assert_eq!(app.scroll_y, 1, "Ctrl+Y scrolls the diff preview back");
+        assert_eq!(app.selected_filtered_idx, selected);
+
+        app.focus = Focus::DiffView;
+        ctrl(&mut app, 'e');
+        assert_eq!(app.scroll_y, 2, "the diff panel keeps scrolling too");
+    }
+
+    #[test]
+    fn full_name_overlay_only_shows_while_the_changes_panel_has_focus() {
+        let (_dir, mut app) = app();
+        app.focus = Focus::FileTree;
+        assert!(
+            screen(&mut app).contains(LONG_NAME),
+            "the drawer overlay shows the full file name"
+        );
+        app.focus = Focus::DiffView;
+        assert!(
+            !screen(&mut app).contains(LONG_NAME),
+            "a focused diff is not covered by the drawer overlay"
+        );
+        app.focus = Focus::FileTree;
+        assert!(screen(&mut app).contains(LONG_NAME), "it comes back");
     }
 }
