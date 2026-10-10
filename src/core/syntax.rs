@@ -88,6 +88,12 @@ fn syntax_index(path: &Path) -> usize {
 }
 
 impl SyntaxHighlighter {
+    /// Loads the syntax definitions and theme ahead of the first highlighted line.
+    pub fn prewarm() {
+        Lazy::force(&SYNTAX_SET);
+        Lazy::force(&THEME);
+    }
+
     /// Tokens of one line; empty for empty or overly long lines (render them plain).
     pub fn highlight_line(path: &Path, line: &str) -> Arc<[SyntaxToken]> {
         if line.is_empty() || line.len() > MAX_HIGHLIGHT_LEN {

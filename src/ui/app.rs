@@ -274,28 +274,31 @@ impl App {
         ignore_whitespace: bool,
         history_mode: bool,
     ) -> anyhow::Result<Self> {
+        if config.ui.syntax_highlighting {
+            // Loading syntect's definitions (and the OS theme lookup) takes a while;
+            // do it now, beside the diff load, instead of during the first frame.
+            std::thread::spawn(crate::core::syntax::SyntaxHighlighter::prewarm);
+        }
         let theme_name = theme_override.unwrap_or_else(|| config.ui.theme.clone());
         let theme = Theme::from_name(&theme_name);
 
-        let (worktrees, active_wt_idx) = match &mode {
+        // Worktrees, commits and stashes load beside the diffs (joined below).
+        let git_meta = match &mode {
             AppMode::Git { git_provider, .. } => {
-                let cwd =
-                    std::env::current_dir().unwrap_or_else(|_| git_provider.repo_root.clone());
-                let list = git_provider.get_worktrees(&cwd).unwrap_or_default();
-                let idx = list.iter().position(|w| w.is_current).unwrap_or(0);
-                (list, idx)
+                let provider = git_provider.clone();
+                Some(std::thread::spawn(move || {
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| provider.repo_root.clone());
+                    let worktrees = provider.get_worktrees(&cwd).unwrap_or_default();
+                    let commits = provider.get_repo_commits(50).unwrap_or_default();
+                    let stashes = provider.get_stashes().unwrap_or_default();
+                    (worktrees, commits, stashes)
+                }))
             }
-            _ => (Vec::new(), 0),
+            _ => None,
         };
-
-        let (repo_commits, stashes) = match &mode {
-            AppMode::Git { git_provider, .. } => {
-                let c = git_provider.get_repo_commits(50).unwrap_or_default();
-                let s = git_provider.get_stashes().unwrap_or_default();
-                (c, s)
-            }
-            _ => (Vec::new(), Vec::new()),
-        };
+        let (worktrees, active_wt_idx) = (Vec::new(), 0);
+        let (repo_commits, stashes) = (Vec::new(), Vec::new());
 
         let wrap_lines = config.ui.wrap_lines;
         let mut app = Self {
@@ -394,7 +397,17 @@ impl App {
             pending_click: None,
         };
 
-        app.reload_diffs_internal(false)?;
+        let loaded = app.reload_diffs_internal(false);
+        if let Some(meta) = git_meta {
+            let (worktrees, commits, stashes) = meta
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            app.selected_worktree_idx = worktrees.iter().position(|w| w.is_current).unwrap_or(0);
+            app.worktrees = worktrees;
+            app.repo_commits = commits;
+            app.stashes = stashes;
+        }
+        loaded?;
         if app.files.is_empty() {
             let msg = match app.language {
                 Language::En => "No differences found.",
