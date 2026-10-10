@@ -112,6 +112,9 @@ pub struct FileDiff {
     pub hunks: Vec<Hunk>,
     pub aligned_rows: Vec<AlignedRow>,
     pub is_binary: bool,
+    /// Swapped for its whole-file diff by full-file view (see
+    /// `App::ensure_full_context_file`).
+    pub full_file: bool,
 }
 
 impl FileDiff {

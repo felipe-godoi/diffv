@@ -251,6 +251,7 @@ impl DiffEngine {
             aligned_rows: Vec::new(),
             hunks,
             is_binary: false,
+            full_file: false,
         }
     }
 }

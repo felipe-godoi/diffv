@@ -2519,8 +2519,14 @@ fn full_file_view_loads_only_the_viewed_file_in_full() {
     };
 
     assert!(app.jump_to_file_in("a.txt", DiffSection::Changes));
+    let file_count = app.files.len();
+    // The toggle only touches the viewed file: a file created meanwhile is not
+    // picked up, because the tree is not reloaded.
+    fs::write(root.join("unseen.txt"), "x\n").unwrap();
     app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
     assert!(app.full_context);
+    assert_eq!(app.files.len(), file_count, "no whole-tree reload");
+    fs::remove_file(root.join("unseen.txt")).unwrap();
     assert_eq!(
         lines(app.current_file().unwrap()),
         41,
@@ -2539,6 +2545,20 @@ fn full_file_view_loads_only_the_viewed_file_in_full() {
     let renamed = app.current_file().unwrap();
     assert_eq!(lines(renamed), 41);
     assert_eq!(renamed.status, FileStatus::Renamed);
+
+    // Leaving full-file view puts every file expanded while browsing back to hunks.
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(!app.full_context);
+    for (path, section) in [
+        ("a.txt", DiffSection::Changes),
+        ("b.txt", DiffSection::Staged),
+        ("new_name.txt", DiffSection::Staged),
+    ] {
+        assert_eq!(lines(&find(&app, path, section)), 8, "{path}");
+    }
+    assert!(app.files.iter().all(|f| !f.full_file));
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(lines(app.current_file().unwrap()), 41);
 
     // A background reload keeps the viewed file whole and the cursor on its line.
     app.focus = Focus::DiffView;

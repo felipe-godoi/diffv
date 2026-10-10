@@ -1837,6 +1837,7 @@ mod tests {
             hunks: Vec::new(),
             aligned_rows: Vec::new(),
             is_binary: false,
+            full_file: false,
         }
     }
 

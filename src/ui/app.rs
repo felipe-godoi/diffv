@@ -135,8 +135,6 @@ pub struct App {
     reload_generation: u64,
     /// Full-file view loads files in full one at a time, as they are shown.
     full_context_lazy: bool,
-    /// Files (path, section) already swapped for their whole-file diff.
-    full_context_files: HashSet<(PathBuf, DiffSection)>,
     pub show_help: bool,
     /// Outcome of the startup update check, shown as a popup until dismissed.
     pub update_popup: Option<UpdateEvent>,
@@ -313,7 +311,6 @@ impl App {
             watch_mode,
             reload_generation: 0,
             full_context_lazy: false,
-            full_context_files: HashSet::new(),
             show_help: false,
             update_popup: None,
             filter_mode: false,
@@ -1652,7 +1649,30 @@ impl App {
         } else if self.active_stash_info.is_some() {
             self.load_selected_stash();
         }
-        if let Err(e) = self.reload_diffs_internal(false) {
+        let inspecting = self.show_history
+            || self.active_commit_view.is_some()
+            || self.active_commit_info.is_some()
+            || self.active_stash_info.is_some();
+        // On the working tree, only the viewed file changes: expand it, or put the
+        // files expanded so far back to their hunks. Other cases reload everything.
+        let lazy = !inspecting
+            && if self.full_context {
+                self.can_load_full_context_lazily()
+            } else {
+                self.full_context_lazy
+            };
+        let switched = if lazy {
+            self.full_context_lazy = self.full_context;
+            if self.full_context {
+                self.ensure_full_context_file();
+                Ok(())
+            } else {
+                self.collapse_full_files()
+            }
+        } else {
+            self.reload_diffs_internal(false)
+        };
+        if let Err(e) = switched {
             self.set_notification(format!("Reload error: {}", e));
             return;
         }
@@ -1678,6 +1698,36 @@ impl App {
 
     pub fn get_underlying_file(&self) -> Option<&FileDiff> {
         self.files.get(self.underlying_file_index()?)
+    }
+
+    /// Leaving full-file view: reloads the files expanded so far with the normal
+    /// context, one `git diff` each, instead of reloading the whole tree.
+    fn collapse_full_files(&mut self) -> anyhow::Result<()> {
+        let AppMode::Git {
+            target_ref,
+            git_provider,
+        } = &self.mode
+        else {
+            return Ok(());
+        };
+        let mut provider = git_provider.clone();
+        provider.context_lines = self.config.diff.context_lines;
+        for file in self.files.iter_mut().filter(|f| f.full_file) {
+            file.full_file = false;
+            if file.status == crate::core::models::FileStatus::Untracked || file.is_binary {
+                continue;
+            }
+            if let Some(diff) = provider.load_worktree_file(
+                target_ref.as_deref(),
+                self.staged_only,
+                file,
+                self.ignore_whitespace,
+            )? {
+                file.hunks = diff.hunks;
+                file.aligned_rows = diff.aligned_rows;
+            }
+        }
+        Ok(())
     }
 
     /// Index in `files` of the file selected in the drawer.
@@ -1725,15 +1775,14 @@ impl App {
         let Some(idx) = self.underlying_file_index() else {
             return;
         };
-        let file = &self.files[idx];
-        // Untracked files already list every line.
-        if file.status == crate::core::models::FileStatus::Untracked || file.is_binary {
+        let file = &mut self.files[idx];
+        if file.full_file {
             return;
         }
-        if !self
-            .full_context_files
-            .insert((file.new_path.clone(), file.section))
-        {
+        // Marked even when nothing is loaded, so a failure is not retried per frame.
+        file.full_file = true;
+        // Untracked files already list every line.
+        if file.status == crate::core::models::FileStatus::Untracked || file.is_binary {
             return;
         }
         self.sync_git_context();
@@ -1917,7 +1966,6 @@ impl App {
         }
         self.files = files;
         self.repo_stats = stats;
-        self.full_context_files.clear();
 
         self.update_filter();
 
@@ -5340,6 +5388,7 @@ mod folder_tests {
                 hunks: vec![],
                 aligned_rows: vec![],
                 is_binary: false,
+                full_file: false,
             })
             .collect();
         app.focus = Focus::FileTree;
@@ -5477,6 +5526,7 @@ mod wrapped_height_tests {
             aligned_rows: crate::core::aligner::align_hunks_side_by_side(&hunks),
             hunks,
             is_binary: false,
+            full_file: false,
         };
         for unified in [true, false] {
             let all: Vec<usize> = wrapped_row_heights(&file, unified, 4, 0).collect();

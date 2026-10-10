@@ -325,6 +325,7 @@ impl GitProvider {
                 hunks: Vec::new(),
                 aligned_rows: Vec::new(),
                 is_binary: true,
+                full_file: false,
             });
         }
 
@@ -344,6 +345,7 @@ impl GitProvider {
                 hunks: Vec::new(),
                 aligned_rows: Vec::new(),
                 is_binary: true,
+                full_file: false,
             });
         };
 
@@ -384,6 +386,7 @@ impl GitProvider {
             aligned_rows: Vec::new(),
             hunks: vec![hunk],
             is_binary: false,
+            full_file: false,
         })
     }
 

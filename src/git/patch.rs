@@ -181,6 +181,7 @@ fn parse_file_diff(lines: &[&str], start_idx: usize) -> (FileDiff, usize) {
         aligned_rows: Vec::new(),
         hunks,
         is_binary,
+        full_file: false,
     };
 
     (file_diff, i)

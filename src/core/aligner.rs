@@ -44,20 +44,12 @@ pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
                     for row_idx in 0..max_len {
                         let left_line_idx = del_indices.get(row_idx).copied();
                         let right_line_idx = add_indices.get(row_idx).copied();
-                        let mut left_line = left_line_idx
+                        let left_line = left_line_idx
                             .map(|idx| lines[idx].clone())
                             .unwrap_or_else(DiffLine::virtual_line);
-                        let mut right_line = right_line_idx
+                        let right_line = right_line_idx
                             .map(|idx| lines[idx].clone())
                             .unwrap_or_else(DiffLine::virtual_line);
-
-                        // Compute intra-line highlighting for paired modified lines
-                        if left_line_idx.is_some() && right_line_idx.is_some() {
-                            let (left_spans, right_spans) =
-                                compute_intraline_spans(&left_line.content, &right_line.content);
-                            left_line.spans = left_spans;
-                            right_line.spans = right_spans;
-                        }
 
                         aligned_rows.push(AlignedRow {
                             left: Some(left_line),
@@ -74,6 +66,22 @@ pub fn align_hunks_side_by_side(hunks: &[Hunk]) -> Vec<AlignedRow> {
             }
         }
     }
+
+    // Intra-line highlighting for paired modified lines. It is the costly part
+    // (a token diff per pair), so a file with many edits spreads it over all cores.
+    aligned_rows
+        .par_iter_mut()
+        .with_min_len(512)
+        .for_each(|row| {
+            if let (Some(left), Some(right)) = (&mut row.left, &mut row.right) {
+                if left.kind == DiffKind::Deletion && right.kind == DiffKind::Addition {
+                    let (left_spans, right_spans) =
+                        compute_intraline_spans(&left.content, &right.content);
+                    left.spans = left_spans;
+                    right.spans = right_spans;
+                }
+            }
+        });
 
     aligned_rows
 }
