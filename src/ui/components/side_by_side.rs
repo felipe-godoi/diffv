@@ -7,7 +7,7 @@ use ratatui::Frame;
 use crate::core::models::{DiffKind, DiffLine, FileDiff, HighlightSpan};
 use crate::core::syntax::SyntaxHighlighter;
 use crate::ui::components::style::diff_pane_block;
-use crate::ui::selection::{layout_line, SelectionPane, TextMap, TextRow};
+use crate::ui::selection::{layout_line_clipped, SelectionPane, TextMap, TextRow};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,24 +225,55 @@ pub fn render_side_by_side(
             theme,
             right_area.width as usize,
         );
-        let left_layout = side_layout(&left, row.left.as_ref(), left_area, wrap, scroll_x[0]);
-        let right_layout = side_layout(&right, row.right.as_ref(), right_area, wrap, scroll_x[1]);
+        // Rows this logical row may still need: the rest of the screen (plus the rows
+        // hidden by `wrap_skip` and some slack for the scroll logic, which reads
+        // `row_map` to know whether the top row continues below).
+        let first_skip = if idx == start_idx { wrap_skip } else { 0 };
+        let max_rows = first_skip + 2 * max_lines + 1;
+        let left_layout = side_layout(
+            &left,
+            row.left.as_ref(),
+            left_area,
+            wrap,
+            scroll_x[0],
+            max_rows,
+        );
+        let right_layout = side_layout(
+            &right,
+            row.right.as_ref(),
+            right_area,
+            wrap,
+            scroll_x[1],
+            max_rows,
+        );
         let mut left = if wrap {
-            crate::ui::components::horizontal::wrap_line(left, 2, left_area.width as usize)
+            crate::ui::components::horizontal::wrap_line(
+                left,
+                2,
+                left_area.width as usize,
+                max_rows,
+            )
         } else {
             vec![crate::ui::components::horizontal::scroll_line(
                 left,
                 2,
                 scroll_x[0],
+                left_area.width as usize,
             )]
         };
         let mut right = if wrap {
-            crate::ui::components::horizontal::wrap_line(right, 2, right_area.width as usize)
+            crate::ui::components::horizontal::wrap_line(
+                right,
+                2,
+                right_area.width as usize,
+                max_rows,
+            )
         } else {
             vec![crate::ui::components::horizontal::scroll_line(
                 right,
                 2,
                 scroll_x[1],
+                right_area.width as usize,
             )]
         };
         let height = left.len().max(right.len());
@@ -287,12 +318,15 @@ fn side_layout(
     area: Rect,
     wrap: bool,
     scroll_x: usize,
+    max_rows: usize,
 ) -> SideLayout {
     let gutter_width: usize = line.spans.iter().take(2).map(Span::width).sum();
     let available = (area.width as usize).saturating_sub(gutter_width);
     let rows = match diff_line.filter(|l| l.kind != DiffKind::Virtual) {
-        Some(l) if wrap => layout_line(&l.content, Some(available), 0),
-        Some(l) => layout_line(&l.content, None, scroll_x),
+        Some(l) if wrap => {
+            layout_line_clipped(&l.content, Some(available), 0, usize::MAX, max_rows)
+        }
+        Some(l) => layout_line_clipped(&l.content, None, scroll_x, available, 1),
         None => Vec::new(),
     };
     let rows = rows
@@ -423,15 +457,12 @@ fn render_side_line<'a>(
                 if syntax_enabled {
                     let tokens = SyntaxHighlighter::highlight_line(path, &diff_line.content);
                     if !tokens.is_empty() {
-                        for token in tokens {
+                        for token in tokens.iter() {
                             let text = &diff_line.content
                                 [token.start..token.end.min(diff_line.content.len())];
                             let fg =
                                 Color::Rgb(token.fg_color.0, token.fg_color.1, token.fg_color.2);
-                            spans.push(Span::styled(
-                                text.to_string(),
-                                Style::default().fg(fg).bg(line_bg),
-                            ));
+                            spans.push(Span::styled(text, Style::default().fg(fg).bg(line_bg)));
                         }
                     } else {
                         spans.push(Span::styled(

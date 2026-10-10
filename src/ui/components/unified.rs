@@ -8,7 +8,7 @@ use std::path::Path;
 use crate::core::models::{DiffKind, FileDiff};
 use crate::core::syntax::SyntaxHighlighter;
 use crate::ui::components::style::diff_pane_block;
-use crate::ui::selection::{layout_line, SelectionPane, TextMap, TextRow};
+use crate::ui::selection::{layout_line_clipped, SelectionPane, TextMap, TextRow};
 use crate::ui::theme::Theme;
 
 pub fn render_unified(
@@ -105,6 +105,11 @@ pub fn render_unified(
     let mut current_idx = 0usize;
 
     'outer: for hunk in &file.hunks {
+        // Hunks entirely above the viewport only advance the row counter.
+        if current_idx + 1 + hunk.lines.len() <= start_idx {
+            current_idx += 1 + hunk.lines.len();
+            continue;
+        }
         if current_idx >= start_idx && current_idx < end_idx {
             row_map.push(current_idx);
             contents.push(None);
@@ -156,16 +161,30 @@ pub fn render_unified(
         let gutter = if line.spans.len() >= 3 { 3 } else { 0 };
         let gutter_width: usize = line.spans.iter().take(gutter).map(Span::width).sum();
         let available = (inner_area.width as usize).saturating_sub(gutter_width);
+        // Rows still on screen (plus the ones `wrap_skip` hides and slack for the
+        // scroll logic): huge lines are never laid out past what can be shown.
+        let first_skip = if idx == start_idx { wrap_skip } else { 0 };
+        let max_rows = first_skip + 2 * max_lines + 1;
         let layout = match content {
-            Some(text) if wrap => layout_line(text, Some(available), 0),
-            Some(text) => layout_line(text, None, scroll_x),
+            Some(text) if wrap => {
+                layout_line_clipped(text, Some(available), 0, usize::MAX, max_rows)
+            }
+            Some(text) => layout_line_clipped(text, None, scroll_x, available, 1),
             None => Vec::new(),
         };
         let lines = if wrap {
-            crate::ui::components::horizontal::wrap_line(line, gutter, inner_area.width as usize)
+            crate::ui::components::horizontal::wrap_line(
+                line,
+                gutter,
+                inner_area.width as usize,
+                max_rows,
+            )
         } else {
             vec![crate::ui::components::horizontal::scroll_line(
-                line, 3, scroll_x,
+                line,
+                3,
+                scroll_x,
+                available,
             )]
         };
         let skip = if wrap && idx == start_idx {
@@ -277,13 +296,10 @@ fn render_unified_line<'a>(
             if syntax_enabled {
                 let tokens = SyntaxHighlighter::highlight_line(path, content);
                 if !tokens.is_empty() {
-                    for token in tokens {
+                    for token in tokens.iter() {
                         let text = &content[token.start..token.end.min(content.len())];
                         let fg = Color::Rgb(token.fg_color.0, token.fg_color.1, token.fg_color.2);
-                        spans.push(Span::styled(
-                            text.to_string(),
-                            Style::default().fg(fg).bg(line_bg),
-                        ));
+                        spans.push(Span::styled(text, Style::default().fg(fg).bg(line_bg)));
                     }
                 } else {
                     spans.push(Span::styled(
