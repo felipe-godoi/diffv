@@ -110,8 +110,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                         ("Ctrl+t", "Built-in search: show / hide preview pane"),
                         ("b", "Toggle File Drawer sidebar visible ↔ hidden"),
                         ("t", "Toggle Folders (Tree) ↔ Flat List view"),
-                        ("zM / zR", "Tree: collapse / expand all folders"),
-                        ("zc / zo", "Tree: collapse / expand selected subtree"),
+                        ("Folders", "zM/zR all · zc/zo subtree (close/open)"),
                         ("< / > or , / .", "Resize File Drawer sidebar width"),
                         ("/", "Inline filter files by path"),
                         ("i", "Open verbose Details Popup (Commit / File / Stash)"),
@@ -218,11 +217,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                         ),
                         ("Ctrl+t", "Busca interna: mostrar / ocultar o preview"),
                         ("b", "Exibir ↔ ocultar painel lateral (sidebar)"),
-                        ("zM / zR", "Árvore: colapsar / expandir todas as pastas"),
-                        (
-                            "zc / zo",
-                            "Árvore: colapsar / expandir pasta recursivamente",
-                        ),
+                        ("Pastas", "zM/zR todas · zc/zo seleção (fechar/abrir)"),
                         ("t", "Alternar entre Pastas (Tree) ↔ Lista Plana"),
                         ("< / > ou , / .", "Redimensionar largura do painel lateral"),
                         ("/", "Filtro rápido de arquivos por caminho"),
@@ -350,4 +345,43 @@ pub fn render_confirm_popup(
 
     let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
     frame.render_widget(paragraph, inner);
+}
+
+#[cfg(test)]
+mod folder_help_tests {
+    use super::*;
+
+    #[test]
+    fn folder_shortcuts_occupy_one_help_line_in_each_language() {
+        for language in [Language::En, Language::Pt] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(180, 60)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_help_popup(frame, frame.area(), language, &Theme::vscode_dark())
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let lines: Vec<String> = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect()
+                })
+                .collect();
+            let folder_lines: Vec<_> = lines
+                .iter()
+                .filter(|line| {
+                    ["zM", "zR", "zc", "zo"].iter().any(|key| {
+                        line.split(|c: char| !c.is_ascii_alphabetic())
+                            .any(|word| word == *key)
+                    })
+                })
+                .collect();
+            assert_eq!(folder_lines.len(), 1);
+            for key in ["zM", "zR", "zc", "zo"] {
+                assert!(folder_lines[0].contains(key));
+            }
+        }
+    }
 }
