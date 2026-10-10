@@ -48,7 +48,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                     "󰌌  Vim Motions & Diff Navigation",
                     vec![
                         ("j / k or ↓ / ↑", "Move down / up line by line"),
-                        ("Ctrl+e / Ctrl+y", "Scroll viewport down / up 1 line (Vim)"),
+                        (
+                            "Ctrl+e / Ctrl+y",
+                            "Scroll diff preview down / up 1 line (any panel)",
+                        ),
                         ("Ctrl+d / Ctrl+u", "Move half page down / up"),
                         ("PageDown / Ctrl+b", "Move full page down / up (PageUp)"),
                         ("gg / G", "Jump to top / bottom of diff or tree"),
@@ -146,7 +149,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect, language: Language, them
                         ("j / k ou ↓ / ↑", "Mover linha por linha para baixo / cima"),
                         (
                             "Ctrl+e / Ctrl+y",
-                            "Rolar viewport 1 linha abaixo / acima (Vim)",
+                            "Rolar o preview do diff 1 linha (qualquer painel)",
                         ),
                         ("Ctrl+d / Ctrl+u", "Meia página para baixo / cima"),
                         (

@@ -95,6 +95,11 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --check
 ```
 
+`make check` runs the three of them (`make help` lists every target).
+
+### Trying performance by hand
+`make try` builds a release binary and opens it on a generated repository under `target/fixture` (3,300 changed files, a 100k-line file with every line changed, a 3.6 MB single-line minified file and 300 untracked files). `make try-watch` does the same in watch mode, and `make try-installed` / `make try-installed-nomin` open the `diffv` on your `PATH` on the same repository (with / without the minified file) for comparison. `make fixture-clean` removes the generated repositories.
+
 ---
 
 ## 🎨 Design Principles

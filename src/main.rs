@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -22,7 +24,7 @@ use diffv::integration::editor::open_editor;
 use diffv::integration::fzf::{
     is_fzf_available, search_diff_text_fzf, search_files_fzf, FzfResult,
 };
-use diffv::ui::app::{App, AppMode, FzfRequest};
+use diffv::ui::app::{App, AppMode, FzfRequest, ReloadDone};
 use diffv::ui::components::loading::render_loading;
 use diffv::ui::theme::Theme;
 use diffv::watcher::service::{WatchEvent, WatchService};
@@ -30,6 +32,8 @@ use diffv::watcher::service::{WatchEvent, WatchService};
 enum AppEvent {
     Input(Event),
     Reload,
+    /// A watcher-triggered reload finished on its worker thread.
+    Reloaded(ReloadDone),
     Update(diffv::update::UpdateEvent),
     WatcherProgress {
         scanned: usize,
@@ -565,6 +569,10 @@ fn run_app(
 
     // Main event loop with dirty tracking for 0.0% idle CPU
     let mut needs_redraw = true;
+    let mut reload = ReloadState::default();
+    // Non-input events pulled off the channel while the editor / fzf owned the
+    // terminal (stray keys are dropped, reload results must not be).
+    let mut deferred: Vec<AppEvent> = Vec::new();
 
     loop {
         if needs_redraw {
@@ -582,7 +590,7 @@ fn run_app(
             is_editor_active.store(true, Ordering::SeqCst);
 
             // Drain any pending input events already queued in rx before editor opens
-            while rx.try_recv().is_ok() {}
+            deferred.extend(drain_keeping_non_input(&rx));
 
             disable_raw_mode()?;
             execute!(
@@ -606,7 +614,7 @@ fn run_app(
             while event::poll(Duration::from_millis(40)).unwrap_or(false) {
                 let _ = event::read();
             }
-            while rx.try_recv().is_ok() {}
+            deferred.extend(drain_keeping_non_input(&rx));
 
             is_editor_active.store(false, Ordering::SeqCst);
             app.editor_request = None;
@@ -644,7 +652,7 @@ fn run_app(
             }
 
             is_editor_active.store(true, Ordering::SeqCst);
-            while rx.try_recv().is_ok() {}
+            deferred.extend(drain_keeping_non_input(&rx));
 
             disable_raw_mode()?;
             execute!(
@@ -672,7 +680,7 @@ fn run_app(
             while event::poll(Duration::from_millis(40)).unwrap_or(false) {
                 let _ = event::read();
             }
-            while rx.try_recv().is_ok() {}
+            deferred.extend(drain_keeping_non_input(&rx));
 
             is_editor_active.store(false, Ordering::SeqCst);
 
@@ -692,49 +700,26 @@ fn run_app(
             continue;
         }
 
-        match rx.recv()? {
-            AppEvent::Input(Event::Key(key)) => {
-                if key.kind == KeyEventKind::Press {
-                    app.handle_key(key);
-                    needs_redraw = true;
-                }
+        // Handle the next event, then everything already queued behind it before
+        // drawing again: key repeat, wheel bursts and watcher storms cost one frame
+        // instead of one frame per event.
+        for event in std::mem::take(&mut deferred) {
+            needs_redraw |= handle_event(event, &mut app, terminal, &mut reload, &tx)?;
+        }
+        if needs_redraw {
+            continue;
+        }
+        let mut event = rx.recv()?;
+        for _ in 0..MAX_EVENTS_PER_FRAME {
+            needs_redraw |= handle_event(event, &mut app, terminal, &mut reload, &tx)?;
+            // Editor / fzf / quit requests are served by the loop above first.
+            if app.should_quit || app.editor_request.is_some() || app.fzf_request.is_some() {
+                break;
             }
-            AppEvent::Input(Event::Mouse(mouse)) => {
-                app.handle_mouse(mouse);
-                needs_redraw = true;
+            match rx.try_recv() {
+                Ok(next) => event = next,
+                Err(_) => break,
             }
-            AppEvent::Input(Event::Resize(_, _)) => {
-                terminal.autoresize()?;
-                needs_redraw = true;
-            }
-            AppEvent::Update(event) => {
-                app.show_update_event(event);
-                needs_redraw = true;
-            }
-            AppEvent::Reload => {
-                if app.watch_mode {
-                    app.reload_diffs();
-                    needs_redraw = true;
-                }
-            }
-            AppEvent::WatcherProgress { scanned, total } => {
-                if app.watch_mode {
-                    app.update_watcher_progress(scanned, total);
-                    needs_redraw = true;
-                }
-            }
-            AppEvent::Tick => {
-                let had_notification = app.notification.is_some();
-                app.expire_notification();
-                let scanning = app.is_watcher_scanning();
-                if scanning {
-                    app.spinner_idx = (app.spinner_idx + 1) % 10;
-                }
-                if had_notification || app.pending_key.is_some() || scanning {
-                    needs_redraw = true;
-                }
-            }
-            _ => {}
         }
     }
 
@@ -743,4 +728,103 @@ fn run_app(
     }
 
     Ok(())
+}
+
+/// Empties the channel, dropping input (keys typed into the editor or fzf) but
+/// returning every other event to be handled afterwards.
+fn drain_keeping_non_input(rx: &mpsc::Receiver<AppEvent>) -> Vec<AppEvent> {
+    rx.try_iter()
+        .filter(|event| !matches!(event, AppEvent::Input(_)))
+        .collect()
+}
+
+/// Upper bound of queued events handled before a frame is drawn, so a flood of
+/// input can't starve the screen.
+const MAX_EVENTS_PER_FRAME: usize = 256;
+
+/// Watcher reloads run on a worker thread; at most one at a time, with one more
+/// queued if the disk changed again meanwhile.
+#[derive(Default)]
+struct ReloadState {
+    in_flight: bool,
+    queued: bool,
+}
+
+fn start_reload(app: &mut App, reload: &mut ReloadState, tx: &mpsc::Sender<AppEvent>) {
+    if reload.in_flight {
+        reload.queued = true;
+        return;
+    }
+    match app.background_reload_job() {
+        Some(job) => {
+            reload.in_flight = true;
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let _ = tx.send(AppEvent::Reloaded(job.run()));
+            });
+        }
+        None => app.reload_diffs(),
+    }
+}
+
+/// Applies one event; returns whether the screen needs a redraw.
+fn handle_event(
+    event: AppEvent,
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    reload: &mut ReloadState,
+    tx: &mpsc::Sender<AppEvent>,
+) -> Result<bool> {
+    Ok(match event {
+        AppEvent::Input(Event::Key(key)) => {
+            if key.kind == KeyEventKind::Press {
+                app.handle_key(key);
+            }
+            key.kind == KeyEventKind::Press
+        }
+        // Mouse capture reports every pointer move; nothing reacts to plain moves.
+        AppEvent::Input(Event::Mouse(mouse)) if mouse.kind == MouseEventKind::Moved => false,
+        AppEvent::Input(Event::Mouse(mouse)) => {
+            app.handle_mouse(mouse);
+            true
+        }
+        AppEvent::Input(Event::Resize(_, _)) => {
+            terminal.autoresize()?;
+            true
+        }
+        AppEvent::Input(_) => false,
+        AppEvent::Update(event) => {
+            app.show_update_event(event);
+            true
+        }
+        AppEvent::Reload => {
+            if app.watch_mode {
+                start_reload(app, reload, tx);
+            }
+            false
+        }
+        AppEvent::Reloaded(done) => {
+            reload.in_flight = false;
+            app.apply_background_reload(done);
+            if std::mem::take(&mut reload.queued) {
+                start_reload(app, reload, tx);
+            }
+            true
+        }
+        AppEvent::WatcherProgress { scanned, total } => {
+            if app.watch_mode {
+                app.update_watcher_progress(scanned, total);
+            }
+            app.watch_mode
+        }
+        AppEvent::Tick => {
+            let had_notification = app.notification.is_some();
+            app.expire_notification();
+            let scanning = app.is_watcher_scanning();
+            if scanning {
+                app.spinner_idx = (app.spinner_idx + 1) % 10;
+            }
+            had_notification || app.pending_key.is_some() || scanning
+        }
+    })
 }

@@ -2124,7 +2124,7 @@ fn ctrl_g_inside_the_search_switches_engine_and_keeps_the_query() {
         FzfQuery {
             items: items.clone(),
             header: "Files".into(),
-            files: Vec::new(),
+            files: Some(Vec::new()),
         },
         "app",
     );
@@ -2333,4 +2333,243 @@ fn wrapped_changes_header_keeps_clicks_and_list_aligned() {
     assert!(row(&terminal, 7).contains("c.txt"));
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn untracked_files_load_in_parallel_with_binary_detection() {
+    use diffv::core::models::DiffSection;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Tester"]);
+    git(&["config", "user.email", "test@example.com"]);
+    fs::write(root.join("tracked.txt"), "a\n").unwrap();
+    git(&["add", "tracked.txt"]);
+    git(&["commit", "-m", "init"]);
+    fs::write(root.join("tracked.txt"), "b\n").unwrap();
+    for i in 0..40 {
+        fs::write(root.join(format!("new_{i:02}.txt")), format!("line {i}\n")).unwrap();
+    }
+    fs::write(root.join("blob.bin"), b"PNG\0\x01\x02 binary").unwrap();
+
+    let provider = GitProvider::discover(Some(root)).unwrap();
+    let (files, stats) = provider.load_diffs(None, false, true, false).unwrap();
+    let paths: Vec<String> = files.iter().map(|f| f.display_path()).collect();
+    assert_eq!(stats.file_count, 42, "{paths:?}");
+    assert_eq!(
+        files.len(),
+        42,
+        "every untracked file shows up exactly once"
+    );
+
+    let blob = files
+        .iter()
+        .find(|f| f.display_path() == "blob.bin")
+        .unwrap();
+    assert!(blob.is_binary && blob.hunks.is_empty());
+    let new_7 = files
+        .iter()
+        .find(|f| f.display_path() == "new_07.txt")
+        .unwrap();
+    assert_eq!(new_7.stage_status, StageStatus::Untracked);
+    assert_eq!(new_7.section, DiffSection::Changes);
+    assert_eq!(new_7.hunks[0].lines[0].content, "line 7");
+    let tracked = files
+        .iter()
+        .find(|f| f.display_path() == "tracked.txt")
+        .unwrap();
+    assert_eq!(tracked.status, FileStatus::Modified);
+    assert_eq!(
+        tracked.aligned_rows.len(),
+        1,
+        "aligned rows are precomputed"
+    );
+}
+
+#[test]
+fn background_reload_applies_and_stale_results_are_dropped() {
+    use diffv::config::Config;
+    use diffv::ui::app::{App, AppMode};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Tester"]);
+    git(&["config", "user.email", "test@example.com"]);
+    fs::write(root.join("a.txt"), "a\n").unwrap();
+    git(&["add", "a.txt"]);
+    git(&["commit", "-m", "init"]);
+    fs::write(root.join("a.txt"), "a changed\n").unwrap();
+
+    let mode = AppMode::Git {
+        target_ref: None,
+        git_provider: GitProvider::discover(Some(root)).unwrap(),
+    };
+    let mut app = App::new(
+        mode,
+        Config::default(),
+        true,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    assert_eq!(app.files.len(), 1);
+
+    // A watcher reload computed off the UI thread lands in the app.
+    fs::write(root.join("b.txt"), "new\n").unwrap();
+    let job = app
+        .background_reload_job()
+        .expect("git mode reloads in background");
+    let done = std::thread::spawn(move || job.run()).join().unwrap();
+    app.apply_background_reload(done);
+    assert_eq!(app.files.len(), 2, "b.txt shows up");
+
+    // A synchronous reload (e.g. after staging) makes an older background result stale.
+    let stale = app.background_reload_job().unwrap().run();
+    fs::remove_file(root.join("b.txt")).unwrap();
+    app.reload_diffs();
+    assert_eq!(app.files.len(), 1);
+    app.apply_background_reload(stale);
+    assert_eq!(app.files.len(), 1, "stale reload must not resurrect b.txt");
+}
+
+#[test]
+fn full_file_view_loads_only_the_viewed_file_in_full() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use diffv::core::models::DiffSection;
+    use diffv::ui::app::{App, AppMode, Focus};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .status
+            .success());
+    };
+    git(&["init"]);
+    git(&["config", "user.name", "Tester"]);
+    git(&["config", "user.email", "test@example.com"]);
+    let body: String = (1..=40).map(|i| format!("line {i}\n")).collect();
+    for name in ["a.txt", "b.txt", "old_name.txt"] {
+        fs::write(root.join(name), &body).unwrap();
+    }
+    git(&["add", "."]);
+    git(&["commit", "-m", "base"]);
+    let edit = |name: &str| body.replace("line 20\n", &format!("line 20 {name}\n"));
+    fs::write(root.join("a.txt"), edit("a")).unwrap();
+    fs::write(root.join("b.txt"), edit("b")).unwrap();
+    git(&["add", "b.txt"]);
+    git(&["mv", "old_name.txt", "new_name.txt"]);
+    fs::write(root.join("new_name.txt"), edit("renamed")).unwrap();
+    git(&["add", "new_name.txt"]);
+
+    let mode = AppMode::Git {
+        target_ref: None,
+        git_provider: GitProvider::discover(Some(root)).unwrap(),
+    };
+    let mut app = App::new(
+        mode,
+        diffv::config::Config::default(),
+        true,
+        false,
+        false,
+        None,
+        false,
+        false,
+    )
+    .unwrap();
+    app.config.diff.context_lines = 3;
+    app.is_unified = true;
+    app.reload_diffs();
+    let lines = |f: &diffv::core::models::FileDiff| -> usize {
+        f.hunks.iter().map(|h| h.lines.len()).sum()
+    };
+    let find = |app: &App, path: &str, section: DiffSection| {
+        app.files
+            .iter()
+            .find(|f| f.display_path() == path && f.section == section)
+            .cloned()
+            .unwrap()
+    };
+
+    assert!(app.jump_to_file_in("a.txt", DiffSection::Changes));
+    let file_count = app.files.len();
+    // The toggle only touches the viewed file: a file created meanwhile is not
+    // picked up, because the tree is not reloaded.
+    fs::write(root.join("unseen.txt"), "x\n").unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(app.full_context);
+    assert_eq!(app.files.len(), file_count, "no whole-tree reload");
+    fs::remove_file(root.join("unseen.txt")).unwrap();
+    assert_eq!(
+        lines(app.current_file().unwrap()),
+        41,
+        "viewed file in full"
+    );
+    assert_eq!(
+        lines(&find(&app, "b.txt", DiffSection::Staged)),
+        8,
+        "other files keep their hunks"
+    );
+
+    // Selecting another file (staged section, then a rename) loads it in full.
+    assert!(app.jump_to_file_in("b.txt", DiffSection::Staged));
+    assert_eq!(lines(app.current_file().unwrap()), 41);
+    assert!(app.jump_to_file_in("new_name.txt", DiffSection::Staged));
+    let renamed = app.current_file().unwrap();
+    assert_eq!(lines(renamed), 41);
+    assert_eq!(renamed.status, FileStatus::Renamed);
+
+    // Leaving full-file view puts every file expanded while browsing back to hunks.
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(!app.full_context);
+    for (path, section) in [
+        ("a.txt", DiffSection::Changes),
+        ("b.txt", DiffSection::Staged),
+        ("new_name.txt", DiffSection::Staged),
+    ] {
+        assert_eq!(lines(&find(&app, path, section)), 8, "{path}");
+    }
+    assert!(app.files.iter().all(|f| !f.full_file));
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(lines(app.current_file().unwrap()), 41);
+
+    // A background reload keeps the viewed file whole and the cursor on its line.
+    app.focus = Focus::DiffView;
+    app.jump_to_line(30);
+    let row = app.selected_row;
+    let done = app.background_reload_job().unwrap().run();
+    app.apply_background_reload(done);
+    assert_eq!(lines(app.current_file().unwrap()), 41);
+    assert_eq!(app.selected_row, row);
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(!app.full_context);
+    assert_eq!(lines(app.current_file().unwrap()), 8);
 }

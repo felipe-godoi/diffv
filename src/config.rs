@@ -21,7 +21,8 @@ pub struct Config {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchEngine {
-    /// fzf when it is installed, otherwise the built-in picker.
+    /// The built-in picker: in-process matching on frizbee (the SIMD engine behind
+    /// fff), with no subprocess or screen switch. fzf only runs when chosen.
     #[default]
     Auto,
     /// Always fzf (falls back to the built-in picker, with a notice, if it is missing).
@@ -60,9 +61,11 @@ impl SearchEngine {
 
     pub fn resolve(self, fzf_available: bool) -> ResolvedSearch {
         match self {
-            SearchEngine::Builtin => ResolvedSearch::Builtin { fzf_missing: false },
-            SearchEngine::Auto | SearchEngine::Fzf if fzf_available => ResolvedSearch::Fzf,
-            SearchEngine::Auto | SearchEngine::Fzf => ResolvedSearch::Builtin { fzf_missing: true },
+            SearchEngine::Auto | SearchEngine::Builtin => {
+                ResolvedSearch::Builtin { fzf_missing: false }
+            }
+            SearchEngine::Fzf if fzf_available => ResolvedSearch::Fzf,
+            SearchEngine::Fzf => ResolvedSearch::Builtin { fzf_missing: true },
         }
     }
 }
@@ -511,11 +514,12 @@ mod tests {
         );
 
         let missing = ResolvedSearch::Builtin { fzf_missing: true };
-        assert_eq!(SearchEngine::Auto.resolve(true), ResolvedSearch::Fzf);
-        assert_eq!(SearchEngine::Auto.resolve(false), missing);
+        let builtin = ResolvedSearch::Builtin { fzf_missing: false };
+        // auto is the in-process picker even with fzf installed.
+        assert_eq!(SearchEngine::Auto.resolve(true), builtin);
+        assert_eq!(SearchEngine::Auto.resolve(false), builtin);
         assert_eq!(SearchEngine::Fzf.resolve(true), ResolvedSearch::Fzf);
         assert_eq!(SearchEngine::Fzf.resolve(false), missing);
-        let builtin = ResolvedSearch::Builtin { fzf_missing: false };
         assert_eq!(SearchEngine::Builtin.resolve(true), builtin);
         assert_eq!(SearchEngine::Builtin.resolve(false), builtin);
 

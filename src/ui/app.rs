@@ -67,8 +67,9 @@ pub enum SearchSource {
 pub struct FzfQuery {
     pub items: Vec<String>,
     pub header: String,
-    /// Diffs the candidates come from (the built-in picker's preview uses them).
-    pub files: Vec<FileDiff>,
+    /// Diffs the candidates come from (the built-in picker's preview uses them);
+    /// `None` means the loaded `App::files`, which are not copied.
+    pub files: Option<Vec<FileDiff>>,
 }
 
 const FULL_CONTEXT_LINES: usize = 1_000_000;
@@ -77,6 +78,37 @@ const FULL_CONTEXT_LINES: usize = 1_000_000;
 pub enum ConfirmAction {
     DiscardHunk(usize),
     DiscardFile,
+}
+
+/// Inputs of a background working-tree reload (see `App::background_reload_job`).
+pub struct ReloadJob {
+    generation: u64,
+    provider: GitProvider,
+    target_ref: Option<String>,
+    staged_only: bool,
+    include_untracked: bool,
+    ignore_whitespace: bool,
+}
+
+/// Outcome of a `ReloadJob`, applied by `App::apply_background_reload`.
+pub struct ReloadDone {
+    generation: u64,
+    result: anyhow::Result<(Vec<FileDiff>, RepoStats)>,
+}
+
+impl ReloadJob {
+    pub fn run(self) -> ReloadDone {
+        let result = self.provider.load_diffs(
+            self.target_ref.as_deref(),
+            self.staged_only,
+            self.include_untracked,
+            self.ignore_whitespace,
+        );
+        ReloadDone {
+            generation: self.generation,
+            result,
+        }
+    }
 }
 
 pub enum AppMode {
@@ -99,6 +131,10 @@ pub struct App {
     pub focus: Focus,
     pub is_unified: bool,
     pub watch_mode: bool,
+    /// Bumped by every synchronous reload so stale background reloads are dropped.
+    reload_generation: u64,
+    /// Full-file view loads files in full one at a time, as they are shown.
+    full_context_lazy: bool,
     pub show_help: bool,
     /// Outcome of the startup update check, shown as a popup until dismissed.
     pub update_popup: Option<UpdateEvent>,
@@ -236,28 +272,31 @@ impl App {
         ignore_whitespace: bool,
         history_mode: bool,
     ) -> anyhow::Result<Self> {
+        if config.ui.syntax_highlighting {
+            // Loading syntect's definitions (and the OS theme lookup) takes a while;
+            // do it now, beside the diff load, instead of during the first frame.
+            std::thread::spawn(crate::core::syntax::SyntaxHighlighter::prewarm);
+        }
         let theme_name = theme_override.unwrap_or_else(|| config.ui.theme.clone());
         let theme = Theme::from_name(&theme_name);
 
-        let (worktrees, active_wt_idx) = match &mode {
+        // Worktrees, commits and stashes load beside the diffs (joined below).
+        let git_meta = match &mode {
             AppMode::Git { git_provider, .. } => {
-                let cwd =
-                    std::env::current_dir().unwrap_or_else(|_| git_provider.repo_root.clone());
-                let list = git_provider.get_worktrees(&cwd).unwrap_or_default();
-                let idx = list.iter().position(|w| w.is_current).unwrap_or(0);
-                (list, idx)
+                let provider = git_provider.clone();
+                Some(std::thread::spawn(move || {
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| provider.repo_root.clone());
+                    let worktrees = provider.get_worktrees(&cwd).unwrap_or_default();
+                    let commits = provider.get_repo_commits(50).unwrap_or_default();
+                    let stashes = provider.get_stashes().unwrap_or_default();
+                    (worktrees, commits, stashes)
+                }))
             }
-            _ => (Vec::new(), 0),
+            _ => None,
         };
-
-        let (repo_commits, stashes) = match &mode {
-            AppMode::Git { git_provider, .. } => {
-                let c = git_provider.get_repo_commits(50).unwrap_or_default();
-                let s = git_provider.get_stashes().unwrap_or_default();
-                (c, s)
-            }
-            _ => (Vec::new(), Vec::new()),
-        };
+        let (worktrees, active_wt_idx) = (Vec::new(), 0);
+        let (repo_commits, stashes) = (Vec::new(), Vec::new());
 
         let wrap_lines = config.ui.wrap_lines;
         let mut app = Self {
@@ -270,6 +309,8 @@ impl App {
             focus: Focus::FileTree,
             is_unified: unified || config.ui.default_view == "unified",
             watch_mode,
+            reload_generation: 0,
+            full_context_lazy: false,
             show_help: false,
             update_popup: None,
             filter_mode: false,
@@ -353,7 +394,17 @@ impl App {
             pending_click: None,
         };
 
-        app.reload_diffs_internal(false)?;
+        let loaded = app.reload_diffs_internal(false);
+        if let Some(meta) = git_meta {
+            let (worktrees, commits, stashes) = meta
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            app.selected_worktree_idx = worktrees.iter().position(|w| w.is_current).unwrap_or(0);
+            app.worktrees = worktrees;
+            app.repo_commits = commits;
+            app.stashes = stashes;
+        }
+        loaded?;
         if app.files.is_empty() {
             let msg = match app.language {
                 Language::En => "No differences found.",
@@ -872,9 +923,8 @@ impl App {
             file,
             self.is_unified,
             wrap_width(self.is_unified, self.diff_width),
-        )
-        .skip(self.scroll_y)
-        {
+            self.scroll_y,
+        ) {
             if count > 0 && used + height > vp {
                 break;
             }
@@ -1009,6 +1059,8 @@ impl App {
             } else if let Some(filt_idx) = self.filtered_indices.iter().position(|&i| i == idx) {
                 self.selected_filtered_idx = filt_idx;
             }
+            // A following `jump_to_line` needs the whole file in full-file view.
+            self.ensure_full_context_file();
             self.selected_row = 0;
             self.wrap_skip = 0;
             self.scroll_y = 0;
@@ -1157,6 +1209,11 @@ impl App {
             }
             FzfRequest::Text => diff_text_lines(&files),
         };
+        let files = match source {
+            SearchSource::CurrentFile => Some(files.into_iter().cloned().collect()),
+            SearchSource::Loaded => None,
+            _ => Some(external),
+        };
         let label = self.search_label(source);
         let header = match (request, self.language) {
             (FzfRequest::Files, Language::En) => format!("Files in {} (Esc to cancel)", label),
@@ -1168,7 +1225,6 @@ impl App {
                 format!("Buscar texto em {} (Esc para cancelar)", label)
             }
         };
-        let files = files.into_iter().cloned().collect();
         FzfQuery {
             items,
             header,
@@ -1593,7 +1649,30 @@ impl App {
         } else if self.active_stash_info.is_some() {
             self.load_selected_stash();
         }
-        if let Err(e) = self.reload_diffs_internal(false) {
+        let inspecting = self.show_history
+            || self.active_commit_view.is_some()
+            || self.active_commit_info.is_some()
+            || self.active_stash_info.is_some();
+        // On the working tree, only the viewed file changes: expand it, or put the
+        // files expanded so far back to their hunks. Other cases reload everything.
+        let lazy = !inspecting
+            && if self.full_context {
+                self.can_load_full_context_lazily()
+            } else {
+                self.full_context_lazy
+            };
+        let switched = if lazy {
+            self.full_context_lazy = self.full_context;
+            if self.full_context {
+                self.ensure_full_context_file();
+                Ok(())
+            } else {
+                self.collapse_full_files()
+            }
+        } else {
+            self.reload_diffs_internal(false)
+        };
+        if let Err(e) = switched {
             self.set_notification(format!("Reload error: {}", e));
             return;
         }
@@ -1618,20 +1697,116 @@ impl App {
     }
 
     pub fn get_underlying_file(&self) -> Option<&FileDiff> {
-        if self.file_view_mode == FileViewMode::Tree {
-            if let Some(item) = self.tree_items.get(self.selected_tree_idx) {
-                if let Some(idx) = item.file_index {
-                    return self.files.get(idx);
-                }
-            }
-            return None;
-        }
+        self.files.get(self.underlying_file_index()?)
+    }
 
-        if self.filtered_indices.is_empty() {
-            return None;
+    /// Leaving full-file view: reloads the files expanded so far with the normal
+    /// context, one `git diff` each, instead of reloading the whole tree.
+    fn collapse_full_files(&mut self) -> anyhow::Result<()> {
+        let AppMode::Git {
+            target_ref,
+            git_provider,
+        } = &self.mode
+        else {
+            return Ok(());
+        };
+        let mut provider = git_provider.clone();
+        provider.context_lines = self.config.diff.context_lines;
+        for file in self.files.iter_mut().filter(|f| f.full_file) {
+            file.full_file = false;
+            if file.status == crate::core::models::FileStatus::Untracked || file.is_binary {
+                continue;
+            }
+            if let Some(diff) = provider.load_worktree_file(
+                target_ref.as_deref(),
+                self.staged_only,
+                file,
+                self.ignore_whitespace,
+            )? {
+                file.hunks = diff.hunks;
+                file.aligned_rows = diff.aligned_rows;
+            }
         }
-        let real_idx = self.filtered_indices[self.selected_filtered_idx];
-        self.files.get(real_idx)
+        Ok(())
+    }
+
+    /// Index in `files` of the file selected in the drawer.
+    fn underlying_file_index(&self) -> Option<usize> {
+        if self.file_view_mode == FileViewMode::Tree {
+            return self
+                .tree_items
+                .get(self.selected_tree_idx)
+                .and_then(|item| item.file_index);
+        }
+        self.filtered_indices
+            .get(self.selected_filtered_idx)
+            .copied()
+    }
+
+    /// Whether full-file view can load just the viewed file in full: working-tree
+    /// or ref comparisons in git mode (a path target keeps the whole-load path).
+    fn can_load_full_context_lazily(&self) -> bool {
+        let AppMode::Git {
+            target_ref,
+            git_provider,
+        } = &self.mode
+        else {
+            return false;
+        };
+        self.full_context
+            && target_ref
+                .as_deref()
+                .is_none_or(|r| r.contains("..") || git_provider.is_ref(r))
+    }
+
+    /// In full-file view, swaps the selected working-tree file for its whole-file
+    /// diff the first time it is shown. Loading every changed file in full would
+    /// cost the whole repository on each reload just to look at one of them.
+    pub fn ensure_full_context_file(&mut self) {
+        if !self.full_context
+            || !self.full_context_lazy
+            || self.show_history
+            || self.active_commit_view.is_some()
+            || self.active_commit_info.is_some()
+            || self.active_stash_info.is_some()
+        {
+            return;
+        }
+        let Some(idx) = self.underlying_file_index() else {
+            return;
+        };
+        let file = &mut self.files[idx];
+        if file.full_file {
+            return;
+        }
+        // Marked even when nothing is loaded, so a failure is not retried per frame.
+        file.full_file = true;
+        // Untracked files already list every line.
+        if file.status == crate::core::models::FileStatus::Untracked || file.is_binary {
+            return;
+        }
+        self.sync_git_context();
+        let AppMode::Git {
+            target_ref,
+            git_provider,
+        } = &self.mode
+        else {
+            return;
+        };
+        match git_provider.load_worktree_file(
+            target_ref.as_deref(),
+            self.staged_only,
+            &self.files[idx],
+            self.ignore_whitespace,
+        ) {
+            Ok(Some(full)) => {
+                let file = &mut self.files[idx];
+                file.hunks = full.hunks;
+                file.aligned_rows = full.aligned_rows;
+            }
+            Ok(None) => {}
+            Err(e) => self.set_notification(format!("Reload error: {}", e)),
+        }
     }
 
     pub fn expire_notification(&mut self) {
@@ -1677,10 +1852,51 @@ impl App {
     }
 
     fn reload_diffs_internal(&mut self, is_live_reload: bool) -> anyhow::Result<()> {
-        let previous_file = self.current_file().map(|f| (f.new_path.clone(), f.section));
-        let prev_scroll = self.scroll_y;
-        let prev_row = self.selected_row;
+        // A synchronous reload supersedes any background reload still running.
+        self.reload_generation += 1;
+        let (files, stats) = self.load_files()?;
+        self.apply_loaded_files(files, stats, is_live_reload);
+        Ok(())
+    }
 
+    /// Snapshot of what a working-tree reload needs, to run off the UI thread
+    /// (watch mode). `None` outside git mode, where reloads stay synchronous.
+    pub fn background_reload_job(&mut self) -> Option<ReloadJob> {
+        self.sync_git_context();
+        let AppMode::Git {
+            target_ref,
+            git_provider,
+        } = &self.mode
+        else {
+            return None;
+        };
+        let mut provider = git_provider.clone();
+        if self.full_context_lazy {
+            provider.context_lines = self.config.diff.context_lines;
+        }
+        Some(ReloadJob {
+            generation: self.reload_generation,
+            provider,
+            target_ref: target_ref.clone(),
+            staged_only: self.staged_only,
+            include_untracked: self.config.watcher.watch_untracked,
+            ignore_whitespace: self.ignore_whitespace,
+        })
+    }
+
+    /// Applies a finished background reload, unless a synchronous reload (stage,
+    /// branch switch, full-file toggle…) happened meanwhile and made it stale.
+    pub fn apply_background_reload(&mut self, done: ReloadDone) {
+        if done.generation != self.reload_generation {
+            return;
+        }
+        match done.result {
+            Ok((files, stats)) => self.apply_loaded_files(files, stats, true),
+            Err(e) => self.set_notification(format!("Reload error: {}", e)),
+        }
+    }
+
+    fn load_files(&mut self) -> anyhow::Result<(Vec<FileDiff>, RepoStats)> {
         self.sync_git_context();
         let diff_engine = DiffEngine::new(
             &self.config.diff.algorithm,
@@ -1688,16 +1904,25 @@ impl App {
             self.ignore_whitespace,
         );
 
+        self.full_context_lazy = self.can_load_full_context_lazily();
         let (files, stats) = match &self.mode {
             AppMode::Git {
                 target_ref,
                 git_provider,
-            } => git_provider.load_diffs(
-                target_ref.as_deref(),
-                self.staged_only,
-                self.config.watcher.watch_untracked,
-                self.ignore_whitespace,
-            )?,
+            } => {
+                // Full-file view loads only the viewed file in full (see
+                // `ensure_full_context_file`); the rest keep their hunks.
+                let mut provider = git_provider.clone();
+                if self.full_context_lazy {
+                    provider.context_lines = self.config.diff.context_lines;
+                }
+                provider.load_diffs(
+                    target_ref.as_deref(),
+                    self.staged_only,
+                    self.config.watcher.watch_untracked,
+                    self.ignore_whitespace,
+                )?
+            }
             AppMode::FilePair(a, b) => {
                 let diff = diff_engine.compare_files(a, b)?;
                 let stats = RepoStats {
@@ -1724,12 +1949,20 @@ impl App {
             }
             AppMode::Stdin => diff_engine.compare_stdin()?,
         };
+        Ok((files, stats))
+    }
+
+    /// Installs freshly loaded diffs, keeping the selected file, cursor and scroll.
+    fn apply_loaded_files(&mut self, files: Vec<FileDiff>, stats: RepoStats, is_live_reload: bool) {
+        let previous_file = self.current_file().map(|f| (f.new_path.clone(), f.section));
+        let prev_scroll = self.scroll_y;
+        let prev_row = self.selected_row;
 
         // While a commit or stash is open, the working tree only refreshes the
         // snapshot restored on exit; the inspected files stay untouched.
         if self.active_commit_info.is_some() || self.active_stash_info.is_some() {
             self.live_snapshot = Some((files, stats));
-            return Ok(());
+            return;
         }
         self.files = files;
         self.repo_stats = stats;
@@ -1756,6 +1989,8 @@ impl App {
                 self.selected_filtered_idx = pos;
             }
         }
+        // Before clamping the cursor: the full file has more rows than its hunks.
+        self.ensure_full_context_file();
 
         // Restore scroll positions safely
         if let Some(cur_file) = self.current_file() {
@@ -1773,8 +2008,6 @@ impl App {
         if is_live_reload {
             self.set_notification("⚡ [disk updated]");
         }
-
-        Ok(())
     }
 
     pub fn update_filter(&mut self) {
@@ -1902,31 +2135,20 @@ impl App {
     }
 
     fn horizontal_limit(&self) -> usize {
-        use unicode_width::UnicodeWidthStr;
         let idx = self.horizontal_index();
         let max_width = self
             .current_file()
             .map(|f| {
                 if self.is_unified {
-                    f.hunks
-                        .iter()
-                        .flat_map(|h| &h.lines)
-                        .map(|l| l.content.width())
-                        .max()
-                        .unwrap_or(0)
+                    max_display_width(f.hunks.iter().flat_map(|h| &h.lines))
                 } else {
-                    f.aligned_rows
-                        .iter()
-                        .filter_map(|r| {
-                            if idx == 0 {
-                                r.left.as_ref()
-                            } else {
-                                r.right.as_ref()
-                            }
-                        })
-                        .map(|l| l.content.width())
-                        .max()
-                        .unwrap_or(0)
+                    max_display_width(f.aligned_rows.iter().filter_map(|r| {
+                        if idx == 0 {
+                            r.left.as_ref()
+                        } else {
+                            r.right.as_ref()
+                        }
+                    }))
                 }
             })
             .unwrap_or(0);
@@ -1940,6 +2162,8 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // Keys act on the whole file when full-file view just switched files.
+        self.ensure_full_context_file();
         self.expire_notification();
 
         // Update popup is drawn above everything else, so it takes keys first
@@ -2433,10 +2657,10 @@ impl App {
                     self.focus = Focus::DiffView
                 }
                 KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.file_tree_down(1)
+                    self.scroll_viewport_down(1)
                 }
                 KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.file_tree_up(1)
+                    self.scroll_viewport_up(1)
                 }
                 KeyCode::PageDown => {
                     self.file_tree_down(self.file_tree_height.saturating_sub(4).max(1))
@@ -2754,19 +2978,13 @@ impl App {
             KeyCode::Char('\\') => {
                 self.fzf_request = Some(FzfRequest::Text);
             }
+            // Like Vim, Ctrl+E / Ctrl+Y scroll the diff preview one line without
+            // moving the selection, whichever panel has the focus.
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.focus == Focus::FileTree {
-                    self.file_tree_down(1);
-                } else {
-                    self.scroll_viewport_down(1);
-                }
+                self.scroll_viewport_down(1);
             }
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.focus == Focus::FileTree {
-                    self.file_tree_up(1);
-                } else {
-                    self.scroll_viewport_up(1);
-                }
+                self.scroll_viewport_up(1);
             }
             KeyCode::Char('q') => {
                 self.should_quit = true;
@@ -3413,6 +3631,7 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        self.ensure_full_context_file();
         if self.update_popup.is_some() {
             return;
         }
@@ -4518,6 +4737,7 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
+        self.ensure_full_context_file();
         let size = frame.area();
         self.term_width = size.width;
         self.term_height = size.height;
@@ -4699,8 +4919,7 @@ impl App {
                 let height = self
                     .current_file()
                     .map(|f| {
-                        wrapped_row_heights(f, self.is_unified, width)
-                            .skip(self.scroll_y)
+                        wrapped_row_heights(f, self.is_unified, width, self.scroll_y)
                             .take(self.selected_row - self.scroll_y + 1)
                             .sum::<usize>()
                     })
@@ -4855,7 +5074,8 @@ impl App {
             render_confirm_popup(frame, size, msg, self.language, &self.theme);
         }
 
-        // 5. Drawer Line Overlay (extends row over right border if name exceeds drawer width)
+        // 5. Drawer Line Overlay (extends row over right border if name exceeds drawer width).
+        // Only while the drawer has the focus: over a focused diff it would hide its text.
         if self.show_drawer
             && self.focus == Focus::FileTree
             && !self.show_settings
@@ -4889,7 +5109,7 @@ impl App {
         }
 
         if let Some(picker) = &mut self.picker {
-            render_picker_popup(frame, size, picker, self.language, &self.theme);
+            render_picker_popup(frame, size, picker, &self.files, self.language, &self.theme);
         }
 
         // Floating notification styled with the active theme
@@ -4931,6 +5151,20 @@ impl App {
     }
 }
 
+/// Widest line in columns. A line is never wider than its UTF-8 length, so only
+/// lines longer than the widest so far are measured: one pass over the lengths
+/// instead of decoding every line of a big file on each horizontal scroll.
+fn max_display_width<'a>(lines: impl Iterator<Item = &'a crate::core::models::DiffLine>) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    lines.fold(0, |best, line| {
+        if line.content.len() > best {
+            best.max(line.content.width())
+        } else {
+            best
+        }
+    })
+}
+
 /// Text width the wrapped diff rows are measured against (gutters excluded).
 fn wrap_width(is_unified: bool, diff_width: u16) -> usize {
     if is_unified {
@@ -4941,29 +5175,48 @@ fn wrap_width(is_unified: bool, diff_width: u16) -> usize {
     .max(1) as usize
 }
 
-/// Screen rows each logical diff row takes when wrapped at `width` columns.
+/// Screen rows each logical diff row takes when wrapped at `width` columns,
+/// starting at logical row `start`. Jumps straight to `start` (rows above the view
+/// are never measured), so it costs the same at the top or the end of a huge file.
 fn wrapped_row_heights(
     file: &FileDiff,
     is_unified: bool,
     width: usize,
+    start: usize,
 ) -> Box<dyn Iterator<Item = usize> + '_> {
     use unicode_width::UnicodeWidthStr;
-    if is_unified {
-        Box::new(file.hunks.iter().flat_map(move |h| {
-            std::iter::once(1usize).chain(
-                h.lines
-                    .iter()
-                    .map(move |l| l.content.width().max(1).div_ceil(width)),
-            )
-        }))
-    } else {
-        Box::new(file.aligned_rows.iter().map(move |r| {
+    let height = move |text: &str| text.width().max(1).div_ceil(width);
+    if !is_unified {
+        let rows = file.aligned_rows.get(start..).unwrap_or_default();
+        return Box::new(rows.iter().map(move |r| {
             let side = |l: &Option<crate::core::models::DiffLine>| {
                 l.as_ref().map(|l| l.content.width()).unwrap_or(0)
             };
             side(&r.left).max(side(&r.right)).max(1).div_ceil(width)
-        }))
+        }));
     }
+    // Unified rows: one header row per hunk, then its lines.
+    let mut skip = start;
+    let mut first = file.hunks.len();
+    for (idx, hunk) in file.hunks.iter().enumerate() {
+        let rows = 1 + hunk.lines.len();
+        if skip < rows {
+            first = idx;
+            break;
+        }
+        skip -= rows;
+    }
+    let Some(hunk) = file.hunks.get(first) else {
+        return Box::new(std::iter::empty());
+    };
+    let head = (skip == 0).then_some(1usize);
+    let lines = hunk.lines[skip.saturating_sub(1)..]
+        .iter()
+        .map(move |l| height(&l.content));
+    let rest = file.hunks[first + 1..].iter().flat_map(move |h| {
+        std::iter::once(1usize).chain(h.lines.iter().map(move |l| height(&l.content)))
+    });
+    Box::new(head.into_iter().chain(lines).chain(rest))
 }
 
 /// Toast after `s` / `u` on a file-list item, e.g. "✓ Staged 4 files under src/".
@@ -5056,8 +5309,28 @@ fn search_engine_message(
     }
 }
 
+/// Text of one search candidate is cut here: matching and listing a minified
+/// megabyte-long line would cost more than the rest of the search together.
+const MAX_SEARCH_LINE_BYTES: usize = 512;
+
+/// `text` cut to at most `max` bytes, on a char boundary.
+fn truncate_at_char_boundary(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 fn diff_text_lines(files: &[&FileDiff]) -> Vec<String> {
-    let mut out = Vec::new();
+    let total = files
+        .iter()
+        .map(|f| f.hunks.iter().map(|h| h.lines.len()).sum::<usize>())
+        .sum();
+    let mut out = Vec::with_capacity(total);
     for f in files {
         let path = f.display_path();
         for line in f.hunks.iter().flat_map(|h| &h.lines) {
@@ -5077,7 +5350,10 @@ fn diff_text_lines(files: &[&FileDiff]) -> Vec<String> {
                 path,
                 line_no,
                 prefix,
-                line.content.trim_end_matches(['\r', '\n']),
+                truncate_at_char_boundary(
+                    line.content.trim_end_matches(['\r', '\n']),
+                    MAX_SEARCH_LINE_BYTES
+                ),
                 section
             ));
         }
@@ -5120,6 +5396,7 @@ mod folder_tests {
                 hunks: vec![],
                 aligned_rows: vec![],
                 is_binary: false,
+                full_file: false,
             })
             .collect();
         app.focus = Focus::FileTree;
@@ -5348,5 +5625,163 @@ mod folder_tests {
         app.focus = Focus::DiffView;
         sequence(&mut app, 'M');
         assert!(app.collapsed_dirs.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod wrapped_height_tests {
+    use super::*;
+    use crate::core::models::{ChangeStats, DiffLine, FileStatus, Hunk, StageStatus};
+
+    fn line(text: &str) -> DiffLine {
+        DiffLine {
+            kind: DiffKind::Context,
+            content: text.into(),
+            old_line_no: Some(1),
+            new_line_no: Some(1),
+            spans: vec![],
+        }
+    }
+
+    #[test]
+    fn max_display_width_matches_measuring_every_line() {
+        use unicode_width::UnicodeWidthStr;
+        let lines: Vec<DiffLine> = ["ab", "界界界", "abcde", "", "é\tx", "界界"]
+            .iter()
+            .map(|t| line(t))
+            .collect();
+        let expected = lines.iter().map(|l| l.content.width()).max().unwrap();
+        assert_eq!(max_display_width(lines.iter()), expected);
+        assert_eq!(max_display_width(lines.iter().take(2)), 6);
+    }
+
+    #[test]
+    fn heights_from_any_start_match_skipping_from_the_top() {
+        let hunk = |texts: &[&str]| Hunk {
+            old_start: 1,
+            old_lines: texts.len(),
+            new_start: 1,
+            new_lines: texts.len(),
+            header: String::new(),
+            lines: texts.iter().map(|t| line(t)).collect(),
+        };
+        let hunks = vec![hunk(&["a", "bbbbbbbbbb", ""]), hunk(&["cccccc", "d"])];
+        let file = FileDiff {
+            old_path: None,
+            new_path: "f".into(),
+            status: FileStatus::Modified,
+            stage_status: StageStatus::Unstaged,
+            section: DiffSection::Changes,
+            stats: ChangeStats::default(),
+            aligned_rows: crate::core::aligner::align_hunks_side_by_side(&hunks),
+            hunks,
+            is_binary: false,
+            full_file: false,
+        };
+        for unified in [true, false] {
+            let all: Vec<usize> = wrapped_row_heights(&file, unified, 4, 0).collect();
+            assert_eq!(all.len(), if unified { 7 } else { 5 });
+            for start in 0..=all.len() + 1 {
+                let from: Vec<usize> = wrapped_row_heights(&file, unified, 4, start).collect();
+                assert_eq!(from, all.get(start..).unwrap_or_default(), "start {start}");
+            }
+        }
+        assert_eq!(
+            wrapped_row_heights(&file, true, 4, 0).collect::<Vec<_>>(),
+            vec![1, 1, 3, 1, 1, 2, 1]
+        );
+    }
+}
+
+#[cfg(test)]
+mod preview_scroll_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    const LONG_NAME: &str = "a_really_long_file_name_that_cannot_fit_in_the_drawer_column.rs";
+
+    fn app() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old");
+        let new = dir.path().join(LONG_NAME);
+        let text = |tag: &str| (0..200).map(|i| format!("{tag} {i}\n")).collect::<String>();
+        std::fs::write(&old, text("old")).unwrap();
+        std::fs::write(&new, text("new")).unwrap();
+        let mut config = Config::default();
+        config.ui.wrap_lines = false;
+        let mut app = App::new(
+            AppMode::FilePair(old, new),
+            config,
+            false,
+            false,
+            false,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+        app.files[0].new_path = LONG_NAME.into();
+        app.focus = Focus::FileTree;
+        app.file_view_mode = FileViewMode::Flat;
+        app.update_filter();
+        (dir, app)
+    }
+
+    fn screen(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn ctrl(app: &mut App, c: char) {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+    }
+
+    #[test]
+    fn ctrl_e_and_ctrl_y_scroll_the_preview_from_the_changes_panel() {
+        let (_dir, mut app) = app();
+        screen(&mut app);
+        let selected = app.selected_filtered_idx;
+        ctrl(&mut app, 'e');
+        ctrl(&mut app, 'e');
+        assert_eq!(app.scroll_y, 2, "Ctrl+E scrolls the diff preview");
+        assert_eq!(
+            app.selected_filtered_idx, selected,
+            "the file selection stays"
+        );
+        assert_eq!(app.focus, Focus::FileTree);
+        ctrl(&mut app, 'y');
+        assert_eq!(app.scroll_y, 1, "Ctrl+Y scrolls the diff preview back");
+        assert_eq!(app.selected_filtered_idx, selected);
+
+        app.focus = Focus::DiffView;
+        ctrl(&mut app, 'e');
+        assert_eq!(app.scroll_y, 2, "the diff panel keeps scrolling too");
+    }
+
+    #[test]
+    fn full_name_overlay_only_shows_while_the_changes_panel_has_focus() {
+        let (_dir, mut app) = app();
+        app.focus = Focus::FileTree;
+        assert!(
+            screen(&mut app).contains(LONG_NAME),
+            "the drawer overlay shows the full file name"
+        );
+        app.focus = Focus::DiffView;
+        assert!(
+            !screen(&mut app).contains(LONG_NAME),
+            "a focused diff is not covered by the drawer overlay"
+        );
+        app.focus = Focus::FileTree;
+        assert!(screen(&mut app).contains(LONG_NAME), "it comes back");
     }
 }

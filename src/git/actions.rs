@@ -164,52 +164,73 @@ pub fn unstage_path(repo_root: &Path, path: &Path) -> anyhow::Result<()> {
     unstage_paths(repo_root, &[path])
 }
 
-/// `stage_path` for several files or directories in one `git add`.
+/// `stage_path` for several files or directories, in one `git add` per chunk.
 /// Paths are taken literally (no glob or `:` pathspec magic).
 pub fn stage_paths<P: AsRef<Path>>(repo_root: &Path, paths: &[P]) -> anyhow::Result<()> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-    let output = Command::new("git")
-        .args(["--literal-pathspecs", "add", "--"])
-        .args(paths.iter().map(AsRef::as_ref))
-        .current_dir(repo_root)
-        .output()?;
+    for chunk in path_chunks(paths) {
+        let output = Command::new("git")
+            .args(["--literal-pathspecs", "add", "--"])
+            .args(chunk.iter().map(AsRef::as_ref))
+            .current_dir(repo_root)
+            .output()?;
 
-    if !output.status.success() {
-        let err_msg = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to stage: {}", err_msg.trim());
+        if !output.status.success() {
+            let err_msg = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Failed to stage: {}", err_msg.trim());
+        }
     }
     Ok(())
 }
 
 /// `unstage_path` for several files or directories at once.
 pub fn unstage_paths<P: AsRef<Path>>(repo_root: &Path, paths: &[P]) -> anyhow::Result<()> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-    let output = Command::new("git")
-        .args(["--literal-pathspecs", "restore", "--staged", "--"])
-        .args(paths.iter().map(AsRef::as_ref))
-        .current_dir(repo_root)
-        .output();
+    for chunk in path_chunks(paths) {
+        let output = Command::new("git")
+            .args(["--literal-pathspecs", "restore", "--staged", "--"])
+            .args(chunk.iter().map(AsRef::as_ref))
+            .current_dir(repo_root)
+            .output();
 
-    match output {
-        Ok(out) if out.status.success() => Ok(()),
-        _ => {
-            // Fallback for older git
-            let fallback = Command::new("git")
-                .args(["--literal-pathspecs", "reset", "HEAD", "--"])
-                .args(paths.iter().map(AsRef::as_ref))
-                .current_dir(repo_root)
-                .output()?;
-            if !fallback.status.success() {
-                let err_msg = String::from_utf8_lossy(&fallback.stderr);
-                anyhow::bail!("Failed to unstage: {}", err_msg.trim());
+        match output {
+            Ok(out) if out.status.success() => {}
+            _ => {
+                // Fallback for older git
+                let fallback = Command::new("git")
+                    .args(["--literal-pathspecs", "reset", "HEAD", "--"])
+                    .args(chunk.iter().map(AsRef::as_ref))
+                    .current_dir(repo_root)
+                    .output()?;
+                if !fallback.status.success() {
+                    let err_msg = String::from_utf8_lossy(&fallback.stderr);
+                    anyhow::bail!("Failed to unstage: {}", err_msg.trim());
+                }
             }
-            Ok(())
         }
     }
+    Ok(())
+}
+
+/// Bytes of path arguments per git call, well below every OS's `ARG_MAX`
+/// (macOS: 1 MiB including the environment).
+const MAX_ARGS_BYTES: usize = 128 * 1024;
+
+/// Splits `paths` into runs whose total length fits one command line, so staging
+/// a whole section with thousands of files never fails with "argument list too long".
+fn path_chunks<P: AsRef<Path>>(paths: &[P]) -> Vec<&[P]> {
+    let mut chunks = Vec::new();
+    let (mut start, mut bytes) = (0, 0);
+    for (idx, path) in paths.iter().enumerate() {
+        let len = path.as_ref().as_os_str().len() + 1;
+        if idx > start && bytes + len > MAX_ARGS_BYTES {
+            chunks.push(&paths[start..idx]);
+            (start, bytes) = (idx, 0);
+        }
+        bytes += len;
+    }
+    if start < paths.len() {
+        chunks.push(&paths[start..]);
+    }
+    chunks
 }
 
 pub fn discard_file(repo_root: &Path, file_path: &Path, is_untracked: bool) -> anyhow::Result<()> {
@@ -243,5 +264,26 @@ pub fn discard_file(repo_root: &Path, file_path: &Path, is_untracked: bool) -> a
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::*;
+
+    #[test]
+    fn path_chunks_cover_every_path_within_the_size_budget() {
+        assert!(path_chunks::<&str>(&[]).is_empty());
+        let paths: Vec<String> = (0..20_000)
+            .map(|i| format!("src/dir_{i}/file.rs"))
+            .collect();
+        let chunks = path_chunks(&paths);
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks.concat(), paths);
+        for chunk in chunks {
+            let bytes: usize = chunk.iter().map(|p| p.len() + 1).sum();
+            assert!(bytes <= MAX_ARGS_BYTES);
+        }
+        assert_eq!(path_chunks(&["a", "b"]), vec![&["a", "b"][..]]);
     }
 }

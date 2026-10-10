@@ -5,7 +5,9 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-use crate::core::aligner::align_hunks_side_by_side;
+use rayon::prelude::*;
+
+use crate::core::aligner::{align_files, align_hunks_side_by_side};
 use crate::core::models::DiffSection;
 use crate::core::models::{
     ChangeStats, DiffKind, DiffLine, FileDiff, FileStatus, Hunk, RepoStats, StageStatus,
@@ -76,54 +78,49 @@ impl DiffEngine {
             }
         }
 
-        let mut results = Vec::new();
-
-        for rel in rel_paths {
-            let file_a = dir_a.join(&rel);
-            let file_b = dir_b.join(&rel);
-
-            let exists_a = file_a.exists();
-            let exists_b = file_b.exists();
-
-            if exists_a && exists_b {
-                let content_a = fs::read_to_string(&file_a);
-                let content_b = fs::read_to_string(&file_b);
-
-                match (content_a, content_b) {
-                    (Ok(ca), Ok(cb)) if ca != cb => {
-                        let mut diff = self.diff_texts(&ca, &cb, Some(&file_a), &file_b);
-                        diff.new_path = rel.clone();
-                        diff.old_path = Some(rel.clone());
-                        diff.status = FileStatus::Modified;
-                        diff.aligned_rows = align_hunks_side_by_side(&diff.hunks);
-                        results.push(diff);
-                    }
-                    _ => {
-                        // Binary or read error
-                    }
-                }
-            } else if !exists_a && exists_b {
-                // Added file
-                if let Ok(cb) = fs::read_to_string(&file_b) {
-                    let mut diff = self.diff_texts("", &cb, None, &file_b);
-                    diff.new_path = rel.clone();
-                    diff.status = FileStatus::Added;
-                    diff.aligned_rows = align_hunks_side_by_side(&diff.hunks);
-                    results.push(diff);
-                }
-            } else if exists_a && !exists_b {
-                // Deleted file
-                if let Ok(ca) = fs::read_to_string(&file_a) {
-                    let mut diff = self.diff_texts(&ca, "", Some(&file_a), &rel);
-                    diff.new_path = rel.clone();
-                    diff.status = FileStatus::Deleted;
-                    diff.aligned_rows = align_hunks_side_by_side(&diff.hunks);
-                    results.push(diff);
-                }
-            }
-        }
+        // Every pair is read and diffed independently, so spread them over all cores;
+        // `collect` keeps the sorted path order.
+        let results = rel_paths
+            .into_par_iter()
+            .filter_map(|rel| self.diff_dir_entry(dir_a, dir_b, rel))
+            .collect();
 
         Ok(results)
+    }
+
+    fn diff_dir_entry(&self, dir_a: &Path, dir_b: &Path, rel: PathBuf) -> Option<FileDiff> {
+        let file_a = dir_a.join(&rel);
+        let file_b = dir_b.join(&rel);
+        let mut diff = match (file_a.exists(), file_b.exists()) {
+            (true, true) => {
+                // Binary or unreadable files are skipped.
+                let ca = fs::read_to_string(&file_a).ok()?;
+                let cb = fs::read_to_string(&file_b).ok()?;
+                if ca == cb {
+                    return None;
+                }
+                let mut diff = self.diff_texts(&ca, &cb, Some(&file_a), &file_b);
+                diff.old_path = Some(rel.clone());
+                diff.status = FileStatus::Modified;
+                diff
+            }
+            (false, true) => {
+                let cb = fs::read_to_string(&file_b).ok()?;
+                let mut diff = self.diff_texts("", &cb, None, &file_b);
+                diff.status = FileStatus::Added;
+                diff
+            }
+            (true, false) => {
+                let ca = fs::read_to_string(&file_a).ok()?;
+                let mut diff = self.diff_texts(&ca, "", Some(&file_a), &rel);
+                diff.status = FileStatus::Deleted;
+                diff
+            }
+            (false, false) => return None,
+        };
+        diff.new_path = rel;
+        diff.aligned_rows = align_hunks_side_by_side(&diff.hunks);
+        Some(diff)
     }
 
     /// Reads patch from standard input and parses into FileDiffs.
@@ -132,9 +129,7 @@ impl DiffEngine {
         io::stdin().read_to_string(&mut buffer)?;
 
         let mut files = parse_unified_diff(&buffer);
-        for file in &mut files {
-            file.aligned_rows = align_hunks_side_by_side(&file.hunks);
-        }
+        align_files(&mut files);
 
         let mut total_additions = 0;
         let mut total_deletions = 0;
@@ -256,6 +251,7 @@ impl DiffEngine {
             aligned_rows: Vec::new(),
             hunks,
             is_binary: false,
+            full_file: false,
         }
     }
 }

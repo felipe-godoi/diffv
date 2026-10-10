@@ -1,14 +1,21 @@
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
+/// Whether `fzf` runs. Checked once per session: the answer feeds every search
+/// shortcut and the settings screen, and spawning `fzf --version` each time costs
+/// a process launch per key press.
 pub fn is_fzf_available() -> bool {
-    Command::new("fzf")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Command::new("fzf")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
 }
 
 /// Key fzf is told to hand back (`--expect`) so diffv can switch to its built-in picker.
@@ -113,10 +120,15 @@ fn run_fzf(
         .stdout(Stdio::piped())
         .spawn()?;
 
-    if let Some(mut stdin) = child.stdin.take() {
+    // Buffered: one write syscall per item made big candidate lists slow to load.
+    if let Some(stdin) = child.stdin.take() {
+        let mut stdin = BufWriter::with_capacity(64 * 1024, stdin);
         for item in items {
-            let _ = writeln!(stdin, "{}", item);
+            if writeln!(stdin, "{}", item).is_err() {
+                break; // fzf exited early (e.g. Esc while loading)
+            }
         }
+        let _ = stdin.flush();
     }
 
     let output = child.wait_with_output()?;
