@@ -260,6 +260,40 @@ impl GitProvider {
         Ok((files, repo_stats))
     }
 
+    /// Diff of one file as `load_diffs` would produce it (same comparison and
+    /// section), with this provider's context — used to load a single file in
+    /// full-file view. `None` when git reports no change for it anymore.
+    pub fn load_worktree_file(
+        &self,
+        target_ref: Option<&str>,
+        staged_only: bool,
+        file: &FileDiff,
+        ignore_whitespace: bool,
+    ) -> Result<Option<FileDiff>> {
+        let mut args = Vec::new();
+        match target_ref {
+            None if staged_only || file.section == DiffSection::Staged => {
+                args.push("--cached".to_string())
+            }
+            None => {}
+            Some(r) => args.push(r.to_string()),
+        }
+        args.push("--".to_string());
+        // Both sides of a rename, so git still pairs them.
+        if let Some(old) = file.old_path.as_ref().filter(|old| **old != file.new_path) {
+            args.push(old.to_string_lossy().into_owned());
+        }
+        args.push(file.new_path.to_string_lossy().into_owned());
+        let found = self
+            .run_git_diff(&args, ignore_whitespace)?
+            .into_iter()
+            .find(|f| f.new_path == file.new_path);
+        Ok(found.map(|mut f| {
+            f.aligned_rows = align_hunks_side_by_side(&f.hunks);
+            f
+        }))
+    }
+
     fn run_git_diff(&self, args: &[String], ignore_whitespace: bool) -> Result<Vec<FileDiff>> {
         let mut cmd = git_command();
         cmd.current_dir(&self.repo_root)

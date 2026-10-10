@@ -25,7 +25,7 @@ impl FileStatus {
 
 /// Which side of the index a working-tree diff belongs to:
 /// `Staged` is HEAD → index, `Changes` is index → working tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DiffSection {
     #[default]
     Changes,

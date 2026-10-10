@@ -133,6 +133,10 @@ pub struct App {
     pub watch_mode: bool,
     /// Bumped by every synchronous reload so stale background reloads are dropped.
     reload_generation: u64,
+    /// Full-file view loads files in full one at a time, as they are shown.
+    full_context_lazy: bool,
+    /// Files (path, section) already swapped for their whole-file diff.
+    full_context_files: HashSet<(PathBuf, DiffSection)>,
     pub show_help: bool,
     /// Outcome of the startup update check, shown as a popup until dismissed.
     pub update_popup: Option<UpdateEvent>,
@@ -305,6 +309,8 @@ impl App {
             is_unified: unified || config.ui.default_view == "unified",
             watch_mode,
             reload_generation: 0,
+            full_context_lazy: false,
+            full_context_files: HashSet::new(),
             show_help: false,
             update_popup: None,
             filter_mode: false,
@@ -1044,6 +1050,8 @@ impl App {
             } else if let Some(filt_idx) = self.filtered_indices.iter().position(|&i| i == idx) {
                 self.selected_filtered_idx = filt_idx;
             }
+            // A following `jump_to_line` needs the whole file in full-file view.
+            self.ensure_full_context_file();
             self.selected_row = 0;
             self.wrap_skip = 0;
             self.scroll_y = 0;
@@ -1657,20 +1665,87 @@ impl App {
     }
 
     pub fn get_underlying_file(&self) -> Option<&FileDiff> {
-        if self.file_view_mode == FileViewMode::Tree {
-            if let Some(item) = self.tree_items.get(self.selected_tree_idx) {
-                if let Some(idx) = item.file_index {
-                    return self.files.get(idx);
-                }
-            }
-            return None;
-        }
+        self.files.get(self.underlying_file_index()?)
+    }
 
-        if self.filtered_indices.is_empty() {
-            return None;
+    /// Index in `files` of the file selected in the drawer.
+    fn underlying_file_index(&self) -> Option<usize> {
+        if self.file_view_mode == FileViewMode::Tree {
+            return self
+                .tree_items
+                .get(self.selected_tree_idx)
+                .and_then(|item| item.file_index);
         }
-        let real_idx = self.filtered_indices[self.selected_filtered_idx];
-        self.files.get(real_idx)
+        self.filtered_indices
+            .get(self.selected_filtered_idx)
+            .copied()
+    }
+
+    /// Whether full-file view can load just the viewed file in full: working-tree
+    /// or ref comparisons in git mode (a path target keeps the whole-load path).
+    fn can_load_full_context_lazily(&self) -> bool {
+        let AppMode::Git {
+            target_ref,
+            git_provider,
+        } = &self.mode
+        else {
+            return false;
+        };
+        self.full_context
+            && target_ref
+                .as_deref()
+                .is_none_or(|r| r.contains("..") || git_provider.is_ref(r))
+    }
+
+    /// In full-file view, swaps the selected working-tree file for its whole-file
+    /// diff the first time it is shown. Loading every changed file in full would
+    /// cost the whole repository on each reload just to look at one of them.
+    pub fn ensure_full_context_file(&mut self) {
+        if !self.full_context
+            || !self.full_context_lazy
+            || self.show_history
+            || self.active_commit_view.is_some()
+            || self.active_commit_info.is_some()
+            || self.active_stash_info.is_some()
+        {
+            return;
+        }
+        let Some(idx) = self.underlying_file_index() else {
+            return;
+        };
+        let file = &self.files[idx];
+        // Untracked files already list every line.
+        if file.status == crate::core::models::FileStatus::Untracked || file.is_binary {
+            return;
+        }
+        if !self
+            .full_context_files
+            .insert((file.new_path.clone(), file.section))
+        {
+            return;
+        }
+        self.sync_git_context();
+        let AppMode::Git {
+            target_ref,
+            git_provider,
+        } = &self.mode
+        else {
+            return;
+        };
+        match git_provider.load_worktree_file(
+            target_ref.as_deref(),
+            self.staged_only,
+            &self.files[idx],
+            self.ignore_whitespace,
+        ) {
+            Ok(Some(full)) => {
+                let file = &mut self.files[idx];
+                file.hunks = full.hunks;
+                file.aligned_rows = full.aligned_rows;
+            }
+            Ok(None) => {}
+            Err(e) => self.set_notification(format!("Reload error: {}", e)),
+        }
     }
 
     pub fn expire_notification(&mut self) {
@@ -1734,9 +1809,13 @@ impl App {
         else {
             return None;
         };
+        let mut provider = git_provider.clone();
+        if self.full_context_lazy {
+            provider.context_lines = self.config.diff.context_lines;
+        }
         Some(ReloadJob {
             generation: self.reload_generation,
-            provider: git_provider.clone(),
+            provider,
             target_ref: target_ref.clone(),
             staged_only: self.staged_only,
             include_untracked: self.config.watcher.watch_untracked,
@@ -1764,16 +1843,25 @@ impl App {
             self.ignore_whitespace,
         );
 
+        self.full_context_lazy = self.can_load_full_context_lazily();
         let (files, stats) = match &self.mode {
             AppMode::Git {
                 target_ref,
                 git_provider,
-            } => git_provider.load_diffs(
-                target_ref.as_deref(),
-                self.staged_only,
-                self.config.watcher.watch_untracked,
-                self.ignore_whitespace,
-            )?,
+            } => {
+                // Full-file view loads only the viewed file in full (see
+                // `ensure_full_context_file`); the rest keep their hunks.
+                let mut provider = git_provider.clone();
+                if self.full_context_lazy {
+                    provider.context_lines = self.config.diff.context_lines;
+                }
+                provider.load_diffs(
+                    target_ref.as_deref(),
+                    self.staged_only,
+                    self.config.watcher.watch_untracked,
+                    self.ignore_whitespace,
+                )?
+            }
             AppMode::FilePair(a, b) => {
                 let diff = diff_engine.compare_files(a, b)?;
                 let stats = RepoStats {
@@ -1817,6 +1905,7 @@ impl App {
         }
         self.files = files;
         self.repo_stats = stats;
+        self.full_context_files.clear();
 
         self.update_filter();
 
@@ -1840,6 +1929,8 @@ impl App {
                 self.selected_filtered_idx = pos;
             }
         }
+        // Before clamping the cursor: the full file has more rows than its hunks.
+        self.ensure_full_context_file();
 
         // Restore scroll positions safely
         if let Some(cur_file) = self.current_file() {
@@ -2014,6 +2105,8 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // Keys act on the whole file when full-file view just switched files.
+        self.ensure_full_context_file();
         self.expire_notification();
 
         // Update popup is drawn above everything else, so it takes keys first
@@ -3481,6 +3574,7 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        self.ensure_full_context_file();
         if self.update_popup.is_some() {
             return;
         }
@@ -4586,6 +4680,7 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
+        self.ensure_full_context_file();
         let size = frame.area();
         self.term_width = size.width;
         self.term_height = size.height;
