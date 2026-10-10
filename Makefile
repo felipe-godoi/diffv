@@ -24,7 +24,7 @@ install: ## Install this checkout as `diffv` (cargo install)
 	cargo install --path .
 
 test: ## Run the whole test suite
-	cargo test
+	cargo test --locked
 
 lint: ## Clippy on everything, warnings fail
 	cargo clippy --all-targets --locked -- -D warnings
