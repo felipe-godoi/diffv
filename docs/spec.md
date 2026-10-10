@@ -127,8 +127,8 @@ A interface é dividida em três componentes principais:
   - Redimensionamento limpo de tela (SIGWINCH) garantindo redesenho sem quebras.
 - **Busca Fuzzy (`Ctrl+p` / `Ctrl+f`) com `fzf` opcional**:
   - `Ctrl+p` busca arquivos e `Ctrl+f` busca texto do diff no escopo atual (mudanças, commit ou stash).
-  - O [`fzf`](https://github.com/junegunn/fzf) é **opcional**: se estiver no `PATH`, a busca abre nele em tela cheia, com a interface e o matching do fzf no terminal.
-  - Sem o `fzf`, o `diffv` usa um **picker interno** (popup ratatui com filtro fuzzy/substring, `↑`/`↓`, `Enter`/`Esc`) com os mesmos candidatos e o mesmo resultado; o app avisa que está usando o picker interno.
+  - Por padrão a busca usa o **picker interno** (popup ratatui, `↑`/`↓`, `Enter`/`Esc`), com matching do [frizbee](https://github.com/saghen/frizbee) — o motor SIMD do [fff](https://github.com/dmtrKovalenko/fff.nvim) — em paralelo e dentro do processo, com a sintaxe estendida do fzf (`'exato`, `^prefixo`, `sufixo$`, `!negação`).
+  - O [`fzf`](https://github.com/junegunn/fzf) é **opcional**: escolhido como motor (`[search] engine = "fzf"` ou `Ctrl+G`), a busca abre nele em tela cheia com os mesmos candidatos e o mesmo resultado; ausente, o app avisa e usa o picker interno.
 - **Copy Hunk / Context for Prompt**:
   - Atalho `c` para copiar o diff do hunk atual ou arquivo formatado em markdown com caminho do arquivo para o clipboard do sistema, facilitando colar no prompt da IA para pedir correções.
 

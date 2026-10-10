@@ -2124,7 +2124,7 @@ fn ctrl_g_inside_the_search_switches_engine_and_keeps_the_query() {
         FzfQuery {
             items: items.clone(),
             header: "Files".into(),
-            files: Vec::new(),
+            files: Some(Vec::new()),
         },
         "app",
     );

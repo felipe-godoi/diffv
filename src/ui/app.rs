@@ -67,8 +67,9 @@ pub enum SearchSource {
 pub struct FzfQuery {
     pub items: Vec<String>,
     pub header: String,
-    /// Diffs the candidates come from (the built-in picker's preview uses them).
-    pub files: Vec<FileDiff>,
+    /// Diffs the candidates come from (the built-in picker's preview uses them);
+    /// `None` means the loaded `App::files`, which are not copied.
+    pub files: Option<Vec<FileDiff>>,
 }
 
 const FULL_CONTEXT_LINES: usize = 1_000_000;
@@ -1157,6 +1158,11 @@ impl App {
             }
             FzfRequest::Text => diff_text_lines(&files),
         };
+        let files = match source {
+            SearchSource::CurrentFile => Some(files.into_iter().cloned().collect()),
+            SearchSource::Loaded => None,
+            _ => Some(external),
+        };
         let label = self.search_label(source);
         let header = match (request, self.language) {
             (FzfRequest::Files, Language::En) => format!("Files in {} (Esc to cancel)", label),
@@ -1168,7 +1174,6 @@ impl App {
                 format!("Buscar texto em {} (Esc para cancelar)", label)
             }
         };
-        let files = files.into_iter().cloned().collect();
         FzfQuery {
             items,
             header,
@@ -4876,7 +4881,7 @@ impl App {
         }
 
         if let Some(picker) = &mut self.picker {
-            render_picker_popup(frame, size, picker, self.language, &self.theme);
+            render_picker_popup(frame, size, picker, &self.files, self.language, &self.theme);
         }
 
         // Floating notification styled with the active theme
@@ -5043,8 +5048,28 @@ fn search_engine_message(
     }
 }
 
+/// Text of one search candidate is cut here: matching and listing a minified
+/// megabyte-long line would cost more than the rest of the search together.
+const MAX_SEARCH_LINE_BYTES: usize = 512;
+
+/// `text` cut to at most `max` bytes, on a char boundary.
+fn truncate_at_char_boundary(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 fn diff_text_lines(files: &[&FileDiff]) -> Vec<String> {
-    let mut out = Vec::new();
+    let total = files
+        .iter()
+        .map(|f| f.hunks.iter().map(|h| h.lines.len()).sum::<usize>())
+        .sum();
+    let mut out = Vec::with_capacity(total);
     for f in files {
         let path = f.display_path();
         for line in f.hunks.iter().flat_map(|h| &h.lines) {
@@ -5064,7 +5089,10 @@ fn diff_text_lines(files: &[&FileDiff]) -> Vec<String> {
                 path,
                 line_no,
                 prefix,
-                line.content.trim_end_matches(['\r', '\n']),
+                truncate_at_char_boundary(
+                    line.content.trim_end_matches(['\r', '\n']),
+                    MAX_SEARCH_LINE_BYTES
+                ),
                 section
             ));
         }

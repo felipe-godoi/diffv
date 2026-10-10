@@ -55,9 +55,9 @@ cargo install --git https://github.com/felipe-godoi/diffv.git
 
 ### Optional: `fzf`
 
-[`fzf`](https://github.com/junegunn/fzf) is **optional**. When it is on your `PATH`, `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open it full-screen for the fastest fuzzy matching in the terminal. Without it, `diffv` falls back to a **built-in picker** popup with the same candidates (fuzzy/substring filter, `↑`/`↓`, `Enter` to open, `Esc` / `Ctrl+C` / `Ctrl+Q` to cancel like fzf — `Shift+Q` types a "Q" there) — searching keeps working, with a **preview pane** next to the list: the diff around the file under the cursor (`Ctrl+p`), or the context around the matched line with the query highlighted (`Ctrl+f`). `Ctrl+T` shows/hides the preview (fzf's `Ctrl+/` is also accepted where the terminal reports it); on narrow terminals only the list is shown.
+[`fzf`](https://github.com/junegunn/fzf) is **optional**. By default `Ctrl+p` (find file) and `Ctrl+f` (search diff text) open the **built-in picker**: an in-app popup that matches with [frizbee](https://github.com/saghen/frizbee) — the SIMD Smith-Waterman engine behind [fff](https://github.com/dmtrKovalenko/fff.nvim) — on all CPU cores, in-process (no subprocess, no screen switch, nothing piped). It understands fzf's extended syntax (`'exact`, `^prefix`, `suffix$`, `!negate`, space-separated terms that must all match, smart case), ranks like fzf (best score, then the shorter candidate), and only re-checks the previous matches while you keep typing. Keys follow fzf (`↑`/`↓`, `Enter` to open, `Esc` / `Ctrl+C` / `Ctrl+Q` to cancel — `Shift+Q` types a "Q" there), with a **preview pane** next to the list: the diff around the file under the cursor (`Ctrl+p`), or the context around the matched line with the query highlighted (`Ctrl+f`). `Ctrl+T` shows/hides the preview (fzf's `Ctrl+/` is also accepted where the terminal reports it); on narrow terminals only the list is shown. Pick `fzf` as the engine to run your installed fzf full-screen instead.
 
-Press `Ctrl+G` (outside the picker) to switch the search engine: `auto` (fzf when installed, otherwise the built-in picker) → `fzf` → `builtin` → `auto`. `fzf` is skipped when it is not installed, a toast shows the engine in use, and the choice is saved as `[search] engine` in `config.toml` (also editable in Settings, `C`). With `engine = "fzf"` and fzf missing, diffv says so and falls back to the built-in picker. `Ctrl+G` also works **inside** a search: from the built-in picker it reopens the same candidates in fzf with your query pre-filled, and from fzf it returns to the built-in picker already filtered by fzf's query (diffv runs fzf with `--print-query --expect=ctrl-g`, so inside diffv `Ctrl+G` no longer aborts fzf). Without fzf, `Ctrl+G` in the picker just says so and keeps you there.
+Press `Ctrl+G` (outside the picker) to switch the search engine: `auto` (the built-in picker) → `fzf` → `builtin` → `auto`. `fzf` is skipped when it is not installed, a toast shows the engine in use, and the choice is saved as `[search] engine` in `config.toml` (also editable in Settings, `C`). With `engine = "fzf"` and fzf missing, diffv says so and falls back to the built-in picker. `Ctrl+G` also works **inside** a search: from the built-in picker it reopens the same candidates in fzf with your query pre-filled, and from fzf it returns to the built-in picker already filtered by fzf's query (diffv runs fzf with `--print-query --expect=ctrl-g`, so inside diffv `Ctrl+G` no longer aborts fzf). Without fzf, `Ctrl+G` in the picker just says so and keeps you there.
 
 ```bash
 # macOS
@@ -150,8 +150,8 @@ When something is staged, the Changes drawer splits into **Staged** (HEAD → in
 | `v` | Diff | Toggle **Visual Mode** for line-level partial staging / unstaging |
 | `o` | Commits / History | Open the selected commit's **GitHub pull request** in the browser (falls back to the commit page; uses `gh` when available) |
 | `x` | General | **Expand full file** ↔ changes only (keeps file and cursor line) |
-| `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash). Uses `fzf` when installed, otherwise the built-in picker |
-| `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched. Uses `fzf` when installed, otherwise the built-in picker |
+| `Ctrl+p` | General | Fuzzy-find files in the current scope (changes, open/selected commit or stash). Uses the built-in picker (or `fzf` when chosen as the engine) |
+| `Ctrl+f` | General | Fuzzy-search diff text — only the open file when in the Diff pane, otherwise the current commit/stash/changes. File paths are not matched. Uses the built-in picker (or `fzf` when chosen as the engine) |
 | `Ctrl+t` | Built-in search | Show / hide the picker's **preview pane** (diff around the file or matched line) |
 | `Ctrl+g` | General / Search | Main screen: switch the search engine **auto** → **fzf** → **built-in** (fzf skipped when not installed; saved to `config.toml`). Inside a search (fzf or the built-in picker): continue the same search in the other engine with the typed query |
 | `Enter` | File Tree / Diff | Tree: select file / toggle folder. Diff: open in your editor |
@@ -220,7 +220,7 @@ debounce_ms = 150
 watch_untracked = true
 
 [search]
-engine = "auto"                # auto (fzf if installed, else built-in), fzf, or builtin · Ctrl+G cycles
+engine = "auto"                # auto / builtin (in-app frizbee picker) or fzf · Ctrl+G cycles
 
 [editor]
 command = "vi"                 # Default: $GIT_EDITOR > $VISUAL > $EDITOR > system `editor` > vi > nano
