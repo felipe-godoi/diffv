@@ -913,9 +913,8 @@ impl App {
             file,
             self.is_unified,
             wrap_width(self.is_unified, self.diff_width),
-        )
-        .skip(self.scroll_y)
-        {
+            self.scroll_y,
+        ) {
             if count > 0 && used + height > vp {
                 break;
             }
@@ -2067,31 +2066,20 @@ impl App {
     }
 
     fn horizontal_limit(&self) -> usize {
-        use unicode_width::UnicodeWidthStr;
         let idx = self.horizontal_index();
         let max_width = self
             .current_file()
             .map(|f| {
                 if self.is_unified {
-                    f.hunks
-                        .iter()
-                        .flat_map(|h| &h.lines)
-                        .map(|l| l.content.width())
-                        .max()
-                        .unwrap_or(0)
+                    max_display_width(f.hunks.iter().flat_map(|h| &h.lines))
                 } else {
-                    f.aligned_rows
-                        .iter()
-                        .filter_map(|r| {
-                            if idx == 0 {
-                                r.left.as_ref()
-                            } else {
-                                r.right.as_ref()
-                            }
-                        })
-                        .map(|l| l.content.width())
-                        .max()
-                        .unwrap_or(0)
+                    max_display_width(f.aligned_rows.iter().filter_map(|r| {
+                        if idx == 0 {
+                            r.left.as_ref()
+                        } else {
+                            r.right.as_ref()
+                        }
+                    }))
                 }
             })
             .unwrap_or(0);
@@ -4862,8 +4850,7 @@ impl App {
                 let height = self
                     .current_file()
                     .map(|f| {
-                        wrapped_row_heights(f, self.is_unified, width)
-                            .skip(self.scroll_y)
+                        wrapped_row_heights(f, self.is_unified, width, self.scroll_y)
                             .take(self.selected_row - self.scroll_y + 1)
                             .sum::<usize>()
                     })
@@ -5095,6 +5082,20 @@ impl App {
     }
 }
 
+/// Widest line in columns. A line is never wider than its UTF-8 length, so only
+/// lines longer than the widest so far are measured: one pass over the lengths
+/// instead of decoding every line of a big file on each horizontal scroll.
+fn max_display_width<'a>(lines: impl Iterator<Item = &'a crate::core::models::DiffLine>) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    lines.fold(0, |best, line| {
+        if line.content.len() > best {
+            best.max(line.content.width())
+        } else {
+            best
+        }
+    })
+}
+
 /// Text width the wrapped diff rows are measured against (gutters excluded).
 fn wrap_width(is_unified: bool, diff_width: u16) -> usize {
     if is_unified {
@@ -5105,29 +5106,48 @@ fn wrap_width(is_unified: bool, diff_width: u16) -> usize {
     .max(1) as usize
 }
 
-/// Screen rows each logical diff row takes when wrapped at `width` columns.
+/// Screen rows each logical diff row takes when wrapped at `width` columns,
+/// starting at logical row `start`. Jumps straight to `start` (rows above the view
+/// are never measured), so it costs the same at the top or the end of a huge file.
 fn wrapped_row_heights(
     file: &FileDiff,
     is_unified: bool,
     width: usize,
+    start: usize,
 ) -> Box<dyn Iterator<Item = usize> + '_> {
     use unicode_width::UnicodeWidthStr;
-    if is_unified {
-        Box::new(file.hunks.iter().flat_map(move |h| {
-            std::iter::once(1usize).chain(
-                h.lines
-                    .iter()
-                    .map(move |l| l.content.width().max(1).div_ceil(width)),
-            )
-        }))
-    } else {
-        Box::new(file.aligned_rows.iter().map(move |r| {
+    let height = move |text: &str| text.width().max(1).div_ceil(width);
+    if !is_unified {
+        let rows = file.aligned_rows.get(start..).unwrap_or_default();
+        return Box::new(rows.iter().map(move |r| {
             let side = |l: &Option<crate::core::models::DiffLine>| {
                 l.as_ref().map(|l| l.content.width()).unwrap_or(0)
             };
             side(&r.left).max(side(&r.right)).max(1).div_ceil(width)
-        }))
+        }));
     }
+    // Unified rows: one header row per hunk, then its lines.
+    let mut skip = start;
+    let mut first = file.hunks.len();
+    for (idx, hunk) in file.hunks.iter().enumerate() {
+        let rows = 1 + hunk.lines.len();
+        if skip < rows {
+            first = idx;
+            break;
+        }
+        skip -= rows;
+    }
+    let Some(hunk) = file.hunks.get(first) else {
+        return Box::new(std::iter::empty());
+    };
+    let head = (skip == 0).then_some(1usize);
+    let lines = hunk.lines[skip.saturating_sub(1)..]
+        .iter()
+        .map(move |l| height(&l.content));
+    let rest = file.hunks[first + 1..].iter().flat_map(move |h| {
+        std::iter::once(1usize).chain(h.lines.iter().map(move |l| height(&l.content)))
+    });
+    Box::new(head.into_iter().chain(lines).chain(rest))
 }
 
 /// Toast after `s` / `u` on a file-list item, e.g. "✓ Staged 4 files under src/".
@@ -5393,6 +5413,70 @@ mod folder_tests {
         app.focus = Focus::DiffView;
         sequence(&mut app, 'M');
         assert!(app.collapsed_dirs.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod wrapped_height_tests {
+    use super::*;
+    use crate::core::models::{ChangeStats, DiffLine, FileStatus, Hunk, StageStatus};
+
+    fn line(text: &str) -> DiffLine {
+        DiffLine {
+            kind: DiffKind::Context,
+            content: text.into(),
+            old_line_no: Some(1),
+            new_line_no: Some(1),
+            spans: vec![],
+        }
+    }
+
+    #[test]
+    fn max_display_width_matches_measuring_every_line() {
+        use unicode_width::UnicodeWidthStr;
+        let lines: Vec<DiffLine> = ["ab", "界界界", "abcde", "", "é\tx", "界界"]
+            .iter()
+            .map(|t| line(t))
+            .collect();
+        let expected = lines.iter().map(|l| l.content.width()).max().unwrap();
+        assert_eq!(max_display_width(lines.iter()), expected);
+        assert_eq!(max_display_width(lines.iter().take(2)), 6);
+    }
+
+    #[test]
+    fn heights_from_any_start_match_skipping_from_the_top() {
+        let hunk = |texts: &[&str]| Hunk {
+            old_start: 1,
+            old_lines: texts.len(),
+            new_start: 1,
+            new_lines: texts.len(),
+            header: String::new(),
+            lines: texts.iter().map(|t| line(t)).collect(),
+        };
+        let hunks = vec![hunk(&["a", "bbbbbbbbbb", ""]), hunk(&["cccccc", "d"])];
+        let file = FileDiff {
+            old_path: None,
+            new_path: "f".into(),
+            status: FileStatus::Modified,
+            stage_status: StageStatus::Unstaged,
+            section: DiffSection::Changes,
+            stats: ChangeStats::default(),
+            aligned_rows: crate::core::aligner::align_hunks_side_by_side(&hunks),
+            hunks,
+            is_binary: false,
+        };
+        for unified in [true, false] {
+            let all: Vec<usize> = wrapped_row_heights(&file, unified, 4, 0).collect();
+            assert_eq!(all.len(), if unified { 7 } else { 5 });
+            for start in 0..=all.len() + 1 {
+                let from: Vec<usize> = wrapped_row_heights(&file, unified, 4, start).collect();
+                assert_eq!(from, all.get(start..).unwrap_or_default(), "start {start}");
+            }
+        }
+        assert_eq!(
+            wrapped_row_heights(&file, true, 4, 0).collect::<Vec<_>>(),
+            vec![1, 1, 3, 1, 1, 2, 1]
+        );
     }
 }
 

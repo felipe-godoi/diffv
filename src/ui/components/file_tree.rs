@@ -113,6 +113,7 @@ pub fn resolve_stage_target(
 /// Files that `s` (wanted = Changes) or `u` (wanted = Staged) would really
 /// change among `paths`: those with an entry in that section.
 pub fn files_pending_in(files: &[FileDiff], paths: &[PathBuf], wanted: DiffSection) -> Vec<usize> {
+    let paths: std::collections::HashSet<&PathBuf> = paths.iter().collect();
     files
         .iter()
         .enumerate()
